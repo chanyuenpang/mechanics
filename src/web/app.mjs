@@ -1,6 +1,6 @@
 import { compose, canCollapse, collapse, tracePaths, diagnose, upgradeAnalysis } from '/domain/graph.mjs';
 import { GraphCanvas } from '/canvas.mjs';
-import { GlossaryTable } from '/glossary.mjs';
+import { GlossaryTable, ConceptPicker, prepareReference, ReferenceCommit } from '/glossary.mjs';
 import { ViewAutosave, viewSaveRequest, readOpening, createAndRememberView, graphPositions, changeViewMembers, prepareOpening } from '/view-files.mjs';
 
 const $ = id => document.getElementById(id);
@@ -27,6 +27,8 @@ let selection = null, graph, original, history = [], future = [], pending = 0, v
 let screen = 'analysis', viewId = null, opening = false, autosave, legacy = false, returnView = null;
 let graphHistory = null;
 const cameras = new Map();
+const implicitPositions = new Map();
+let referenceSession = null;
 // 目录折叠和文本筛选只属于本页，不参与视图快照或文件保存。
 const sidebarState = { query: '', collapsed: false, folders: new Set() };
 const busy = () => opening || pending > 0;
@@ -172,20 +174,20 @@ function field(container, label, value, { multiline = false, readonly = false, r
 function detail(container, label, text) {
   const item = el('div', undefined, 'detail'); item.append(el('strong', label), el('p', text)); container.append(item);
 }
-async function dialog(title, build, submit, confirmText = '确定') {
+async function dialog(title, build, submit, confirmText = '确定', { settled } = {}) {
   $('dialog-title').textContent = title; $('dialog-content').replaceChildren(); $('dialog-error').hidden = true;
   $('confirm-dialog').textContent = confirmText; $('confirm-dialog').disabled = false; $('confirm-dialog').hidden = false;
   build($('dialog-content'));
   return new Promise(resolve => {
-    const modal = $('dialog'); modal.returnValue = '';
+    const modal = $('dialog'); modal.returnValue = ''; let submitting = false;
     modal.onclose = () => resolve(modal.returnValue === 'ok');
-    modal.oncancel = event => { if ($('confirm-dialog').disabled) event.preventDefault(); };
+    modal.oncancel = event => { if (submitting || busy()) event.preventDefault(); };
     $('dialog-form').onsubmit = async event => {
-      event.preventDefault(); $('confirm-dialog').disabled = true; $('dialog-error').hidden = true;
+      event.preventDefault(); submitting = true; $('confirm-dialog').disabled = true; $('dialog-error').hidden = true;
       $('close-dialog').disabled = true; $('cancel-dialog').disabled = true;
       try { if (await submit() !== false) modal.close('ok'); }
       catch (error) { $('dialog-error').textContent = error.message; $('dialog-error').hidden = false; }
-      finally { $('confirm-dialog').disabled = false; $('close-dialog').disabled = false; $('cancel-dialog').disabled = false; }
+      finally { submitting = false; $('confirm-dialog').disabled = false; $('close-dialog').disabled = false; $('cancel-dialog').disabled = false; settled?.(); }
     };
     modal.showModal();
   });
@@ -193,6 +195,7 @@ async function dialog(title, build, submit, confirmText = '确定') {
 async function guard({ reload = false, allowLegacy = false } = {}) {
   await writeQueue;
   if (opening) return false;
+  if (referenceSession?.commit) { showError(new Error('概念引用尚未完成。请打开「引用概念」核实写入、导出输入，或明确结束本次引用，再切换文件。')); return false; }
   if (legacy && !reload && !allowLegacy) { showError(new Error('旧叠加记录尚未处理。请先选择「保存旧叠加为视图」或「放弃旧叠加」，原记录不会自动覆盖。')); return false; }
   if (autosave.blocked && !reload) { showError(new Error(autosave.error.message + '\n视图自动保存未完成。请先导出视图草稿，再通过「重新读取」核实磁盘并处理未保存内容。')); return false; }
   if (!dirty() && !autosave.blocked) return true;
@@ -322,7 +325,11 @@ function projection() {
     analyses: workspace.analyses.map(item => item.id === activeId && draft ? draft : item) };
   original = compose(data, visible); graph = original;
   for (const id of folded) graph = collapse(graph, id);
-  return graphPositions(data, graph, viewPositions, activeId);
+  if (!implicitPositions.has(contextKey())) implicitPositions.set(contextKey(), {});
+  const fallback = implicitPositions.get(contextKey());
+  const positions = graphPositions(data, original, viewPositions, activeId, fallback);
+  for (const [id, point] of Object.entries(positions)) if (!fallback[id]) fallback[id] = clone(point);
+  return graphPositions(data, graph, viewPositions, activeId, fallback);
 }
 function render(withInspector = true) {
   if (!workspace) return;
@@ -479,27 +486,52 @@ async function removeSelection() {
 async function addNode() {
   if (!workspace || busy()) return;
   if (definitionMode()) { addTerm(); return; }
-  if (activeId === null) return;
+  if (activeId === null || viewMode() || legacy || autosave.blocked) return;
   setMode('select');
-  const checked = new Set();
-  await dialog('引用概念到当前分析图', container => {
-    container.append(el('p', '复用概念表中的稳定 ID，让不同图层在同一概念上连接。', 'note'));
-    const search = field(container, '搜索概念', '');
-    const list = el('div', undefined, 'choice-list'); container.append(list);
-    const draw = () => {
-      list.replaceChildren();
-      for (const node of workspace.definitions.nodes.filter(item => !draft.nodeIds.includes(item.id) && (item.label + item.id).toLowerCase().includes(search.value.toLowerCase()))) {
-        const label = el('label', undefined, 'choice'), input = el('input'); input.type = 'checkbox'; input.checked = checked.has(node.id);
-        input.onchange = () => input.checked ? checked.add(node.id) : checked.delete(node.id);
-        const text = el('span', node.label); text.append(el('small', node.id)); label.append(input, text); list.append(label);
+  referenceSession ??= { targetId: activeId, query: '', selected: new Set(), candidates: [], form: null, commit: null };
+  const session = referenceSession; let picker;
+  $('dialog').classList.add('concept-dialog');
+  try {
+    await dialog('引用概念', container => {
+      picker = new ConceptPicker(container, session, workspace.definitions, draft.nodeIds, {
+        status: (text, enabled) => { $('confirm-dialog').textContent = text; $('confirm-dialog').disabled = !enabled; },
+        exportInputs: () => download({ kind: 'concept-reference-draft', analysis: clone(draft), selectedIds: [...session.selected], candidates: session.candidates, form: session.form, phase: session.commit?.phase, plannedReference: session.commit?.plan.analysis }, session.targetId + '.concept-reference.draft.json'),
+        abandon: () => { referenceSession = null; $('dialog').close('cancel'); },
+        recover: async () => {
+          const recovery = container.querySelector('.concept-recovery'); recovery.inert = true;
+          $('confirm-dialog').disabled = $('close-dialog').disabled = $('cancel-dialog').disabled = true;
+          opening = true; updateStatus();
+          try {
+            const latest = await api('/api/workspace');
+            const saved = session.commit.reconcile(latest);
+            workspace = latest; $('dialog-error').hidden = true;
+            container.querySelector('.concept-recovery-note').textContent = saved ? '已核实概念已保存。点击继续引用，不会重复创建。' : '已核实这些概念尚未写入。可以再次明确创建并引用。';
+          } catch (error) { $('dialog-error').textContent = error.message; $('dialog-error').hidden = false; }
+          finally { opening = false; updateStatus(); recovery.inert = false; $('close-dialog').disabled = $('cancel-dialog').disabled = false; picker.updateStatus(); }
+        },
+      });
+    }, async () => {
+      if (!session.commit) {
+        picker.stage();
+        session.sourceDraft = clone(draft);
+        const data = { ...workspace, analyses: [draft] }, source = compose(data, [activeId]);
+        session.commit = new ReferenceCommit(prepareReference({ workspace, draft, selected: [...session.selected],
+          candidates: session.candidates.filter(node => session.selected.has(node.id)),
+          positions: graphPositions(data, source, {}, activeId, implicitPositions.get(contextKey())), center: canvas.center() }));
       }
-    };
-    search.oninput = draw; draw();
-    container.append(el('p', '需要新的概念？在顶部「概念表」中新建并保存，然后回来引用。', 'note'));
-  }, () => {
-    if (!checked.size) throw new Error('请至少选择一个概念');
-    edit(data => { data.nodeIds.push(...checked); }); canvas.fit();
-  }, '引用概念');
+      const committing = session.commit.run(document => write(revision => api('/api/save', { revision, kind: 'definitions', document })), next => {
+        if (activeId !== session.targetId || definitionMode() || viewMode() || json(draft) !== json(session.sourceDraft)) throw new Error('当前研究草稿已改变，请先导出并核实。');
+        return edit(data => { Object.assign(data, next); });
+      });
+      picker.updateStatus(); await committing;
+      selection = session.commit.plan.additions.length === 1 ? { type: 'node', id: session.commit.plan.additions[0] } : { type: 'nodes', ids: session.commit.plan.additions };
+      referenceSession = null; render();
+      $('tool-hint').textContent = `已引用 ${session.commit.plan.additions.length} 个概念${session.commit.plan.candidates.length ? `，其中新建 ${session.commit.plan.candidates.length} 个` : ''}`;
+    }, '引用概念', { settled: () => picker.updateStatus() });
+  } finally {
+    $('dialog').classList.remove('concept-dialog'); $('dialog-content').onkeydown = null;
+    if (!session.commit) referenceSession = null;
+  }
 }
 async function newGraph() {
   if (!workspace || !await guard()) return;
@@ -685,7 +717,7 @@ $('export-view').onclick = () => {
   if (workspace) download(viewSaveRequest(workspace, viewId, viewSnapshot()).document, (viewId ?? 'workspace') + (viewId === null ? '.draft.json' : '.view.draft.json'));
 };
 window.addEventListener('beforeunload', event => {
-  if (dirty() || busy() || autosave.blocked) { event.preventDefault(); event.returnValue = ''; }
+  if (dirty() || busy() || autosave.blocked || referenceSession?.commit || referenceSession?.form || referenceSession?.selected.size) { event.preventDefault(); event.returnValue = ''; }
 });
 document.addEventListener('keydown', event => {
   if ($('dialog').open || opening) return;

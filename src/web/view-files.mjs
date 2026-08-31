@@ -4,12 +4,12 @@ const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const fail = message => { throw new Error(message); };
 
 // 先在候选数据上完成投影，调用方仅在整个打开过程成功后替换页面状态。
-export function graphPositions(workspace, graph, positions = {}, analysisId = null) {
+export function graphPositions(workspace, graph, positions = {}, analysisId = null, implicitPositions = {}) {
   const local = workspace.analyses.find(item => item.id === analysisId)?.positions ?? {};
   const ids = workspace.definitions.nodes.map(node => node.id).sort();
   return Object.fromEntries(graph.nodes.map(node => {
     const index = ids.indexOf(node.id);
-    return [node.id, structuredClone(local[node.id] ?? positions[node.id] ?? workspace.definitions.positions[node.id]
+    return [node.id, structuredClone(local[node.id] ?? positions[node.id] ?? workspace.definitions.positions[node.id] ?? implicitPositions[node.id]
       ?? { x: (index % 4) * 235 + 40, y: Math.floor(index / 4) * 160 + 40 })];
   }));
 }

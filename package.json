@@ -1,6 +1,6 @@
 {
   "name": "game-rule-analyzer",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "private": true,
   "description": "独立的游戏规则因果与包含关系图分析工具",
   "type": "module",
