@@ -103,9 +103,10 @@ test('工具可处理无任何卡牌概念的另一游戏工作区', () => {
 
 async function temporary(t) {
   const root = await mkdtemp(join(tmpdir(), 'game-rule-analyzer-test-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  let close = async () => {};
+  t.after(async () => { await close(); await rm(root, { recursive: true, force: true }); });
   await cp(example, join(root, 'workspace'), { recursive: true });
-  return { root, directory: join(root, 'workspace') };
+  return { root, directory: join(root, 'workspace'), setClose: callback => { close = callback; } };
 }
 
 test('读取真实文件且版本戳反映外部修改，不自动纳入未登记文件', async t => {
@@ -145,12 +146,12 @@ test('拒绝工作区内指向其他目录的符号链接或 Windows junction', 
   await assert.rejects(readWorkspace(directory), /符号链接|junction/);
 });
 
-test('HTTP 真实读取、同源与会话门禁，写入接口明确未开放', async t => {
-  const { directory } = await temporary(t);
-  const { server, origin, token } = await startServer({ workspaceRoot: directory, port: 0 });
-  t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }));
+test('HTTP 真实读取、同源与会话门禁，拒绝未支持操作', async t => {
+  const { directory, setClose } = await temporary(t);
+  const { close, origin, token } = await startServer({ workspaceRoot: directory, port: 0 });
+  setClose(close);
   const authorized = { Authorization: `Bearer ${token}` };
-  const page = await fetch(origin); assert.equal(page.status, 200); assert.match(await page.text(), /只读框架/);
+  const page = await fetch(origin); assert.equal(page.status, 200); assert.match(await page.text(), /规则节点画布/);
   assert.equal((await fetch(`${origin}/api/workspace`)).status, 401);
   assert.equal((await fetch(`${origin}/api/workspace`, { headers: { ...authorized, Origin: 'https://other.example' } })).status, 403);
   // fetch 会重写 Host；用原生 HTTP 客户端真实发送伪造 Host。

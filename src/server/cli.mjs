@@ -15,11 +15,11 @@ try {
   } else {
     const port = Number(values.port ?? 4319);
     if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('端口必须是 0–65535 的整数');
-    const { server, url } = await startServer({ workspaceRoot: values.workspace, port });
-    console.log(`游戏规则分析工具 · 只读骨架\n${url}\n分析文件仅读取，不会保存或修改。`);
-    const close = () => server.close(() => process.exit(0));
-    process.once('SIGINT', close);
-    process.once('SIGTERM', close);
+    const { close, url } = await startServer({ workspaceRoot: values.workspace, port });
+    console.log(`游戏规则分析工具 · 节点编辑器\n${url}\n保存目标：${values.workspace}\n关闭服务后释放工作区写入锁。`);
+    const shutdown = () => close().then(() => process.exit(0), error => { console.error(error); process.exit(1); });
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
   }
 } catch (error) {
   console.error(`${error.code ?? 'START_FAILED'}：${error.message}`);

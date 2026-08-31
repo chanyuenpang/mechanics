@@ -24,6 +24,14 @@
         "graphIds": { "$ref": "#/definitions/ids" }, "collapsedNodeIds": { "$ref": "#/definitions/ids" }, "positions": { "$ref": "#/definitions/positions" }
       }
     },
+    "lastView": {
+      "type": "object", "additionalProperties": false, "required": ["graphIds", "activeLayerId", "collapsedNodeIds", "positions"],
+      "properties": {
+        "graphIds": { "$ref": "#/definitions/ids" },
+        "activeLayerId": { "anyOf": [{ "$ref": "#/definitions/id" }, { "type": "null" }] },
+        "collapsedNodeIds": { "$ref": "#/definitions/ids" }, "positions": { "$ref": "#/definitions/positions" }
+      }
+    },
     "workspace": {
       "type": "object", "additionalProperties": false, "required": ["schemaVersion", "kind", "id", "name", "definitions", "analyses", "compositions"],
       "properties": {
@@ -31,7 +39,8 @@
         "id": { "$ref": "#/definitions/id" }, "name": { "$ref": "#/definitions/text" },
         "definitions": { "$ref": "#/definitions/relativePath" },
         "analyses": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/definitions/relativePath" } },
-        "compositions": { "type": "array", "items": { "$ref": "#/definitions/composition" } }
+        "compositions": { "type": "array", "items": { "$ref": "#/definitions/composition" } },
+        "lastView": { "$ref": "#/definitions/lastView" }
       }
     },
     "node": {

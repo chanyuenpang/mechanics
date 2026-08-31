@@ -5,21 +5,35 @@ import { assertDocument, validateWorkspace, ContractError } from '../domain/vali
 
 const MAX_BYTES = 2 * 1024 * 1024;
 
+export async function workspacePath(root, file, { allowMissing = false } = {}) {
+  if (typeof file !== 'string' || !/^[a-zA-Z0-9_-]+(?:[./][a-zA-Z0-9_-]+)*\.json$/.test(file)) {
+    throw new ContractError('UNSAFE_PATH', `工作区文件路径不安全：${file}`);
+  }
+  let path = root;
+  const parts = file.split('/');
+  for (const [index, part] of parts.entries()) {
+    path = resolve(path, part);
+    try {
+      const info = await lstat(path);
+      if (info.isSymbolicLink()) throw new ContractError('UNSAFE_PATH', `禁止工作区内的符号链接或 junction：${file}`);
+    } catch (error) {
+      if (!(allowMissing && index === parts.length - 1 && error.code === 'ENOENT')) throw error;
+    }
+  }
+  const inside = relative(root, path);
+  if (!inside || inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)) {
+    throw new ContractError('UNSAFE_PATH', `文件超出授权根目录：${file}`);
+  }
+  return path;
+}
+
 export async function readWorkspace(workspaceRoot) {
   if (!workspaceRoot) throw new ContractError('WORKSPACE_REQUIRED', '必须显式指定工作区目录');
   const root = await realpath(resolve(workspaceRoot));
   const snapshots = new Map();
   const physicalFiles = new Set();
   async function readDocument(file) {
-    if (typeof file !== 'string' || !/^[a-zA-Z0-9_-]+(?:[./][a-zA-Z0-9_-]+)*\.json$/.test(file)) {
-      throw new ContractError('UNSAFE_PATH', `工作区文件路径不安全：${file}`);
-    }
-    let path = root;
-    for (const part of file.split('/')) {
-      path = resolve(path, part);
-      const info = await lstat(path);
-      if (info.isSymbolicLink()) throw new ContractError('UNSAFE_PATH', `禁止工作区内的符号链接或 junction：${file}`);
-    }
+    const path = await workspacePath(root, file);
     const actual = await realpath(path);
     const inside = relative(root, actual);
     if (!inside || inside === '..' || inside.startsWith(`..${sep}`) || isAbsolute(inside)) {

@@ -62,7 +62,11 @@ export function validateWorkspace({ manifest, definitions, analyses }) {
     positionsExist(graph.positions, included, graph.id);
   }
   unique(manifest.compositions, '叠加组合');
-  for (const view of manifest.compositions) {
+  if (manifest.lastView?.activeLayerId !== null && manifest.lastView?.activeLayerId !== undefined) {
+    requireReference(graphIds, manifest.lastView.activeLayerId, '最近视图的编辑图层');
+    if (!manifest.lastView.graphIds.includes(manifest.lastView.activeLayerId)) throw new ContractError('HIDDEN_ACTIVE_LAYER', '当前编辑图层必须可见');
+  }
+  for (const view of [...manifest.compositions, ...(manifest.lastView ? [{ id: 'lastView', ...manifest.lastView }] : [])]) {
     view.graphIds.forEach(id => requireReference(graphIds, id, `组合 ${view.id}`));
     const included = new Set(analyses.filter(graph => view.graphIds.includes(graph.id)).flatMap(graph => graph.nodeIds));
     view.collapsedNodeIds.forEach(id => requireReference(included, id, `组合 ${view.id} 的折叠节点`));
