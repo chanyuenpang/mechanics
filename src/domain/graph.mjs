@@ -7,16 +7,52 @@ export function compose(workspace, selectedIds) {
     return graph;
   });
   const referenced = new Set(graphs.flatMap(graph => graph.nodeIds));
-  return {
+  const result = {
     graphIds,
     nodes: workspace.definitions.nodes.filter(node => referenced.has(node.id)).map(node => ({
       ...structuredClone(node), sourceGraphIds: graphs.filter(graph => graph.nodeIds.includes(node.id)).map(graph => graph.id),
     })),
     edges: graphs.flatMap(graph => graph.edges.map(edge => ({
       ...structuredClone(edge), id: `${graph.id}/${edge.id}`,
-      steps: [{ graphId: graph.id, edgeId: edge.id, ...structuredClone(edge) }], hiddenNodes: [],
+      relation: graph.schemaVersion === 1 ? 'influence' : edge.relation,
+      steps: [{ graphId: graph.id, edgeId: edge.id, ...structuredClone(edge), relation: graph.schemaVersion === 1 ? 'influence' : edge.relation }], hiddenNodes: [],
     }))).sort((a, b) => a.id.localeCompare(b.id)),
   };
+  assertContainment(result.edges);
+  return result;
+}
+
+// 只校验当前研究/组合；未选研究不会构成隐含的全局类型系统。
+export function assertContainment(edges) {
+  const outgoing = new Map(), active = new Set(), done = new Set(), path = [];
+  for (const edge of edges.filter(edge => edge.relation === 'contains')) {
+    if (!outgoing.has(edge.source)) outgoing.set(edge.source, []);
+    outgoing.get(edge.source).push(edge);
+  }
+  function visit(id) {
+    if (done.has(id)) return;
+    active.add(id);
+    for (const edge of outgoing.get(id) ?? []) {
+      path.push(edge);
+      if (active.has(edge.target)) {
+        const cycle = path.slice(path.findIndex(step => step.source === edge.target));
+        const error = new Error('包含关系成环：' + cycle.map(step => `${step.source} → ${step.target} [${step.id}]`).join('；'));
+        error.code = 'CONTAINMENT_CYCLE'; error.edges = structuredClone(cycle); throw error;
+      }
+      visit(edge.target); path.pop();
+    }
+    active.delete(id); done.add(id);
+  }
+  for (const id of outgoing.keys()) visit(id);
+}
+
+export function upgradeAnalysis(document) {
+  const next = structuredClone(document);
+  if (next.schemaVersion === 1) {
+    next.schemaVersion = 2;
+    next.edges.forEach(edge => { edge.relation = 'influence'; });
+  } else if (next.schemaVersion !== 2) throw new Error('不支持的研究版本');
+  return next;
 }
 
 export function multiplySigns(signs) {
@@ -40,6 +76,7 @@ function hasPath(graph, from, to) {
 export function canCollapse(graph, nodeId) {
   const incoming = graph.edges.filter(edge => edge.target === nodeId);
   const outgoing = graph.edges.filter(edge => edge.source === nodeId);
+  if ([...incoming, ...outgoing].some(edge => edge.relation === 'contains')) return false;
   if (incoming.length !== 1 || outgoing.length !== 1) return false;
   // 不能把环中的节点缩成一条似乎独立成立的影响路径。
   return !hasPath(graph, outgoing[0].target, incoming[0].source);
@@ -57,7 +94,7 @@ export function collapse(graph, nodeId) {
       ...graph.edges.filter(edge => edge !== first && edge !== last).map(edge => structuredClone(edge)),
       {
         id: `fold:${steps.map(step => `${step.graphId}/${step.edgeId}`).join('|')}`,
-        source: first.source, target: last.target, sign: first.sign * last.sign,
+        source: first.source, target: last.target, relation: 'influence', sign: first.sign * last.sign,
         condition: steps.map(step => step.condition).filter(Boolean).join('；'),
         note: '折叠路径摘要，不是新增的原始规则',
         steps: structuredClone(steps), hiddenNodes: [...first.hiddenNodes, nodeId, ...last.hiddenNodes],
@@ -67,6 +104,7 @@ export function collapse(graph, nodeId) {
 }
 
 export function tracePaths(graph, source, target, { maxPaths = 50, maxDepth = 16 } = {}) {
+  assertContainment(graph.edges);
   if (!Number.isInteger(maxPaths) || maxPaths < 1 || !Number.isInteger(maxDepth) || maxDepth < 1) throw new Error('路径数量和深度上限必须是正整数');
   const ids = new Set(graph.nodes.map(node => node.id));
   if (!ids.has(source) || !ids.has(target)) throw new Error('查询端点不在当前组合中');
@@ -75,10 +113,16 @@ export function tracePaths(graph, source, target, { maxPaths = 50, maxDepth = 16
   function visit(node, edges, seen) {
     if (node === target && edges.length) {
       if (paths.length >= maxPaths) { truncated = true; return; }
-      paths.push({ sign: multiplySigns(edges.map(edge => edge.sign)), steps: edges.flatMap(edge => structuredClone(edge.steps)) });
+      const influences = edges.filter(edge => edge.relation !== 'contains');
+      paths.push({ kind: influences.length ? 'influence' : 'containment',
+        ...(influences.length ? { sign: multiplySigns(influences.map(edge => edge.sign)) } : {}),
+        steps: edges.flatMap(edge => structuredClone(edge.steps)) });
       return;
     }
-    const nextEdges = graph.edges.filter(edge => edge.source === node && !seen.has(edge.target));
+    // 包含起步只能查询种属；作用起步才可沿目标端包含关系向下传递。
+    const containmentOnly = edges.length && edges[0].relation === 'contains';
+    const nextEdges = graph.edges.filter(edge => edge.source === node && !seen.has(edge.target)
+      && (!containmentOnly || edge.relation === 'contains'));
     if (edges.length >= maxDepth) { if (nextEdges.length) truncated = true; return; }
     for (const edge of nextEdges) {
       if (paths.length >= maxPaths) { truncated = true; return; }
@@ -96,8 +140,8 @@ export function diagnose(graph) {
     const incoming = graph.edges.filter(edge => edge.target === node.id);
     const outgoing = graph.edges.filter(edge => edge.source === node.id);
     if (!incoming.length && !outgoing.length) findings.push({ kind: 'isolated', nodeIds: [node.id], message: '当前选图中未连接；可能尚未建模，不等于无价值。' });
-    else if (!outgoing.length) findings.push({ kind: 'sink', nodeIds: [node.id], message: '当前模型中的作用终点；可能是合理终局或消耗出口。' });
-    const signature = [...incoming.map(edge => `in:${edge.source}:${edge.sign}`), ...outgoing.map(edge => `out:${edge.target}:${edge.sign}`)].sort().join('|');
+    else if (incoming.some(edge => edge.relation !== 'contains') && !outgoing.some(edge => edge.relation !== 'contains')) findings.push({ kind: 'sink', nodeIds: [node.id], message: '当前模型中的显式作用终点；可能是合理终局或消耗出口。' });
+    const signature = [...incoming.map(edge => `in:${edge.source}:${edge.relation}:${edge.sign ?? ''}`), ...outgoing.map(edge => `out:${edge.target}:${edge.relation}:${edge.sign ?? ''}`)].sort().join('|');
     if (signature) patterns.set(signature, [...(patterns.get(signature) ?? []), node.id]);
   }
   for (const nodeIds of patterns.values()) if (nodeIds.length > 1) findings.push({ kind: 'similar', nodeIds, message: '连接结构相似；仍需比较条件、时机、成本和获得频率，不自动合并。' });

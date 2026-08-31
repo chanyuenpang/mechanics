@@ -1,4 +1,4 @@
-import { compose, canCollapse, collapse, tracePaths, diagnose } from '/domain/graph.mjs';
+import { compose, canCollapse, collapse, tracePaths, diagnose, upgradeAnalysis } from '/domain/graph.mjs';
 import { GraphCanvas } from '/canvas.mjs';
 import { GlossaryTable } from '/glossary.mjs';
 import { ViewAutosave, viewSaveRequest, readOpening, createAndRememberView, graphPositions, changeViewMembers, prepareOpening } from '/view-files.mjs';
@@ -7,6 +7,7 @@ const $ = id => document.getElementById(id);
 const clone = value => structuredClone(value);
 const json = value => JSON.stringify(value);
 const uid = prefix => prefix + '-' + crypto.randomUUID().slice(0, 8);
+const arrow = edge => edge.relation === 'contains' ? ' ＝→ ' : edge.sign === 1 ? ' ＋→ ' : ' −→ ';
 const el = (tag, text, className) => {
   const item = document.createElement(tag);
   if (text !== undefined) item.textContent = text;
@@ -76,6 +77,8 @@ function updateStatus() {
   $('redo').disabled = !future.length || busy() || !!autosave?.blocked;
   $('positive-tool').disabled = !workspace || definitionMode() || activeId === null || busy();
   $('negative-tool').disabled = $('positive-tool').disabled;
+  $('contains-tool').disabled = $('positive-tool').disabled;
+  $('upgrade-notice').hidden = definitionMode() || draft?.schemaVersion !== 2 || baseline?.schemaVersion !== 1;
   $('export').disabled = !draft;
   $('save-state').textContent = legacy ? '旧记录已保留' : viewMode() ? '源研究只读' : dirty() ? '规则未保存' : '规则已保存';
   $('save').hidden = viewMode() || legacy;
@@ -113,31 +116,41 @@ async function saveDraft() {
     if (!autosave.blocked) $('error').hidden = true; render(); return true;
   } catch (error) { showError(error); return false; }
 }
-function edit(change, { inspect = true, refresh = true } = {}) {
+function edit(change, { inspect = true, refresh = true, topology = true } = {}) {
   if (!draft || busy() || viewMode() || legacy || autosave.blocked) return;
-  const previous = clone(draft); change(draft);
-  if (json(previous) === json(draft)) return;
+  const previous = clone(draft), next = definitionMode() ? draft : clone(draft);
+  try {
+    change(next);
+    if (!definitionMode() && topology) compose({ ...workspace, analyses: [next] }, [next.id]);
+  } catch (error) { showError(error); return false; }
+  if (json(previous) === json(next)) return false;
+  draft = next;
   history.push(previous); if (history.length > 80) history.shift(); future = [];
   // 拓扑改变时展开摘要；修改对象仍然是原始文件，不编辑折叠结果。
-  if (!definitionMode()) folded = [];
+  if (!definitionMode() && topology) folded = [];
   if (refresh) render(inspect); else updateStatus();
+  return true;
 }
 function assignSnapshot(snapshot) {
   visible = [...snapshot.graphIds]; folded = [...snapshot.collapsedNodeIds]; viewPositions = clone(snapshot.positions);
 }
-function editView(change) {
+function editView(change, { keepSelection = false } = {}) {
   if (!viewMode() || busy() || autosave.blocked) return;
   const previous = viewSnapshot(), next = clone(previous); change(next);
   if (json(previous) === json(next)) return;
   history.push(previous); if (history.length > 80) history.shift(); future = [];
-  assignSnapshot(next); selection = null; render(); void persistView();
+  assignSnapshot(next); if (!keepSelection) selection = null; render(); void persistView();
 }
 function undo(redo = false) {
   if (busy() || autosave.blocked || legacy) return;
   const from = redo ? future : history, to = redo ? history : future;
   if (!from.length) return;
   if (viewMode()) { to.push(viewSnapshot()); assignSnapshot(from.pop()); }
-  else { to.push(clone(draft)); draft = from.pop(); if (!definitionMode()) folded = []; }
+  else {
+    to.push(clone(draft)); const next = from.pop();
+    if (!definitionMode() && (json(draft.edges) !== json(next.edges) || json(draft.nodeIds) !== json(next.nodeIds))) folded = [];
+    draft = !definitionMode() && baseline.schemaVersion === 2 && next.schemaVersion === 1 ? upgradeAnalysis(next) : next;
+  }
   selection = null; render(); if (viewMode()) void persistView();
 }
 function field(container, label, value, { multiline = false, readonly = false, required = false, options, onChange, pattern } = {}) {
@@ -186,6 +199,7 @@ async function guard({ reload = false, allowLegacy = false } = {}) {
   }, saveDraft, '保存并继续');
 }
 function assignLayer(id) {
+  canvas.cancel();
   activeId = id; screen = 'analysis';
   draft = id === null ? undefined : clone(workspace.analyses.find(item => item.id === id));
   baseline = clone(draft); history = []; future = []; selection = null;
@@ -199,7 +213,7 @@ async function openLayer(id) {
 async function openConcepts() {
   if (!workspace || definitionMode() || !await guard()) return;
   // 工作视图切换不改变选中的分析文件，也不为打开概念表写入 lastView。
-  rememberCamera(); graphHistory = { history, future };
+  canvas.cancel(); rememberCamera(); graphHistory = { history, future };
   screen = 'concepts'; draft = clone(workspace.definitions); baseline = clone(draft);
   history = []; future = []; selection = null; render();
 }
@@ -229,7 +243,7 @@ function renderSidebar() {
     if (id !== null && viewMode()) {
       const labelEl = el('label', undefined, 'visibility'), input = el('input'); input.type = 'checkbox'; input.checked = visible.includes(id);
       input.setAttribute('aria-label', '叠加研究 ' + label); input.title = '加入 / 移出当前视图'; input.disabled = busy() || autosave.blocked;
-      input.onchange = () => toggleLayer(id, input.checked).catch(showError); labelEl.append(input); item.append(labelEl);
+      input.onchange = () => toggleLayer(id, input.checked).catch(error => { renderSidebar(); showError(error); }); labelEl.append(input); item.append(labelEl);
     }
     parent.append(item);
   };
@@ -295,7 +309,7 @@ function render(withInspector = true) {
     $('empty-add').textContent = activeId === null ? '新建分析图' : '引用概念';
     $('toolbar').hidden = legacy || (!viewMode() && activeId === null);
     $('toolbar').classList.toggle('view-tools', viewMode());
-    $('add-node').hidden = viewMode(); $('positive-tool').hidden = viewMode(); $('negative-tool').hidden = viewMode();
+    $('add-node').hidden = viewMode(); $('positive-tool').hidden = viewMode(); $('negative-tool').hidden = viewMode(); $('contains-tool').hidden = viewMode();
     $('add-node').title = '引用已有概念到当前分析图';
     $('unfold').hidden = folded.length === 0;
     renderSidebar(); updateStatus(); if (withInspector) inspect();
@@ -307,6 +321,12 @@ function render(withInspector = true) {
 function inspect() {
   const panel = $('properties'); panel.replaceChildren(); $('inspector').hidden = !selection;
   if (!selection) return;
+  if (selection.type === 'nodes') {
+    $('inspector-title').textContent = `已选择 ${selection.ids.length} 个节点`;
+    detail(panel, '选中节点', selection.ids.map(name).join('、'));
+    panel.append(el('p', '拖动任一选中节点可整体移动；Shift 单击增减成员，Esc 清空选择。一次撤销恢复整组位置。', 'note'));
+    return;
+  }
   if (selection.type === 'file') {
     if (!draft || definitionMode()) { $('inspector').hidden = true; return; }
     $('inspector-title').textContent = '研究属性';
@@ -326,17 +346,29 @@ function inspect() {
   }
   if (selection.type === 'edge') {
     const edge = graph.edges.find(item => item.id === selection.id); if (!edge) { $('inspector').hidden = true; return; }
-    $('inspector-title').textContent = edge.hiddenNodes.length ? '折叠关系 · 只读摘要' : '因果关系';
+    $('inspector-title').textContent = edge.hiddenNodes.length ? '折叠关系 · 只读摘要' : edge.relation === 'contains' ? '包含关系' : '因果关系';
     detail(panel, '方向', name(edge.source) + ' → ' + name(edge.target));
+    if (edge.relation === 'contains') detail(panel, '包含语义', `${name(edge.target)} 是 ${name(edge.source)} 的一种。作用向子类传递，＝不改变路径正负号；不反向传递。`);
     const owned = edge.steps.length === 1 && edge.steps[0].graphId === activeId;
     if (owned) {
       const id = edge.steps[0].edgeId, originalEdge = draft.edges.find(item => item.id === id);
-      field(panel, '作用', String(originalEdge.sign), { options: [['1', '＋ 促进'], ['-1', '− 抑制']], onChange: value => edit(data => { data.edges.find(item => item.id === id).sign = Number(value); }) });
+      field(panel, '关系', originalEdge.relation === 'contains' ? 'contains' : String(originalEdge.sign), {
+        options: [['1', '＋ 促进'], ['-1', '− 抑制'], ['contains', '＝ 包含（父类 → 子类）']],
+        onChange: value => {
+          const changed = edit(data => {
+            if (value === 'contains') Object.assign(data, upgradeAnalysis(data));
+            const item = data.edges.find(item => item.id === id);
+            if (value === 'contains') { item.relation = 'contains'; delete item.sign; }
+            else { item.sign = Number(value); if (data.schemaVersion === 2) item.relation = 'influence'; }
+          });
+          if (!changed) inspect();
+        },
+      });
       for (const [key, label] of [['condition', '机制条件（可选）'], ['note', '规则说明（可选）']]) field(panel, label, originalEdge[key], { multiline: true, onChange: value => edit(data => { data.edges.find(item => item.id === id)[key] = value; }, { inspect: false }) });
       panel.append(button('删除此连线', () => removeSelection(), 'danger'));
     } else panel.append(el('p', '视图中的源规则与折叠摘要只读。编辑源研究后，可返回当前视图。', 'note'));
     edge.steps.forEach(step => {
-      detail(panel, graphName(step.graphId) + ' / ' + step.edgeId, name(step.source) + (step.sign === 1 ? ' ＋→ ' : ' −→ ') + name(step.target) + '\n' + (step.condition || '未补充条件') + '\n' + step.note);
+      detail(panel, graphName(step.graphId) + ' / ' + step.edgeId, name(step.source) + arrow(step) + name(step.target) + '\n' + (step.condition || '未补充条件') + '\n' + step.note);
       if (step.graphId !== activeId) panel.append(button('编辑源研究：' + graphName(step.graphId), () => openLayer(step.graphId)));
     });
     return;
@@ -361,11 +393,12 @@ function inspect() {
   if (draft?.nodeIds.includes(node.id)) actions.append(button('移出当前图层', removeSelection, 'danger'));
   panel.append(actions);
   if (graph.nodes.some(item => item.id === node.id) && graph.nodes.length > 1) {
-    const target = field(panel, '追踪影响至', graph.nodes.find(item => item.id !== node.id).id, { options: graph.nodes.filter(item => item.id !== node.id).map(item => [item.id, item.label]) });
+    const target = field(panel, '追踪影响至', original.nodes.find(item => item.id !== node.id).id, { options: original.nodes.filter(item => item.id !== node.id).map(item => [item.id, item.label]) });
     const output = el('div', undefined, 'trace-result');
     panel.append(button('解释影响路径', () => {
-      const result = tracePaths(graph, node.id, target.value); output.replaceChildren(el('p', result.interpretation, 'note'));
-      result.paths.forEach(path => output.append(el('div', (path.sign === 1 ? '促进路径' : '抑制路径') + '\n' + path.steps.map(step => name(step.source) + (step.sign === 1 ? ' ＋→ ' : ' −→ ') + name(step.target) + ' [' + graphName(step.graphId) + ']').join('\n'), 'trace-path')));
+      const result = tracePaths(original, node.id, target.value); output.replaceChildren(el('p', result.interpretation, 'note'));
+      result.paths.forEach(path => output.append(el('div', (path.kind === 'containment' ? '包含路径（无正负作用）' : path.sign === 1 ? '促进路径' : '抑制路径') + '\n' + path.steps.map(step => name(step.source) + arrow(step) + name(step.target) + ' [' + graphName(step.graphId) + ' / ' + step.edgeId + ']'
+        + (step.condition ? '\n条件：' + step.condition : '') + (step.note ? '\n说明：' + step.note : '')).join('\n'), 'trace-path')));
       if (!result.paths.length) output.append(el('p', '当前图层范围内未找到路径。'));
       if (result.truncated) output.append(el('p', '已达到查询上限，结果不完整。'));
     }), output);
@@ -438,7 +471,7 @@ async function newGraph() {
     for (const path of ['.', ...workspace.directories]) { const option = el('option'); option.value = path; choices.append(option); }
     container.append(choices, el('p', '保存为 <相对目录>/<ID>.analysis.json。支持中文和多层目录；填 . 表示工作区根。', 'note'));
   }, async () => {
-    const document = { schemaVersion: 1, kind: 'analysis', workspaceId: workspace.manifest.id, id: id.value, name: label.value.trim(), scope: scope.value.trim(), nodeIds: [], edges: [], positions: {} };
+    const document = { schemaVersion: 2, kind: 'analysis', workspaceId: workspace.manifest.id, id: id.value, name: label.value.trim(), scope: scope.value.trim(), nodeIds: [], edges: [], positions: {} };
     const parent = directory.value.trim(), file = (parent === '.' ? '' : parent + '/') + document.id + '.analysis.json';
     await write(revision => api('/api/analyses', { revision, document, file }));
     // 新文件已存在后，打开失败不能自动重复创建。
@@ -457,8 +490,8 @@ function setMode(mode) {
   if ((viewId !== null || legacy) && mode !== 'select') return;
   if (!definitionMode() || mode === 'select') {
     canvas.setMode(mode);
-    for (const key of ['select', 'positive', 'negative']) $(key + '-tool').classList.toggle('active', key === mode);
-    $('tool-hint').textContent = legacy ? '旧叠加只读 · 滚轮缩放 · 空格拖拽画布' : mode === 'select' ? '拖拽节点 · 滚轮缩放 · 空格拖拽画布' : '先点击源节点，再点击目标节点 · 写入当前研究';
+    for (const key of ['select', 'positive', 'negative', 'contains']) $(key + '-tool').classList.toggle('active', key === mode);
+    $('tool-hint').textContent = legacy ? '旧叠加只读 · 右键框选 · 滚轮缩放' : mode === 'select' ? '右键框选 · Shift 增选 · 拖动选中节点 · 空格平移' : mode === 'contains' ? '先点父类，再点其中一种 · ＝不改变作用符号' : '先点击源节点，再点击目标节点 · 写入当前研究';
   }
 }
 function addTerm() {
@@ -486,15 +519,18 @@ const canvas = new GraphCanvas($('canvas'), {
   name, graphName,
   select: value => { selection = value; render(); },
   canMove: id => !busy() && !autosave.blocked && !legacy && !definitionMode() && (viewMode() || !!draft?.nodeIds.includes(id)),
-  move: (id, point) => viewMode() ? editView(data => { data.positions[id] = point; }) : edit(data => { data.positions[id] = point; }),
+  move: positions => viewMode() ? editView(data => { Object.assign(data.positions, positions); }, { keepSelection: true }) : edit(data => { Object.assign(data.positions, positions); }, { topology: false }),
   zoom: value => { $('zoom').textContent = value + '%'; },
   hint: text => { $('tool-hint').textContent = text; },
   link: (source, target, sign) => {
     if (busy() || definitionMode() || activeId === null) return;
     if (!draft.nodeIds.includes(source) || !draft.nodeIds.includes(target)) { showError(new Error('请先把两个节点引用到当前图层，再建立此图层的关系。')); return; }
     const id = uid('edge');
-    edit(data => { data.edges.push({ id, source, target, sign, condition: '', note: '' }); });
-    setMode('select'); selection = { type: 'edge', id: activeId + '/' + id }; render();
+    const changed = edit(data => {
+      if (sign === 'contains') Object.assign(data, upgradeAnalysis(data));
+      data.edges.push({ id, source, target, ...(sign === 'contains' ? { relation: 'contains' } : { sign, ...(data.schemaVersion === 2 ? { relation: 'influence' } : {}) }), condition: '', note: '' });
+    });
+    if (changed) { setMode('select'); selection = { type: 'edge', id: activeId + '/' + id }; render(); }
   },
 });
 autosave = new ViewAutosave(write, body => api('/api/save', body), state => { viewState = state; updateStatus(); });
@@ -502,7 +538,7 @@ async function load(requestedId, { reload = false, allowLegacy = false } = {}) {
   if (opening || (workspace && !await guard({ reload, allowLegacy }))) return false;
   if (opening) return false;
   const first = !workspace, sourceView = viewId, previousReturn = returnView;
-  opening = true; updateStatus();
+  canvas.cancel(); opening = true; updateStatus();
   try {
     // 读取、校验叠加与记录最近打开全部确认后，才替换当前画面和草稿。
     let candidate;
@@ -589,7 +625,7 @@ $('unfold').onclick = () => {
 };
 $('dismiss-error').onclick = () => { $('error').hidden = true; };
 $('close-dialog').onclick = $('cancel-dialog').onclick = () => $('dialog').close('cancel');
-for (const mode of ['select', 'positive', 'negative']) $(mode + '-tool').onclick = () => setMode(mode);
+for (const mode of ['select', 'positive', 'negative', 'contains']) $(mode + '-tool').onclick = () => setMode(mode);
 function download(document, filename) {
   const url = URL.createObjectURL(new Blob([JSON.stringify(document, null, 2) + '\n'], { type: 'application/json' }));
   const link = el('a'); link.href = url; link.download = filename; link.click();

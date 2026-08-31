@@ -1,4 +1,5 @@
 import Ajv from 'ajv';
+import { assertContainment } from './graph.mjs';
 import schema from '../../schemas/protocol.schema.json' with { type: 'json' };
 import legacy from '../../schemas/legacy-workspace-v1.schema.json' with { type: 'json' };
 import legacyV2 from '../../schemas/legacy-workspace-v2.schema.json' with { type: 'json' };
@@ -69,6 +70,7 @@ export function validateWorkspace({ manifest, definitions, analyses, views = [],
       requireReference(included, edge.target, `${graph.id}/${edge.id}.target`);
     }
     positionsExist(graph.positions, included, graph.id);
+    assertContainment(graph.edges.map(edge => ({ ...edge, id: `${graph.id}/${edge.id}` })));
   }
   unique(manifest.compositions, '叠加组合');
   const viewIds = unique(views, '视图文件');

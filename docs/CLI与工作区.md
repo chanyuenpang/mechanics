@@ -40,7 +40,7 @@ game-analysis/
 
 ## v1/v2 显式迁移到 v3
 
-工作区配置升级为 v3，定义、分析与视图文档均为 v1。旧 v1/v2 必须显式迁移，不在启动时自动升级。先用新 CLI 预检，再保存网页草稿、关闭旧服务执行升级。
+工作区配置为 v3，定义与视图为 v1，研究支持 v1/v2。旧 v1/v2 工作区配置必须显式迁移，不在启动时自动升级。研究文档 v2 是独立版本：已有 v1 研究首次增加包含才升级当前草稿，手动保存生效，不批量迁移。工作区迁移先用新 CLI 预检，再保存网页草稿、关闭旧服务执行。
 
 ```sh
 game-rule-analyzer migrate --workspace ./game-analysis --dry-run
@@ -65,6 +65,6 @@ npm run check
 npm run check:package
 ```
 
-包验收先审查 dry-run 清单，再创建 `dist/game-rule-analyzer-0.4.0.tgz`，安装到临时前缀，运行命令 shim、帮助、版本、初始化、从资料子目录校验/启动及 HTTP 静态资源（包含视图模块）。隔离目录在服务退出后清理；不会全局安装到用户环境，不会执行 `npm publish`。依赖安装仍需要可用的 npm 缓存或依赖下载网络。
+包验收先审查 dry-run 清单，再创建 `dist/game-rule-analyzer-0.5.0.tgz`，安装到临时前缀，运行命令 shim、帮助、版本、初始化、从资料子目录校验/启动及 HTTP 静态资源（包含视图模块）。隔离目录在服务退出后清理；不会全局安装到用户环境，不会执行 `npm publish`。依赖安装仍需要可用的 npm 缓存或依赖下载网络。
 
 `private: true` 表示 npm 拒绝发布，不表示注册表中的私有访问设置。[npm private](https://docs.npmjs.com/cli/v11/configuring-npm/package-json/#private)。对外发布前还须明确可见性、使用授权、注册表和发布账号/scope；本地 tarball 准备不代表公开发布。包只含通用程序、Schema、文档和人工示例，不包含实际游戏的资料目录。

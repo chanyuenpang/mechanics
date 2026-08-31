@@ -30,6 +30,7 @@
     <div class="viewbar"><strong id="view-name">研究 · 单文件编辑</strong><span id="view-state" role="status">正在读取…</span><button id="export-view" class="quiet" hidden>导出视图草稿</button><button id="return-view" class="quiet" hidden>返回视图</button></div>
     <div id="legacy-notice" role="status" hidden>已保留旧叠加记录。请在侧栏保存为视图，或<button id="discard-legacy" class="quiet">放弃旧叠加</button>后打开研究。</div>
     <div id="error" role="alert" hidden><span id="error-text"></span><button id="reload-error" hidden>重新读取</button><button id="dismiss-error" class="icon-button" aria-label="关闭错误提示">×</button></div>
+    <div id="upgrade-notice" role="status" hidden>保存将把当前研究升级为 v2，旧版工具无法读取；撤销或放弃可恢复未保存的 v1 草稿。其他文件不变。</div>
     <section id="glossary" aria-label="节点定义表格" hidden></section>
     <section id="stage" aria-label="节点画布区域">
       <svg id="canvas" aria-label="规则节点画布" tabindex="0"></svg>
@@ -40,12 +41,13 @@
         <span class="divider"></span><button id="add-node" class="tool text-tool">＋ <span>引用概念</span></button>
         <span class="divider"></span><button id="positive-tool" class="tool positive" title="先点源节点，再点目标节点" aria-label="促进连线">＋→</button>
         <button id="negative-tool" class="tool negative" title="先点源节点，再点目标节点" aria-label="抑制连线">−→</button>
+        <button id="contains-tool" class="tool contains" title="先点父类，再点其中一种；＝不改变作用符号" aria-label="包含连线">＝→</button>
         <span class="divider"></span><button id="undo" class="tool" title="撤销 Ctrl Z" aria-label="撤销" disabled>↶</button><button id="redo" class="tool" title="重做 Ctrl Shift Z" aria-label="重做" disabled>↷</button>
       </div>
-      <div id="tool-hint" aria-live="polite">拖拽节点 · 滚轮缩放 · 空格拖拽画布</div>
+      <div id="tool-hint" aria-live="polite">右键框选 · Shift 增选 · 拖动选中节点 · 空格平移</div>
       <div class="bottom-left"><button id="diagnostics" class="floating small-button">◉ 结构提示</button><button id="unfold" class="floating small-button" hidden>展开节点</button><span id="counts"></span></div>
       <div class="zoom floating"><button id="zoom-out" class="icon-button" aria-label="缩小">−</button><span id="zoom">100%</span><button id="zoom-in" class="icon-button" aria-label="放大">＋</button><span class="divider"></span><button id="fit" class="icon-button" title="适应画布 F" aria-label="适应画布">⛶</button></div>
-      <div id="legend"><span class="positive">＋ 促进</span><span class="negative">− 抑制</span><span>关系详情可查看源研究</span></div>
+      <div id="legend"><span class="positive">＋ 促进</span><span class="negative">− 抑制</span><span class="contains">＝ 包含</span><span>关系详情可查看源研究</span></div>
     </section>
     <aside id="inspector" class="floating" hidden><div class="panel-header"><strong id="inspector-title">属性</strong><button id="close-inspector" class="icon-button" aria-label="关闭属性">×</button></div><div id="properties"></div></aside>
   </main>

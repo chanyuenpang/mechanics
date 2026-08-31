@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { readWorkspace, assertRelativeFile, ensureWorkspaceDirectory } from './workspace.mjs';
 import { encode, commitFile, acquireWorkspaceLock } from './files.mjs';
 import { assertDocument, validateWorkspace, ContractError } from '../domain/validate.mjs';
+import { compose } from '../domain/graph.mjs';
 
 const fail = (code, message) => { throw new ContractError(code, message); };
 export async function createWorkspaceStore(workspaceRoot) {
@@ -39,6 +40,7 @@ export async function createWorkspaceStore(workspaceRoot) {
       fail('UNSAFE_PATH', '文件须使用 .' + kind + '.json 后缀，不能存入隐藏或依赖目录');
     }
     documents.push(document); workspace.files.push({ kind, id: document.id, path: file }); validateWorkspace(workspace);
+    if (kind === 'view') compose(workspace, document.graphIds);
     const text = encode(document), parent = posix.dirname(file);
     await ensureWorkspaceDirectory(root, parent === '.' ? '' : parent);
     try { await commitFile(root, file, text, { create: true }); }
@@ -67,6 +69,7 @@ export async function createWorkspaceStore(workspaceRoot) {
         file = 'workspace.json'; workspace.manifest = document;
       }
       validateWorkspace(workspace);
+      if (kind === 'view') compose(workspace, document.graphIds);
       await commitFile(root, file, encode(document));
       return verified();
     }),
