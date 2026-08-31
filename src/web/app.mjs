@@ -534,7 +534,7 @@ function setMode(mode) {
   if (!definitionMode() || mode === 'select') {
     canvas.setMode(mode);
     for (const key of ['select', 'positive', 'negative', 'contains']) $(key + '-tool').classList.toggle('active', key === mode);
-    $('tool-hint').textContent = legacy ? '旧叠加只读 · 右键框选 · 滚轮缩放' : mode === 'select' ? '右键框选 · Shift 增选 · 拖动选中节点 · 空格平移' : mode === 'contains' ? '先点父类，再点其中一种 · ＝不改变作用符号' : '先点击源节点，再点击目标节点 · 写入当前研究';
+    $('tool-hint').textContent = legacy ? '旧叠加只读 · 左键框选 · 右键平移' : mode === 'select' ? '左键框选 · 右键平移 · Shift 增选 · 拖动选中节点' : mode === 'contains' ? '先点父类，再点其中一种 · ＝不改变作用符号' : '先点击源节点，再点击目标节点 · 写入当前研究';
   }
 }
 function addTerm() {

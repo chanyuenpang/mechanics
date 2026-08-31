@@ -70,16 +70,16 @@ export class GraphCanvas {
   down(event) {
     if (this.gesture || ![0, 1, 2].includes(event.button)) return;
     const node = event.target.closest('[data-node]'), edge = event.target.closest('[data-edge]');
-    if (event.button === 2) {
-      if (this.mode !== 'select' || node || edge) return;
-      event.preventDefault();
-      this.gesture = { type: 'box', point: this.point(event), end: this.point(event), x: event.clientX, y: event.clientY,
-        pointerId: event.pointerId, original: event.shiftKey ? [...this.selectedIds()] : [], moved: false };
-      this.root.setPointerCapture(event.pointerId); return;
-    }
-    if (event.button === 1 || this.space || (!node && !edge)) {
+    if (event.button === 2 || event.button === 1 || this.space) {
       event.preventDefault(); this.gesture = { type: 'pan', pointerId: event.pointerId, x: event.clientX, y: event.clientY, original: { ...this.camera }, moved: false };
       this.root.setPointerCapture(event.pointerId); this.root.classList.add('panning'); return;
+    }
+    if (!node && !edge) {
+      if (this.mode !== 'select') return;
+      event.preventDefault();
+      this.gesture = { type: 'box', point: this.point(event), end: this.point(event), x: event.clientX, y: event.clientY,
+        pointerId: event.pointerId, original: event.shiftKey ? [...this.selectedIds()] : [], additive: event.shiftKey, moved: false };
+      this.root.setPointerCapture(event.pointerId); return;
     }
     if (node) {
       const id = node.dataset.node;
@@ -116,7 +116,7 @@ export class GraphCanvas {
     if (this.root.hasPointerCapture(event.pointerId)) this.root.releasePointerCapture(event.pointerId);
     if (gesture.type === 'nodes' && gesture.moved && gesture.ids.every(id => this.graph.nodes.some(node => node.id === id) && this.callbacks.canMove(id))) this.callbacks.move(gesture.next);
     else if (gesture.type === 'box' && gesture.moved) this.selectNodes([...new Set([...gesture.original, ...nodesInBox(this.graph.nodes, this.positions, gesture.point, gesture.end)])]);
-    else if (gesture.type === 'pan' && !gesture.moved) this.callbacks.select(null);
+    else if (gesture.type === 'box' && !gesture.additive && !gesture.moved) this.callbacks.select(null);
     this.draw();
   }
   pick(id) {

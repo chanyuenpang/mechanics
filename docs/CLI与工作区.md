@@ -65,6 +65,6 @@ npm run check
 npm run check:package
 ```
 
-包验收先审查 dry-run 清单，再创建 `dist/game-rule-analyzer-0.5.1.tgz`，安装到临时前缀，运行命令 shim、帮助、版本、初始化、从资料子目录校验/启动及 HTTP 静态资源（包含视图模块）。隔离目录在服务退出后清理；不会全局安装到用户环境，不会执行 `npm publish`。依赖安装仍需要可用的 npm 缓存或依赖下载网络。
+包验收先审查 dry-run 清单，再创建 `dist/game-rule-analyzer-0.5.2.tgz`，安装到临时前缀，运行命令 shim、帮助、版本、初始化、从资料子目录校验/启动及 HTTP 静态资源（包含视图模块）。隔离目录在服务退出后清理；不会全局安装到用户环境，不会执行 `npm publish`。依赖安装仍需要可用的 npm 缓存或依赖下载网络。
 
 `private: true` 表示 npm 拒绝发布，不表示注册表中的私有访问设置。[npm private](https://docs.npmjs.com/cli/v11/configuring-npm/package-json/#private)。对外发布前还须明确可见性、使用授权、注册表和发布账号/scope；本地 tarball 准备不代表公开发布。包只含通用程序、Schema、文档和人工示例，不包含实际游戏的资料目录。

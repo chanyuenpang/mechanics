@@ -10,17 +10,37 @@ function harness() {
     root: { getBoundingClientRect: () => ({ left: 10, top: 20 }), setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {}, classList: { add() {}, remove() {} } },
     callbacks: { select: value => { canvas.selection = value; }, canMove: () => true, move: value => writes.push(value) },
   });
-  const event = (x, y, { button = 2, node, shiftKey = false } = {}) => ({ clientX: 80 + x * .5, clientY: 110 + y * .5,
+  const event = (x, y, { button = 0, node, shiftKey = false } = {}) => ({ clientX: 80 + x * .5, clientY: 110 + y * .5,
     button, pointerId: 1, shiftKey, preventDefault() {}, target: { closest: selector => node && selector === '[data-node]' ? { dataset: { node } } : null } });
   return { canvas, writes, event };
 }
-test('反向框选使用世界坐标、矩形相交与可见节点，轻点右键不改选择', () => {
+test('左键反向框选使用世界坐标；空白轻点清除，Shift 轻点保留选择', () => {
   const { canvas, event, writes } = harness();
   canvas.down(event(400, 100)); canvas.move(event(-10, -10)); canvas.up(event(-10, -10));
   assert.deepEqual(canvas.selectedIds(), ['a', 'b']); assert.deepEqual(writes, []);
-  canvas.down(event(500, 100)); canvas.up(event(501, 100));
+  canvas.down(event(500, 100, { shiftKey: true })); canvas.up(event(501, 100));
   assert.deepEqual(canvas.selectedIds(), ['a', 'b']);
+  canvas.down(event(500, 100)); canvas.up(event(501, 100));
+  assert.deepEqual(canvas.selectedIds(), []);
+  assert.deepEqual(canvas.camera, { x: 70, y: 90, scale: .5 });
   assert.deepEqual(nodesInBox(canvas.graph.nodes, canvas.positions, { x: 165, y: 20 }, { x: 170, y: 25 }), ['a']);
+});
+test('右键、中键与空格只平移相机，不移动节点或清除选择；取消恢复相机', () => {
+  for (const options of [{ button: 2 }, { button: 2, node: 'a' }, { button: 1 }, { button: 0, space: true }]) {
+    const { canvas, event, writes } = harness();
+    canvas.selection = { type: 'nodes', ids: ['a', 'b'] }; canvas.space = !!options.space;
+    canvas.down(event(500, 100, options)); canvas.up(event(580, 160, options));
+    assert.deepEqual(canvas.camera, { x: 110, y: 120, scale: .5 });
+    assert.deepEqual(canvas.selectedIds(), ['a', 'b']); assert.deepEqual(writes, []);
+    canvas.down(event(500, 100, options)); canvas.up(event(500, 100, options));
+    assert.deepEqual(canvas.selectedIds(), ['a', 'b']);
+    canvas.down(event(500, 100, options)); canvas.move(event(700, 200, options)); canvas.cancel();
+    assert.deepEqual(canvas.camera, { x: 110, y: 120, scale: .5 });
+  }
+  const { canvas, event } = harness(); canvas.mode = 'positive';
+  canvas.down(event(500, 100)); assert.equal(canvas.gesture, undefined);
+  canvas.down(event(500, 100, { button: 2 })); canvas.up(event(540, 120, { button: 2 }));
+  assert.deepEqual(canvas.camera, { x: 90, y: 100, scale: .5 });
 });
 test('多选整组拖动只提交一次；Shift 单击增减，取消预览不保存', () => {
   const { canvas, event, writes } = harness();
