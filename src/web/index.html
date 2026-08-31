@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>游戏规则分析工具</title>
+    <meta name="description" content="统一概念定义，叠加规则与局面，追踪正负因果路径。">
+    <link rel="stylesheet" href="/style.css">
+    <script type="module" src="/app.mjs"></script>
+  </head>
+  <body>
+    <header><div><p class="eyebrow">GAME RULE ANALYZER</p><h1>游戏规则分析工具</h1></div><span class="status">只读框架 · v0.1</span></header>
+    <div id="error" role="alert" hidden></div>
+    <main>
+      <aside class="sidebar">
+        <p class="eyebrow">工作区</p><h2 id="workspace-name">正在读取分析文件</h2>
+        <label for="composition">保存的叠加组合</label><select id="composition" disabled></select>
+        <h3>图的范围</h3><div id="graphs"></div>
+        <label class="toggle"><input id="definitions-mode" type="checkbox" checked>显示统一定义图中的全部节点</label>
+        <button id="reset" disabled>展开全部节点</button>
+        <button id="reload">重新读取文件</button>
+        <p class="muted">文件是事实来源。当前只能浏览；新建、编辑和安全保存尚未开放。</p>
+      </aside>
+      <section class="canvas-panel" aria-label="规则节点图">
+        <div class="canvas-toolbar"><h2 id="view-title">统一节点定义图</h2><span id="counts"></span></div>
+        <div class="legend"><span class="positive">＋ 促进</span><span class="negative">− 抑制</span><span>正负不代表好坏 · 点击节点查看定义与来源</span></div>
+        <svg id="canvas" role="img" aria-label="有向正负规则图"></svg>
+        <p class="canvas-note">叠加不会覆盖原图；折叠仅改变显示，所有条件与原始关系仍保留。</p>
+      </section>
+      <aside class="inspector"><p class="eyebrow">定义 / 关系 / 证据</p><div id="details"><h2>选择一个节点</h2><p class="muted">查看含义、增加方向和分析图来源。</p></div><h3>当前范围的设计疑点</h3><div id="findings"></div></aside>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:game-rule-analyzer:protocol:1",
+  "title": "游戏规则分析文件协议 v1",
+  "oneOf": [
+    { "$ref": "#/definitions/workspace" },
+    { "$ref": "#/definitions/definitionGraph" },
+    { "$ref": "#/definitions/analysis" }
+  ],
+  "definitions": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{0,95}$" },
+    "text": { "type": "string", "minLength": 1, "maxLength": 8000 },
+    "ids": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/definitions/id" } },
+    "relativePath": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+(?:[./][a-zA-Z0-9_-]+)*\\.json$" },
+    "position": {
+      "type": "object", "additionalProperties": false, "required": ["x", "y"],
+      "properties": { "x": { "type": "number", "minimum": -100000, "maximum": 100000 }, "y": { "type": "number", "minimum": -100000, "maximum": 100000 } }
+    },
+    "positions": { "type": "object", "propertyNames": { "$ref": "#/definitions/id" }, "additionalProperties": { "$ref": "#/definitions/position" } },
+    "composition": {
+      "type": "object", "additionalProperties": false, "required": ["id", "name", "graphIds", "collapsedNodeIds", "positions"],
+      "properties": {
+        "id": { "$ref": "#/definitions/id" }, "name": { "$ref": "#/definitions/text" },
+        "graphIds": { "$ref": "#/definitions/ids" }, "collapsedNodeIds": { "$ref": "#/definitions/ids" }, "positions": { "$ref": "#/definitions/positions" }
+      }
+    },
+    "workspace": {
+      "type": "object", "additionalProperties": false, "required": ["schemaVersion", "kind", "id", "name", "definitions", "analyses", "compositions"],
+      "properties": {
+        "schemaVersion": { "const": 1 }, "kind": { "const": "workspace" },
+        "id": { "$ref": "#/definitions/id" }, "name": { "$ref": "#/definitions/text" },
+        "definitions": { "$ref": "#/definitions/relativePath" },
+        "analyses": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/definitions/relativePath" } },
+        "compositions": { "type": "array", "items": { "$ref": "#/definitions/composition" } }
+      }
+    },
+    "node": {
+      "type": "object", "additionalProperties": false, "required": ["id", "label", "description", "increaseMeaning"],
+      "properties": {
+        "id": { "$ref": "#/definitions/id" }, "label": { "$ref": "#/definitions/text" },
+        "description": { "$ref": "#/definitions/text" }, "increaseMeaning": { "$ref": "#/definitions/text" },
+        "tags": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/definitions/text" } }
+      }
+    },
+    "definitionGraph": {
+      "type": "object", "additionalProperties": false, "required": ["schemaVersion", "kind", "workspaceId", "nodes", "positions"],
+      "properties": {
+        "schemaVersion": { "const": 1 }, "kind": { "const": "definitions" }, "workspaceId": { "$ref": "#/definitions/id" },
+        "nodes": { "type": "array", "items": { "$ref": "#/definitions/node" } }, "positions": { "$ref": "#/definitions/positions" }
+      }
+    },
+    "edge": {
+      "type": "object", "additionalProperties": false, "required": ["id", "source", "target", "sign", "condition", "note"],
+      "properties": {
+        "id": { "$ref": "#/definitions/id" }, "source": { "$ref": "#/definitions/id" }, "target": { "$ref": "#/definitions/id" },
+        "sign": { "enum": [1, -1] }, "condition": { "type": "string", "maxLength": 8000 }, "note": { "type": "string", "maxLength": 8000 }
+      }
+    },
+    "analysis": {
+      "type": "object", "additionalProperties": false, "required": ["schemaVersion", "kind", "workspaceId", "id", "name", "scope", "nodeIds", "edges", "positions"],
+      "properties": {
+        "schemaVersion": { "const": 1 }, "kind": { "const": "analysis" }, "workspaceId": { "$ref": "#/definitions/id" },
+        "id": { "$ref": "#/definitions/id" }, "name": { "$ref": "#/definitions/text" }, "scope": { "$ref": "#/definitions/text" },
+        "nodeIds": { "$ref": "#/definitions/ids" }, "edges": { "type": "array", "items": { "$ref": "#/definitions/edge" } },
+        "positions": { "$ref": "#/definitions/positions" }
+      }
+    }
+  }
+}

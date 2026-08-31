@@ -1,0 +1,15 @@
+{
+  "name": "game-rule-analyzer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "独立的游戏规则正负因果图分析工具",
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "dev": "node src/server/cli.mjs serve",
+    "validate": "node src/server/cli.mjs validate",
+    "test": "node --test",
+    "check": "node scripts/check.mjs"
+  },
+  "dependencies": { "ajv": "^8.17.1" }
+}

@@ -1,0 +1,45 @@
+:root { color-scheme: dark; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; color: #dfe8e7; background: #101718; --muted: #91a4a3; --line: #2a3a3b; --positive: #72d2b4; --negative: #efb078; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+header { height: 100px; padding: 20px 30px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; }
+h1 { font-size: 22px; margin: 5px 0 0; font-weight: 600; letter-spacing: .04em; }
+h2 { font-size: 16px; line-height: 1.6; margin: 6px 0 16px; }
+h3 { font-size: 13px; margin: 28px 0 14px; color: #c5d4d2; }
+p { line-height: 1.8; font-size: 13px; }
+.eyebrow { font-size: 10px; letter-spacing: .13em; color: var(--positive); margin: 0; }
+.status { border: 1px solid #446057; border-radius: 5px; padding: 8px 12px; color: #a9c4b9; font-size: 12px; }
+main { display: grid; grid-template-columns: 245px minmax(460px, 1fr) 270px; min-height: calc(100vh - 100px); }
+aside { padding: 24px 20px; background: #131d1e; }
+.sidebar { border-right: 1px solid var(--line); }
+.inspector { border-left: 1px solid var(--line); max-height: calc(100vh - 100px); overflow: auto; }
+label { display: block; font-size: 12px; color: #bbcecb; margin: 18px 0 7px; }
+select, button { font: inherit; font-size: 12px; border: 1px solid #3b5251; border-radius: 5px; padding: 10px 9px; color: #dce6e3; background: #1b2b2b; width: 100%; }
+button { cursor: pointer; margin-top: 10px; }
+button:hover { border-color: var(--positive); }
+button:disabled, select:disabled { opacity: .45; cursor: default; }
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--positive); outline-offset: 3px; }
+input { accent-color: #76c7af; }
+.graph-option { border-bottom: 1px solid var(--line); padding: 10px 0; margin: 0; font-size: 13px; cursor: pointer; }
+.graph-option small { display: block; color: var(--muted); padding: 5px 0 0 24px; line-height: 1.7; }
+.toggle { line-height: 1.8; }
+.muted, #counts { color: var(--muted); font-size: 12px; }
+.canvas-panel { display: flex; flex-direction: column; min-width: 0; background-color: #101819; background-image: radial-gradient(#2b3b3a 1px, transparent 1px); background-size: 22px 22px; }
+.canvas-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 22px 24px 8px; background: #101819e8; }
+.canvas-toolbar h2 { margin: 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 16px; font-size: 11px; color: var(--muted); padding: 8px 24px; }
+.positive { color: var(--positive); }.negative { color: var(--negative); }
+#canvas { display: block; width: 100%; min-height: 480px; flex: 1; }
+.canvas-note { color: var(--muted); font-size: 11px; margin: 10px 24px 20px; }
+.node rect { fill: #1b2a2b; stroke: #455c5b; stroke-width: 1.5; }
+.node text { fill: #e0ece8; font-size: 14px; pointer-events: none; }
+.node .source-label { fill: #96afaa; font-size: 9px; }
+.node { cursor: pointer; }.node:focus { outline: none; }.node.selected rect, .node:focus rect { stroke: #85e6c7; stroke-width: 3; }
+.node.unused { opacity: .5; }
+.edge { fill: none; stroke-width: 2; }.edge.positive { stroke: var(--positive); }.edge.negative { stroke: var(--negative); stroke-dasharray: 6 4; }
+.edge-label { font-size: 17px; font-weight: bold; paint-order: stroke; stroke: #101819; stroke-width: 7; }.edge-label.positive { fill: var(--positive); }.edge-label.negative { fill: var(--negative); }
+.detail-item, .finding { border-bottom: 1px solid var(--line); padding-bottom: 12px; margin-bottom: 12px; font-size: 12px; line-height: 1.8; overflow-wrap: anywhere; }
+.detail-item strong { display: block; color: #a7c3bb; font-size: 11px; margin-bottom: 4px; }
+.finding { color: #bdccc8; }
+#error { border: 1px solid #965e55; background: #3d2724; color: #f4c5b3; padding: 18px 24px; white-space: pre-wrap; font-size: 13px; }
+@media (max-width: 1100px) { main { grid-template-columns: 215px minmax(400px, 1fr); }.inspector { grid-column: 1 / -1; max-height: none; border-top: 1px solid var(--line); }.canvas-panel { min-height: 650px; } }
+@media (max-width: 650px) { header { padding: 16px; height: auto; }h1 { font-size: 17px; }.status { font-size: 10px; }main { display: block; }.sidebar { border-right: none; }.canvas-panel { min-height: 500px; }#canvas { min-height: 350px; } }
