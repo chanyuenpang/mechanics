@@ -223,7 +223,7 @@ export class ConceptPicker {
     this.get('.concept-recover').hidden = !commit?.blocked;
     const count = selected.size + (form ? 1 : 0);
     const creating = !commit?.definitionsSaved && (form || candidates.some(node => selected.has(node.id)));
-    this.status((commit?.definitionsSaved || commit?.phase === 'apply-failed' ? '继续引用' : creating ? '创建并引用' : '引用概念') + (count ? `（${count}）` : ''), !!count && !commit?.blocked && !['saving', 'applying', 'done'].includes(commit?.phase));
+    this.status((commit?.definitionsSaved || commit?.phase === 'apply-failed' ? '继续引用' : creating ? '创建并引用' : '添加节点') + (count ? `（${count}）` : ''), !!count && !commit?.blocked && !['saving', 'applying', 'done'].includes(commit?.phase));
   }
 }
 

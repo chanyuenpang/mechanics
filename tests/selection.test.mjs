@@ -1,6 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { GraphCanvas, nodesInBox, movePositions, edgeGeometry } from '../src/web/canvas.mjs';
+import { GraphCanvas, nodesInBox, movePositions, edgeGeometry, snapPositions } from '../src/web/canvas.mjs';
+
+test('空白双击只打开一次，节点点击不串联；框选和取消不触发', () => {
+  const { canvas, event } = harness(); let opened = 0;
+  canvas.callbacks.blankDoubleClick = () => opened++;
+  const click = node => { canvas.down(event(500, 100, { node })); canvas.up(event(500, 100, { node })); };
+  click(); assert.equal(opened, 0); click(); assert.equal(opened, 1);
+  click('a'); click(); assert.equal(opened, 1);
+  canvas.cancel(); click(); assert.equal(opened, 1);
+  canvas.down(event(500, 100)); canvas.up(event(600, 100)); click(); assert.equal(opened, 1);
+});
+
+test('5px吸附作用于松手后的每个节点坐标，缩放不改单位，取消不提交', () => {
+  assert.deepEqual(snapPositions({ a: { x: 12.5, y: -12.5 }, b: { x: 100003, y: -100003 } }), { a: { x: 15, y: -10 }, b: { x: 100000, y: -100000 } });
+  const { canvas, event, writes } = harness();
+  canvas.positions.a = { x: 2, y: 3 }; canvas.callbacks.snapEnabled = () => true;
+  canvas.down(event(20, 20, { node: 'a' })); canvas.up(event(27, 29));
+  assert.deepEqual(writes, [{ a: { x: 10, y: 10 } }]);
+  canvas.down(event(20, 20, { node: 'a' })); canvas.move(event(39, 39)); canvas.cancel();
+  assert.equal(writes.length, 1);
+});
 
 test('四边自动端点保持影响方向；反向平行边错开，重合与自环有有限坐标', () => {
   const a = { x: 0, y: 0 };

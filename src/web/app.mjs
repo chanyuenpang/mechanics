@@ -9,6 +9,7 @@ const json = value => JSON.stringify(value);
 const uid = prefix => prefix + '-' + crypto.randomUUID().slice(0, 8);
 const arrow = edge => edge.relation === 'contains' ? ' ←＝→ ' : edge.sign === 1 ? ' ＋→ ' : ' −→ ';
 let lastRelation = 1;
+let toolPreferences = null, preferencesBusy = false;
 const el = (tag, text, className) => {
   const item = document.createElement(tag);
   if (text !== undefined) item.textContent = text;
@@ -197,7 +198,7 @@ async function dialog(title, build, submit, confirmText = '确定', { settled } 
 async function guard({ reload = false, allowLegacy = false } = {}) {
   await writeQueue;
   if (opening) return false;
-  if (referenceSession?.commit) { showError(new Error('概念引用尚未完成。请打开「引用概念」核实写入、导出输入，或明确结束本次引用，再切换文件。')); return false; }
+  if (referenceSession?.commit) { showError(new Error('概念引用尚未完成。请打开「概念节点」核实写入、导出输入，或明确结束本次引用，再切换文件。')); return false; }
   if (legacy && !reload && !allowLegacy) { showError(new Error('旧叠加记录尚未处理。请先选择「保存旧叠加为视图」或「放弃旧叠加」，原记录不会自动覆盖。')); return false; }
   if (autosave.blocked && !reload) { showError(new Error(autosave.error.message + '\n视图自动保存未完成。请先导出视图草稿，再通过「重新读取」核实磁盘并处理未保存内容。')); return false; }
   if (!dirty() && !autosave.blocked) return true;
@@ -358,7 +359,7 @@ function render(withInspector = true) {
     $('empty-title').textContent = viewMode() ? '选择要叠加的研究' : activeId === null ? '开始一张研究图' : '为这张图引用概念';
     $('empty-hint').textContent = viewMode() ? '勾选左侧研究文件，组合会自动保存到当前视图。' : activeId === null ? '选择左侧研究文件，或新建一张研究图。' : '从概念表引用节点，再连接规则。';
     $('empty-add').hidden = viewMode() || legacy;
-    $('empty-add').textContent = activeId === null ? '新建分析图' : '引用概念';
+    $('empty-add').textContent = activeId === null ? '新建分析图' : '概念节点';
     $('toolbar').hidden = legacy || (!viewMode() && activeId === null);
     $('toolbar').classList.toggle('view-tools', viewMode());
     $('add-node').hidden = viewMode(); $('positive-tool').hidden = viewMode(); $('negative-tool').hidden = viewMode(); $('contains-tool').hidden = viewMode();
@@ -452,12 +453,34 @@ function inspect() {
   if (downstream.length) {
     const target = field(panel, '追踪影响至', downstream[0].id, { options: downstream.map(item => [item.id, item.label]) });
     const output = el('div', undefined, 'trace-result');
+    output.setAttribute('aria-live', 'polite');
+    target.onchange = () => output.replaceChildren();
     panel.append(button('解释影响路径', () => {
-      const result = tracePaths(original, node.id, target.value); output.replaceChildren(el('p', result.interpretation, 'note'));
-      result.paths.forEach(path => output.append(el('div', (path.kind === 'containment' ? '包含路径（不改变正负号）' : path.sign === 1 ? '促进路径' : '抑制路径') + '\n' + path.steps.map(step => name(step.traversalSource ?? step.source) + arrow(step) + name(step.traversalTarget ?? step.target) + ' [' + graphName(step.graphId) + ' / ' + step.edgeId + ']'
-        + (step.condition ? '\n条件：' + step.condition : '') + (step.note ? '\n说明：' + step.note : '')).join('\n'), 'trace-path')));
-      if (!result.paths.length) output.append(el('p', '当前图层范围内未找到路径。'));
-      if (result.truncated) output.append(el('p', '已达到查询上限，结果不完整。'));
+      const result = tracePaths(original, node.id, target.value);
+      const positive = result.paths.filter(path => path.sign === 1).length;
+      const negative = result.paths.filter(path => path.sign === -1).length;
+      const neutral = result.paths.length - positive - negative;
+      const kind = positive && negative ? 'mixed' : positive ? 'positive' : negative ? 'negative' : 'neutral';
+      const conclusion = positive && negative ? '促进与抑制路径并存' : positive ? '存在促进影响' : negative ? '存在抑制影响' : neutral ? '仅找到等号关联' : '未找到影响路径';
+      const card = el('div', undefined, 'trace-conclusion ' + kind);
+      card.append(el('span', result.truncated ? '已找到的路径 · 结果不完整' : '当前模型结论', 'trace-eyebrow'),
+        el('strong', conclusion, 'trace-verdict'), el('p', name(node.id) + ' → ' + name(target.value), 'trace-endpoints'));
+      if (result.paths.length) card.append(el('p', [positive && `${positive} 条促进`, negative && `${negative} 条抑制`, neutral && `${neutral} 条等号关联`].filter(Boolean).join(' · '), 'trace-count'));
+      if (kind === 'mixed') card.append(el('p', '不能合并为单一正负结论，也不相互抵消。', 'trace-caution'));
+      if (neutral && !positive && !negative) card.append(el('p', '等号不改变符号，本身不产生促进或抑制。', 'trace-caution'));
+      output.replaceChildren(card);
+      if (result.truncated) output.append(el('p', '已达到查询上限，尚未列出的路径可能包含其他影响方向。', 'trace-warning'));
+      result.paths.forEach((path, index) => {
+        const item = el('div', undefined, 'trace-evidence');
+        item.append(el('strong', `路径 ${index + 1} · ` + (path.sign === 1 ? '促进' : path.sign === -1 ? '抑制' : '等号关联')));
+        item.append(el('p', name(node.id) + path.steps.map(step => arrow(step) + name(step.traversalTarget ?? step.target)).join(''), 'trace-chain'));
+        const details = el('details'); details.append(el('summary', '查看来源与规则说明'));
+        details.append(el('div', path.steps.map(step => name(step.traversalSource ?? step.source) + arrow(step) + name(step.traversalTarget ?? step.target) + '\n来源：' + graphName(step.graphId) + ' / ' + step.edgeId
+          + (step.condition ? '\n条件：' + step.condition : '') + (step.note ? '\n说明：' + step.note : '')).join('\n\n'), 'trace-path'));
+        item.append(details); output.append(item);
+      });
+      output.append(el('p', result.interpretation, 'note trace-limits'));
+      card.scrollIntoView({ block: 'nearest' });
     }), output);
   }
 }
@@ -528,7 +551,7 @@ async function removeSelection() {
   });
 }
 async function addNode() {
-  if (!workspace || busy()) return;
+  if (!workspace || busy() || $('dialog').open) return;
   if (definitionMode()) { addTerm(); return; }
   if (activeId === null || viewMode() || legacy || autosave.blocked) return;
   setMode('select');
@@ -536,7 +559,7 @@ async function addNode() {
   const session = referenceSession; let picker;
   $('dialog').classList.add('concept-dialog');
   try {
-    await dialog('引用概念', container => {
+    await dialog('概念节点', container => {
       picker = new ConceptPicker(container, session, workspace.definitions, draft.nodeIds, {
         status: (text, enabled) => { $('confirm-dialog').textContent = text; $('confirm-dialog').disabled = !enabled; },
         exportInputs: () => download({ kind: 'concept-reference-draft', analysis: clone(draft), selectedIds: [...session.selected], candidates: session.candidates, form: session.form, phase: session.commit?.phase, plannedReference: session.commit?.plan.analysis }, session.targetId + '.concept-reference.draft.json'),
@@ -571,7 +594,7 @@ async function addNode() {
       selection = session.commit.plan.additions.length === 1 ? { type: 'node', id: session.commit.plan.additions[0] } : { type: 'nodes', ids: session.commit.plan.additions };
       referenceSession = null; render();
       $('tool-hint').textContent = `已引用 ${session.commit.plan.additions.length} 个概念${session.commit.plan.candidates.length ? `，其中新建 ${session.commit.plan.candidates.length} 个` : ''}`;
-    }, '引用概念', { settled: () => picker.updateStatus() });
+    }, '添加节点', { settled: () => picker.updateStatus() });
   } finally {
     $('dialog').classList.remove('concept-dialog'); $('dialog-content').onkeydown = null;
     if (!session.commit) referenceSession = null;
@@ -636,8 +659,13 @@ const glossary = new GlossaryTable($('glossary'), {
 });
 const canvas = new GraphCanvas($('canvas'), {
   name, graphName,
+  snapEnabled: () => toolPreferences?.snapToGrid === true,
+  blankDoubleClick: () => {
+    if (definitionMode() || viewMode() || legacy || activeId === null) return;
+    void addNode().catch(showError);
+  },
   select: value => { selection = value; render(); },
-  canMove: id => !busy() && !autosave.blocked && !legacy && !definitionMode() && (viewMode() || !!draft?.nodeIds.includes(id)),
+  canMove: id => toolPreferences !== null && !preferencesBusy && !busy() && !autosave.blocked && !legacy && !definitionMode() && (viewMode() || !!draft?.nodeIds.includes(id)),
   move: positions => viewMode() ? editView(data => { Object.assign(data.positions, positions); }, { keepSelection: true }) : edit(data => { Object.assign(data.positions, positions); }, { topology: false }),
   zoom: value => { $('zoom').textContent = value + '%'; },
   hint: text => { $('tool-hint').textContent = text; },
@@ -779,4 +807,25 @@ document.addEventListener('keydown', event => {
   if (event.key.toLowerCase() === 'v') setMode('select');
   if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); void removeSelection().catch(showError); }
 });
+function showPreferences() {
+  $('snap-grid').disabled = preferencesBusy;
+  $('snap-grid').setAttribute('aria-pressed', String(toolPreferences?.snapToGrid === true));
+  $('snap-grid').textContent = toolPreferences === null ? '重读吸附设置' : toolPreferences.snapToGrid ? '5px 吸附 · 开' : '5px 吸附 · 关';
+}
+async function refreshPreferences() {
+  if (preferencesBusy) return;
+  preferencesBusy = true; showPreferences();
+  try { toolPreferences = await api('/api/preferences'); }
+  catch (error) { toolPreferences = null; showError(error); }
+  finally { preferencesBusy = false; showPreferences(); }
+}
+$('snap-grid').onclick = async () => {
+  if (toolPreferences === null) { await refreshPreferences(); return; }
+  canvas.cancel(); preferencesBusy = true; showPreferences();
+  try { toolPreferences = await api('/api/preferences', { version: 1, snapToGrid: !toolPreferences.snapToGrid }); }
+  catch (error) { toolPreferences = null; showError(error); }
+  finally { preferencesBusy = false; showPreferences(); }
+};
+window.addEventListener('focus', () => { void refreshPreferences(); });
 await load();
+await refreshPreferences();

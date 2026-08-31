@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createWorkspaceStore } from './store.mjs';
+import { createPreferences } from './preferences.mjs';
 
 const assets = new Map([
   ['/', [new URL('../web/index.html', import.meta.url), 'text/html; charset=utf-8']],
@@ -13,8 +14,9 @@ const assets = new Map([
   ['/domain/graph.mjs', [new URL('../domain/graph.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
 ]);
 
-export async function startServer({ workspaceRoot, port = 4319 }) {
+export async function startServer({ workspaceRoot, port = 4319, preferencesPath }) {
   const store = await createWorkspaceStore(workspaceRoot);
+  const preferences = createPreferences(preferencesPath);
   const token = randomBytes(24).toString('base64url');
   const expectedToken = Buffer.from(`Bearer ${token}`);
   let origin;
@@ -41,7 +43,8 @@ export async function startServer({ workspaceRoot, port = 4319 }) {
         if (request.method === 'GET' && url.pathname === '/api/workspace') {
           send(200, await store.read()); return;
         }
-        if (request.method === 'POST' && ['/api/save', '/api/analyses', '/api/views'].includes(url.pathname)) {
+        if (request.method === 'GET' && url.pathname === '/api/preferences') { send(200, await preferences.read()); return; }
+        if (request.method === 'POST' && ['/api/save', '/api/analyses', '/api/views', '/api/preferences'].includes(url.pathname)) {
           if (request.headers.origin !== origin || request.headers['content-type'] !== 'application/json') {
             send(403, { error: 'WRITE_ORIGIN_REQUIRED', message: '写入必须来自同源页面并使用 JSON' }); return;
           }
@@ -53,6 +56,7 @@ export async function startServer({ workspaceRoot, port = 4319 }) {
           }
           const body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
           if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('请求必须是 JSON 对象');
+          if (url.pathname === '/api/preferences') { send(200, await preferences.save(body)); return; }
           send(200, await (url.pathname === '/api/save' ? store.save(body) : url.pathname === '/api/views' ? store.createView(body) : store.createAnalysis(body))); return;
         }
         send(405, { error: 'METHOD_NOT_ALLOWED', message: '此接口不支持该操作' }); return;

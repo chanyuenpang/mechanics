@@ -31,7 +31,7 @@
       <button id="toggle-sidebar" class="icon-button" title="切换文件侧栏" aria-label="切换文件侧栏">☰</button>
       <div id="main-views" class="view-switch" role="group" aria-label="工作视图"><button id="table-view">概念表</button><button id="graph-view">分析图</button></div>
       <div class="breadcrumb"><span id="file-kind">工作区</span><span class="slash">/</span><strong id="file-name">加载中</strong><span id="dirty-dot" hidden>●</span></div>
-      <div class="header-actions"><span id="save-state">本地文件</span><button id="export" class="quiet" title="导出当前文件或未保存草稿">导出 JSON</button><button id="save" class="primary" disabled>保存 <kbd>Ctrl S</kbd></button></div>
+      <div class="header-actions"><button id="snap-grid" class="quiet" aria-pressed="false" disabled title="本机全局选项：拖动结束后吸附到 5px 画布坐标">5px 吸附</button><span id="save-state">本地文件</span><button id="export" class="quiet" title="导出当前文件或未保存草稿">导出 JSON</button><button id="save" class="primary" disabled>保存 <kbd>Ctrl S</kbd></button></div>
     </header>
     <div class="viewbar"><strong id="view-name">研究 · 单文件编辑</strong><span id="view-state" role="status">正在读取…</span><button id="export-view" class="quiet" hidden>导出视图草稿</button><button id="return-view" class="quiet" hidden>返回视图</button><button id="save-view" class="quiet">存为视图…</button></div>
     <div id="legacy-notice" role="status" hidden>已保留旧叠加记录。请保存为视图，或<button id="discard-legacy" class="quiet">放弃旧叠加</button>后打开研究。</div>
@@ -40,11 +40,11 @@
     <section id="glossary" aria-label="节点定义表格" hidden></section>
     <section id="stage" aria-label="节点画布区域">
       <svg id="canvas" aria-label="规则节点画布" tabindex="0"></svg>
-      <div id="empty" hidden><span class="empty-symbol">＋</span><h2 id="empty-title">开始一张分析图</h2><p id="empty-hint">引用概念，将抽象规则连接起来。</p><button id="empty-add">引用概念</button></div>
+      <div id="empty" hidden><span class="empty-symbol">＋</span><h2 id="empty-title">开始一张分析图</h2><p id="empty-hint">添加概念节点，将抽象规则连接起来。</p><button id="empty-add">概念节点</button></div>
       <div id="canvas-context"><span id="scope-chip"></span><span id="overlay-count"></span></div>
       <div id="toolbar" class="floating" role="toolbar" aria-label="画布工具">
         <button id="select-tool" class="tool active" title="选择与拖拽 V" aria-label="选择工具">↖</button>
-        <span class="divider"></span><button id="add-node" class="tool text-tool">＋ <span>引用概念</span></button>
+        <span class="divider"></span><button id="add-node" class="tool text-tool">＋ <span>概念节点</span></button>
         <span class="divider"></span><button id="positive-tool" class="tool positive" title="先点源节点，再点目标节点" aria-label="促进连线">＋→</button>
         <button id="negative-tool" class="tool negative" title="先点源节点，再点目标节点" aria-label="抑制连线">−→</button>
         <button id="contains-tool" class="tool contains" title="依次选择两个节点；＝双向传递影响，不改变正负号" aria-label="包含连线">↔＝</button>

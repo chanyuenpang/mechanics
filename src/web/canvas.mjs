@@ -40,6 +40,11 @@ export function movePositions(positions, dx, dy) {
   return Object.fromEntries(Object.entries(positions).map(([id, p]) => [id, { x: p.x + dx, y: p.y + dy }]));
 }
 
+export function snapPositions(positions) {
+  const snap = value => Math.max(-100000, Math.min(100000, Math.round(value / 5) * 5));
+  return Object.fromEntries(Object.entries(positions).map(([id, point]) => [id, { x: snap(point.x), y: snap(point.y) }]));
+}
+
 export class GraphCanvas {
   constructor(root, callbacks) {
     this.root = root; this.callbacks = callbacks; this.camera = { x: 50, y: 80, scale: 1 };
@@ -88,6 +93,7 @@ export class GraphCanvas {
   }
   down(event) {
     if (this.gesture || ![0, 1, 2].includes(event.button)) return;
+    if (event.ctrlKey || event.metaKey || event.altKey) { this.lastClick = null; return; }
     const node = event.target.closest('[data-node]'), edge = event.target.closest('[data-edge]');
     if (event.button === 2 || event.button === 1 || this.space) {
       this.lastClick = null;
@@ -95,7 +101,6 @@ export class GraphCanvas {
       this.root.setPointerCapture(event.pointerId); this.root.classList.add('panning'); return;
     }
     if (!node && !edge) {
-      this.lastClick = null;
       if (this.mode !== 'select') return;
       event.preventDefault();
       this.gesture = { type: 'box', point: this.point(event), end: this.point(event), x: event.clientX, y: event.clientY,
@@ -135,14 +140,15 @@ export class GraphCanvas {
     this.move(event);
     this.gesture = null; this.root.classList.remove('panning');
     if (this.root.hasPointerCapture(event.pointerId)) this.root.releasePointerCapture(event.pointerId);
-    if (gesture.type === 'nodes' && gesture.moved && gesture.ids.every(id => this.graph.nodes.some(node => node.id === id) && this.callbacks.canMove(id))) this.callbacks.move(gesture.next);
+    if (gesture.type === 'nodes' && gesture.moved && gesture.ids.every(id => this.graph.nodes.some(node => node.id === id) && this.callbacks.canMove(id))) this.callbacks.move(this.callbacks.snapEnabled?.() ? snapPositions(gesture.next) : gesture.next);
     else if (gesture.type === 'box' && gesture.moved) this.selectNodes([...new Set([...gesture.original, ...nodesInBox(this.graph.nodes, this.positions, gesture.point, gesture.end)])]);
     else if (gesture.type === 'box' && !gesture.additive && !gesture.moved) this.callbacks.select(null);
-    if (gesture.type === 'nodes' && !gesture.moved && gesture.ids.length === 1) {
-      const id = gesture.ids[0], now = performance.now(), previous = this.lastClick;
+    if (!gesture.moved && ((gesture.type === 'nodes' && gesture.ids.length === 1) || (gesture.type === 'box' && !gesture.additive))) {
+      const id = gesture.type === 'nodes' ? gesture.ids[0] : null, now = performance.now(), previous = this.lastClick;
       this.lastClick = { id, time: now, x: event.clientX, y: event.clientY };
-      if (previous?.id === id && now - previous.time <= 400 && Math.hypot(event.clientX - previous.x, event.clientY - previous.y) <= 5) {
-        this.lastClick = null; this.callbacks.quickLink?.(id);
+      if (previous && previous.id === id && now - previous.time <= 400 && Math.hypot(event.clientX - previous.x, event.clientY - previous.y) <= 5) {
+        this.lastClick = null;
+        if (id === null) this.callbacks.blankDoubleClick?.(); else this.callbacks.quickLink?.(id);
       }
     } else this.lastClick = null;
     this.draw();
@@ -214,7 +220,6 @@ export class GraphCanvas {
       const meta = svg('text', { x: 16, y: 45, class: 'node-meta' });
       meta.textContent = this.definitionMode ? node.id.slice(0, 23) : (node.sourceGraphIds ?? []).map(this.callbacks.graphName).join(' · ').slice(0, 23);
       group.append(title, svg('rect', { width: WIDTH, height: HEIGHT, rx: 7 }), label, meta);
-      for (const [cx, cy] of [[0, HEIGHT / 2], [WIDTH, HEIGHT / 2], [WIDTH / 2, 0], [WIDTH / 2, HEIGHT]]) group.append(svg('circle', { cx, cy, r: 3.5 }));
       this.world.append(group);
     }
     if (this.gesture?.type === 'box' && this.gesture.moved) {
