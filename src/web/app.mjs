@@ -1,7 +1,7 @@
 import { compose, canCollapse, collapse, tracePaths, diagnose } from '/domain/graph.mjs';
 import { GraphCanvas } from '/canvas.mjs';
 import { GlossaryTable } from '/glossary.mjs';
-import { ViewAutosave, viewSaveRequest, readOpening, createAndRememberView } from '/view-files.mjs';
+import { ViewAutosave, viewSaveRequest, readOpening, createAndRememberView, graphPositions, changeViewMembers, prepareOpening } from '/view-files.mjs';
 
 const $ = id => document.getElementById(id);
 const clone = value => structuredClone(value);
@@ -20,14 +20,20 @@ const button = (text, run, className) => {
 const token = new URLSearchParams(location.hash.slice(1)).get('session');
 let workspace, activeId = null, draft, baseline, visible = [], folded = [], viewPositions = {};
 let selection = null, graph, original, history = [], future = [], pending = 0, viewState = 'saved', writeQueue = Promise.resolve();
-let screen = 'analysis', viewId = null, opening = false, autosave;
+let screen = 'analysis', viewId = null, opening = false, autosave, legacy = false, returnView = null;
+let graphHistory = null;
+const cameras = new Map();
 const busy = () => opening || pending > 0;
 const dirty = () => draft && json(draft) !== json(baseline);
 const definitionMode = () => screen === 'concepts';
+const viewMode = () => !definitionMode() && viewId !== null;
 const name = id => (definitionMode() ? draft : workspace?.definitions)?.nodes.find(node => node.id === id)?.label ?? id;
 const graphName = id => workspace?.analyses.find(item => item.id === id)?.name ?? id;
 const filePath = () => definitionMode() ? workspace.manifest.definitions : activeId === null ? '' : workspace.files.find(item => item.kind === 'analysis' && item.id === activeId).path;
-const viewSnapshot = () => ({ graphIds: [...visible], activeLayerId: activeId, collapsedNodeIds: [...folded], positions: clone(viewPositions) });
+const viewSnapshot = () => ({ graphIds: [...visible], activeLayerId: null, collapsedNodeIds: [...folded], positions: clone(viewPositions) });
+const contextKey = () => viewId !== null ? 'view/' + viewId : legacy ? 'legacy' : 'analysis/' + activeId;
+const rememberCamera = () => { if (!definitionMode()) cameras.set(contextKey(), clone(canvas.camera)); };
+const restoreCamera = () => { if (cameras.has(contextKey())) { canvas.camera = clone(cameras.get(contextKey())); canvas.transform(); } };
 
 function showError(error) {
   const conflict = error.code === 'REVISION_CONFLICT';
@@ -66,28 +72,39 @@ function write(operation) {
 function updateStatus() {
   $('save').disabled = !dirty() || busy();
   $('dirty-dot').hidden = !dirty();
-  $('undo').disabled = !history.length || busy();
-  $('redo').disabled = !future.length || busy();
+  $('undo').disabled = !history.length || busy() || !!autosave?.blocked;
+  $('redo').disabled = !future.length || busy() || !!autosave?.blocked;
   $('positive-tool').disabled = !workspace || definitionMode() || activeId === null || busy();
   $('negative-tool').disabled = $('positive-tool').disabled;
   $('export').disabled = !draft;
-  $('save-state').textContent = dirty() ? '规则未保存' : '规则已保存';
+  $('save-state').textContent = legacy ? '旧记录已保留' : viewMode() ? '源研究只读' : dirty() ? '规则未保存' : '规则已保存';
+  $('save').hidden = viewMode() || legacy;
+  $('export').hidden = viewMode() || legacy;
+  $('view-state').hidden = viewId === null || definitionMode();
   $('view-state').textContent = opening ? '正在打开…' : ({ saved: '视图已保存', saving: '视图正在保存…', failed: '视图保存失败', uncertain: '视图写入待确认' })[viewState];
   $('view-state').classList.toggle('danger', !!autosave?.blocked);
   $('export-view').hidden = !autosave?.blocked;
   $('save-view').disabled = !workspace || busy() || !!autosave?.blocked;
-  $('new-graph').disabled = !workspace || busy();
-  $('leave-view').hidden = viewId === null;
-  $('leave-view').disabled = busy() || !!autosave?.blocked;
-  for (const id of ['files', 'stage', 'glossary', 'main-views']) $(id).inert = opening;
+  $('new-graph').disabled = !workspace || busy() || legacy || !!autosave?.blocked;
+  $('new-view').disabled = !workspace || busy() || !!autosave?.blocked || legacy;
+  $('save-view').textContent = viewId !== null ? '▦ 视图另存为…' : legacy ? '▦ 保存旧叠加为视图…' : '▦ 以此研究新建视图…';
+  $('save-view').disabled ||= definitionMode() || (!legacy && viewId === null && activeId === null);
+  $('return-view').hidden = returnView === null || viewId !== null || definitionMode();
+  $('return-view').disabled = busy() || !!autosave?.blocked;
+  $('legacy-notice').hidden = !legacy;
+  $('add-node').disabled = activeId === null || busy();
+  for (const id of ['files', 'main-views']) $(id).inert = opening;
+  for (const id of ['stage', 'glossary']) $(id).inert = busy();
+  for (const input of $('files').querySelectorAll('input[type=checkbox]')) input.disabled = busy() || !!autosave?.blocked;
 }
 async function persistView() {
+  if (!viewMode() || legacy) return false;
   try {
     return await autosave.save(viewSaveRequest(workspace, viewId, viewSnapshot()));
   } catch (error) { showError(error); return false; }
 }
 async function saveDraft() {
-  if (opening) return false;
+  if (busy() || autosave.blocked) return false;
   if (!dirty()) return true;
   const saved = clone(draft), isDefinition = definitionMode(), id = isDefinition ? null : activeId;
   try {
@@ -97,23 +114,31 @@ async function saveDraft() {
   } catch (error) { showError(error); return false; }
 }
 function edit(change, { inspect = true, refresh = true } = {}) {
-  if (!draft || opening) return;
+  if (!draft || busy() || viewMode() || legacy || autosave.blocked) return;
   const previous = clone(draft); change(draft);
   if (json(previous) === json(draft)) return;
   history.push(previous); if (history.length > 80) history.shift(); future = [];
   // 拓扑改变时展开摘要；修改对象仍然是原始文件，不编辑折叠结果。
-  const hadFold = !definitionMode() && (folded.length > 0 || Object.keys(viewPositions).length > 0);
-  if (!definitionMode()) { folded = []; viewPositions = {}; }
+  if (!definitionMode()) folded = [];
   if (refresh) render(inspect); else updateStatus();
-  if (hadFold) void persistView();
+}
+function assignSnapshot(snapshot) {
+  visible = [...snapshot.graphIds]; folded = [...snapshot.collapsedNodeIds]; viewPositions = clone(snapshot.positions);
+}
+function editView(change) {
+  if (!viewMode() || busy() || autosave.blocked) return;
+  const previous = viewSnapshot(), next = clone(previous); change(next);
+  if (json(previous) === json(next)) return;
+  history.push(previous); if (history.length > 80) history.shift(); future = [];
+  assignSnapshot(next); selection = null; render(); void persistView();
 }
 function undo(redo = false) {
-  if (busy()) return;
+  if (busy() || autosave.blocked || legacy) return;
   const from = redo ? future : history, to = redo ? history : future;
   if (!from.length) return;
-  to.push(clone(draft)); draft = from.pop(); selection = null;
-  if (!definitionMode()) { folded = []; viewPositions = {}; }
-  render(); if (!definitionMode()) void persistView();
+  if (viewMode()) { to.push(viewSnapshot()); assignSnapshot(from.pop()); }
+  else { to.push(clone(draft)); draft = from.pop(); if (!definitionMode()) folded = []; }
+  selection = null; render(); if (viewMode()) void persistView();
 }
 function field(container, label, value, { multiline = false, readonly = false, required = false, options, onChange, pattern } = {}) {
   const wrap = el('label', label, 'field');
@@ -134,19 +159,22 @@ async function dialog(title, build, submit, confirmText = '确定') {
   return new Promise(resolve => {
     const modal = $('dialog'); modal.returnValue = '';
     modal.onclose = () => resolve(modal.returnValue === 'ok');
+    modal.oncancel = event => { if ($('confirm-dialog').disabled) event.preventDefault(); };
     $('dialog-form').onsubmit = async event => {
       event.preventDefault(); $('confirm-dialog').disabled = true; $('dialog-error').hidden = true;
+      $('close-dialog').disabled = true; $('cancel-dialog').disabled = true;
       try { if (await submit() !== false) modal.close('ok'); }
       catch (error) { $('dialog-error').textContent = error.message; $('dialog-error').hidden = false; }
-      finally { $('confirm-dialog').disabled = false; }
+      finally { $('confirm-dialog').disabled = false; $('close-dialog').disabled = false; $('cancel-dialog').disabled = false; }
     };
     modal.showModal();
   });
 }
-async function guard({ reload = false } = {}) {
+async function guard({ reload = false, allowLegacy = false } = {}) {
   await writeQueue;
   if (opening) return false;
-  if (autosave.blocked && !reload) { showError(new Error('视图自动保存未完成。请先导出视图草稿，再通过「重新读取」核实磁盘并处理未保存内容。')); return false; }
+  if (legacy && !reload && !allowLegacy) { showError(new Error('旧叠加记录尚未处理。请先选择「保存旧叠加为视图」或「放弃旧叠加」，原记录不会自动覆盖。')); return false; }
+  if (autosave.blocked && !reload) { showError(new Error(autosave.error.message + '\n视图自动保存未完成。请先导出视图草稿，再通过「重新读取」核实磁盘并处理未保存内容。')); return false; }
   if (!dirty() && !autosave.blocked) return true;
   return dialog('当前文件有未保存修改', container => {
     container.append(el('p', '请保存、放弃或取消。放弃只在目标成功打开后生效；取消或打开失败会保留草稿。', 'note'));
@@ -161,37 +189,32 @@ function assignLayer(id) {
   activeId = id; screen = 'analysis';
   draft = id === null ? undefined : clone(workspace.analyses.find(item => item.id === id));
   baseline = clone(draft); history = []; future = []; selection = null;
-  if (id !== null && !visible.includes(id)) visible.push(id);
   setMode('select');
 }
 async function openLayer(id) {
   if (opening) return;
-  if (id === activeId && !definitionMode()) { if (id !== null) { selection = { type: 'file' }; inspect(); } return; }
-  if (!await guard()) return;
-  const changedLayer = id !== activeId;
-  assignLayer(id);
-  if (changedLayer) { folded = []; viewPositions = {}; }
-  render(); canvas.fit();
-  if (changedLayer) await persistView();
+  if (id === activeId && !definitionMode() && !viewMode() && !legacy) { if (id !== null) { selection = { type: 'file' }; inspect(); } return; }
+  await load({ kind: 'analysis', id });
 }
 async function openConcepts() {
   if (!workspace || definitionMode() || !await guard()) return;
   // 工作视图切换不改变选中的分析文件，也不为打开概念表写入 lastView。
+  rememberCamera(); graphHistory = { history, future };
   screen = 'concepts'; draft = clone(workspace.definitions); baseline = clone(draft);
   history = []; future = []; selection = null; render();
 }
+async function resumeGraph() {
+  if (!definitionMode() || !await guard()) return;
+  assignLayer(activeId);
+  if (viewId !== null && graphHistory) { history = graphHistory.history; future = graphHistory.future; }
+  graphHistory = null; render(); restoreCamera();
+}
 async function toggleLayer(id, checked) {
-  if (opening || autosave.blocked) { renderSidebar(); if (autosave.blocked) showError(autosave.error); return; }
-  if (!checked && id === activeId) {
-    const next = visible.find(item => item !== id) ?? null;
-    if (definitionMode()) activeId = next;
-    else {
-      if (!await guard()) { renderSidebar(); return; }
-      assignLayer(next);
-    }
-  }
-  visible = checked ? [...new Set([...visible, id])] : visible.filter(item => item !== id);
-  folded = []; viewPositions = {}; selection = null; render(); await persistView();
+  if (!viewMode() || busy() || autosave.blocked) { renderSidebar(); return; }
+  const ids = checked ? [...new Set([...visible, id])] : visible.filter(item => item !== id);
+  const next = changeViewMembers(workspace, viewSnapshot(), ids), expanded = folded.length - next.collapsedNodeIds.length;
+  editView(snapshot => Object.assign(snapshot, next));
+  $('tool-hint').textContent = expanded ? `已展开 ${expanded} 个失效折叠 · 可撤销本次勾选` : '已更新叠加研究 · 可撤销本次勾选';
 }
 function renderSidebar() {
   $('workspace-name').textContent = workspace.manifest.name;
@@ -201,11 +224,11 @@ function renderSidebar() {
   const row = (label, id, path, parent) => {
     const item = el('div', undefined, 'file-row' + (id === activeId && !definitionMode() ? ' active' : ''));
     const open = button('', () => openLayer(id), 'file'); open.title = path;
-    open.setAttribute('aria-label', '编辑图层 ' + label);
+    open.setAttribute('aria-label', '打开研究 ' + label);
     open.append(el('span', '▱', 'file-icon'), el('span', label, 'file-text')); item.append(open);
-    if (id !== null) {
+    if (id !== null && viewMode()) {
       const labelEl = el('label', undefined, 'visibility'), input = el('input'); input.type = 'checkbox'; input.checked = visible.includes(id);
-      input.setAttribute('aria-label', '显示图层 ' + label); input.title = '显示 / 隐藏此图层';
+      input.setAttribute('aria-label', '叠加研究 ' + label); input.title = '加入 / 移出当前视图'; input.disabled = busy() || autosave.blocked;
       input.onchange = () => toggleLayer(id, input.checked).catch(showError); labelEl.append(input); item.append(labelEl);
     }
     parent.append(item);
@@ -239,21 +262,16 @@ function renderSidebar() {
 }
 function projection() {
   const data = { ...workspace,
-    analyses: workspace.analyses.map(item => item.id === activeId ? draft : item) };
+    analyses: workspace.analyses.map(item => item.id === activeId && draft ? draft : item) };
   original = compose(data, visible); graph = original;
   for (const id of folded) graph = collapse(graph, id);
-  const positions = {};
-  graph.nodes.forEach((node, index) => {
-    positions[node.id] = draft?.positions[node.id] ?? viewPositions[node.id] ?? data.definitions.positions[node.id]
-      ?? { x: (index % 4) * 235 + 40, y: Math.floor(index / 4) * 160 + 40 };
-  });
-  return positions;
+  return graphPositions(data, graph, viewPositions, activeId);
 }
 function render(withInspector = true) {
   if (!workspace) return;
   const table = definitionMode();
-  $('view-name').textContent = viewId === null ? '临时浏览' : workspace.views.find(item => item.id === viewId).name;
-  $('view-name').title = viewId === null ? '未保存为独立视图文件' : workspace.files.find(item => item.kind === 'view' && item.id === viewId).path;
+  $('view-name').textContent = viewId === null ? legacy ? '旧叠加 · 待保存为视图' : '研究 · 单文件编辑' : workspace.views.find(item => item.id === viewId).name;
+  $('view-name').title = viewId === null ? '点击研究只打开该文件；打开视图才可勾选叠加' : workspace.files.find(item => item.kind === 'view' && item.id === viewId).path;
   $('stage').hidden = table; $('glossary').hidden = !table;
   $('table-view').classList.toggle('active', table); $('graph-view').classList.toggle('active', !table);
   $('table-view').setAttribute('aria-pressed', String(table)); $('graph-view').setAttribute('aria-pressed', String(!table));
@@ -264,17 +282,20 @@ function render(withInspector = true) {
   try {
     const positions = projection();
     canvas.update(graph, positions, activeId, selection, definitionMode());
-    $('file-kind').textContent = activeId === null ? '浏览' : '编辑';
-    $('file-name').textContent = activeId === null ? '未选择分析图' : draft.name;
+    $('file-kind').textContent = viewMode() ? '视图' : legacy ? '旧记录' : '研究';
+    $('file-name').textContent = viewMode() ? workspace.views.find(item => item.id === viewId).name : legacy ? '待保存的叠加' : activeId === null ? '未选择研究' : draft.name;
     $('file-name').title = filePath();
-    $('scope-chip').textContent = activeId === null ? '只读浏览' : '当前层可编辑';
-    $('overlay-count').textContent = visible.length ? visible.length + ' 个图层可见 · 视图自动保存' : '未叠加分析图';
+    $('scope-chip').textContent = viewMode() ? '组合与布局可编辑 · 源研究只读' : legacy ? '只读预览' : '当前研究可编辑 · 手动保存';
+    $('overlay-count').textContent = viewMode() || legacy ? visible.length + ' 个研究叠加' : '仅显示当前研究';
     $('counts').textContent = graph.nodes.length + ' 个节点 · ' + graph.edges.length + ' 条关系';
     $('empty').hidden = graph.nodes.length > 0;
-    $('empty-title').textContent = activeId === null ? '开始一张分析图' : '为这张图引用概念';
-    $('empty-hint').textContent = activeId === null ? '选择左侧分析文件，或新建一张分析图。' : '从概念表引用节点，再连接规则。';
+    $('empty-title').textContent = viewMode() ? '选择要叠加的研究' : activeId === null ? '开始一张研究图' : '为这张图引用概念';
+    $('empty-hint').textContent = viewMode() ? '勾选左侧研究文件，组合会自动保存到当前视图。' : activeId === null ? '选择左侧研究文件，或新建一张研究图。' : '从概念表引用节点，再连接规则。';
+    $('empty-add').hidden = viewMode() || legacy;
     $('empty-add').textContent = activeId === null ? '新建分析图' : '引用概念';
-    $('toolbar').hidden = activeId === null;
+    $('toolbar').hidden = legacy || (!viewMode() && activeId === null);
+    $('toolbar').classList.toggle('view-tools', viewMode());
+    $('add-node').hidden = viewMode(); $('positive-tool').hidden = viewMode(); $('negative-tool').hidden = viewMode();
     $('add-node').title = '引用已有概念到当前分析图';
     $('unfold').hidden = folded.length === 0;
     renderSidebar(); updateStatus(); if (withInspector) inspect();
@@ -288,9 +309,9 @@ function inspect() {
   if (!selection) return;
   if (selection.type === 'file') {
     if (!draft || definitionMode()) { $('inspector').hidden = true; return; }
-    $('inspector-title').textContent = '分析图属性';
+    $('inspector-title').textContent = '研究属性';
     detail(panel, '保存文件', filePath());
-    field(panel, '分析图名称', draft.name, { onChange: value => edit(data => { data.name = value; }, { inspect: false }) });
+    field(panel, '研究名称', draft.name, { onChange: value => edit(data => { data.name = value; }, { inspect: false }) });
     field(panel, '分析范围', draft.scope, { multiline: true, onChange: value => edit(data => { data.scope = value; }, { inspect: false }) });
     detail(panel, '稳定 ID', draft.id);
     return;
@@ -313,10 +334,10 @@ function inspect() {
       field(panel, '作用', String(originalEdge.sign), { options: [['1', '＋ 促进'], ['-1', '− 抑制']], onChange: value => edit(data => { data.edges.find(item => item.id === id).sign = Number(value); }) });
       for (const [key, label] of [['condition', '机制条件（可选）'], ['note', '规则说明（可选）']]) field(panel, label, originalEdge[key], { multiline: true, onChange: value => edit(data => { data.edges.find(item => item.id === id)[key] = value; }, { inspect: false }) });
       panel.append(button('删除此连线', () => removeSelection(), 'danger'));
-    } else panel.append(el('p', '这是其他图层的关系或折叠摘要。请切换到来源图层编辑原始连线。', 'note'));
+    } else panel.append(el('p', '视图中的源规则与折叠摘要只读。编辑源研究后，可返回当前视图。', 'note'));
     edge.steps.forEach(step => {
       detail(panel, graphName(step.graphId) + ' / ' + step.edgeId, name(step.source) + (step.sign === 1 ? ' ＋→ ' : ' −→ ') + name(step.target) + '\n' + (step.condition || '未补充条件') + '\n' + step.note);
-      if (step.graphId !== activeId) panel.append(button('编辑图层：' + graphName(step.graphId), () => openLayer(step.graphId)));
+      if (step.graphId !== activeId) panel.append(button('编辑源研究：' + graphName(step.graphId), () => openLayer(step.graphId)));
     });
     return;
   }
@@ -329,9 +350,13 @@ function inspect() {
   detail(panel, '稳定 ID', node.id);
   const owners = workspace.analyses.filter(item => item.nodeIds.includes(node.id)).map(item => item.name);
   detail(panel, '引用图层', owners.join('、') || '尚未引用');
+  if (viewMode()) for (const source of workspace.analyses.filter(item => visible.includes(item.id) && item.nodeIds.includes(node.id))) {
+    panel.append(button('编辑源研究：' + source.name, () => openLayer(source.id)));
+  }
   const actions = el('div', undefined, 'property-actions');
-  if (!dirty() && canCollapse(graph, node.id)) actions.append(button('折叠节点', () => {
-    folded.push(node.id); selection = null; render(); void persistView();
+  if (!legacy && !dirty() && canCollapse(graph, node.id)) actions.append(button('折叠节点', () => {
+    if (viewMode()) editView(snapshot => { snapshot.collapsedNodeIds.push(node.id); });
+    else { folded.push(node.id); selection = null; render(); }
   }));
   if (draft?.nodeIds.includes(node.id)) actions.append(button('移出当前图层', removeSelection, 'danger'));
   panel.append(actions);
@@ -347,7 +372,7 @@ function inspect() {
   }
 }
 async function removeSelection() {
-  if (!selection || busy()) return;
+  if (!selection || busy() || viewMode() || legacy || autosave.blocked) return;
   if (selection.type === 'edge') {
     const edge = graph.edges.find(item => item.id === selection.id);
     if (edge?.steps.length !== 1 || edge.steps[0].graphId !== activeId) return;
@@ -361,6 +386,11 @@ async function removeSelection() {
   } else if (!draft?.nodeIds.includes(id)) return;
   const accepted = await dialog(definitionMode() ? '删除节点定义？' : '移出当前图层？', container => {
     container.append(el('p', definitionMode() ? '删除 ' + name(id) + ' 的共享定义。保存前可以撤销。' : '移除 ' + name(id) + ' 以及当前图层中连接它的关系。其他图层和共享定义不变。', 'note'));
+    if (!definitionMode()) {
+      const affected = workspace.views.filter(view => view.graphIds.includes(activeId) && (view.positions[id] || view.collapsedNodeIds.includes(id))
+        && !workspace.analyses.some(item => item.id !== activeId && view.graphIds.includes(item.id) && item.nodeIds.includes(id)));
+      if (affected.length) container.append(el('p', '以下视图仍保存此节点的位置或折叠，必须先在视图中处理引用，否则保存会被拒绝：' + affected.map(item => item.name).join('、'), 'danger'));
+    }
   }, () => true, '确认移除');
   if (!accepted) return;
   selection = null;
@@ -398,8 +428,8 @@ async function addNode() {
 async function newGraph() {
   if (!workspace || !await guard()) return;
   let label, id, scope, directory;
-  await dialog('新建分析图', container => {
-    label = field(container, '分析图名称', '', { required: true });
+  await dialog('新建研究', container => {
+    label = field(container, '研究名称', '', { required: true });
     id = field(container, '文件 ID', uid('graph'), { required: true, pattern: '[a-z][a-z0-9._-]{0,95}' });
     scope = field(container, '分析范围', '', { multiline: true, required: true });
     directory = field(container, '相对目录', 'analyses', { required: true });
@@ -411,14 +441,24 @@ async function newGraph() {
     const document = { schemaVersion: 1, kind: 'analysis', workspaceId: workspace.manifest.id, id: id.value, name: label.value.trim(), scope: scope.value.trim(), nodeIds: [], edges: [], positions: {} };
     const parent = directory.value.trim(), file = (parent === '.' ? '' : parent + '/') + document.id + '.analysis.json';
     await write(revision => api('/api/analyses', { revision, document, file }));
-    assignLayer(document.id); folded = []; render(); await persistView();
+    // 新文件已存在后，打开失败不能自动重复创建。
+    const sourceView = viewId;
+    try {
+      const candidate = await readOpening(api, { kind: 'analysis', id: document.id });
+      rememberCamera(); workspace = candidate.workspace; viewId = null; legacy = false;
+      if (sourceView !== null) returnView = sourceView;
+      assignLayer(document.id); assignSnapshot(candidate.snapshot); autosave.reset(); render(); restoreCamera();
+    } catch (error) {
+      $('dialog').close('cancel'); showError(new Error('研究文件已创建：' + file + '，但打开未完成。请重新读取，不要重复创建。\n' + error.message));
+    }
   }, '创建文件');
 }
 function setMode(mode) {
+  if ((viewId !== null || legacy) && mode !== 'select') return;
   if (!definitionMode() || mode === 'select') {
     canvas.setMode(mode);
     for (const key of ['select', 'positive', 'negative']) $(key + '-tool').classList.toggle('active', key === mode);
-    $('tool-hint').textContent = mode === 'select' ? '拖拽节点 · 滚轮缩放 · 空格拖拽画布' : '先点击源节点，再点击目标节点 · 写入当前图层';
+    $('tool-hint').textContent = legacy ? '旧叠加只读 · 滚轮缩放 · 空格拖拽画布' : mode === 'select' ? '拖拽节点 · 滚轮缩放 · 空格拖拽画布' : '先点击源节点，再点击目标节点 · 写入当前研究';
   }
 }
 function addTerm() {
@@ -445,8 +485,8 @@ const glossary = new GlossaryTable($('glossary'), {
 const canvas = new GraphCanvas($('canvas'), {
   name, graphName,
   select: value => { selection = value; render(); },
-  canMove: id => !busy() && !definitionMode() && !!draft?.nodeIds.includes(id),
-  move: (id, point) => edit(data => { data.positions[id] = point; }),
+  canMove: id => !busy() && !autosave.blocked && !legacy && !definitionMode() && (viewMode() || !!draft?.nodeIds.includes(id)),
+  move: (id, point) => viewMode() ? editView(data => { data.positions[id] = point; }) : edit(data => { data.positions[id] = point; }),
   zoom: value => { $('zoom').textContent = value + '%'; },
   hint: text => { $('tool-hint').textContent = text; },
   link: (source, target, sign) => {
@@ -458,39 +498,59 @@ const canvas = new GraphCanvas($('canvas'), {
   },
 });
 autosave = new ViewAutosave(write, body => api('/api/save', body), state => { viewState = state; updateStatus(); });
-async function load(requestedId) {
-  if (opening || (workspace && !await guard({ reload: true }))) return;
+async function load(requestedId, { reload = false, allowLegacy = false } = {}) {
+  if (opening || (workspace && !await guard({ reload, allowLegacy }))) return false;
+  if (opening) return false;
+  const first = !workspace, sourceView = viewId, previousReturn = returnView;
   opening = true; updateStatus();
   try {
     // 读取、校验叠加与记录最近打开全部确认后，才替换当前画面和草稿。
-    const candidate = await readOpening(api, requestedId);
-    workspace = candidate.workspace; viewId = candidate.viewId;
-    visible = [...candidate.snapshot.graphIds]; assignLayer(candidate.snapshot.activeLayerId);
-    folded = [...candidate.snapshot.collapsedNodeIds]; viewPositions = clone(candidate.snapshot.positions);
-    autosave.reset(); $('startup-help').hidden = true; $('error').hidden = true; render(); canvas.fit();
+    let candidate;
+    try { candidate = await readOpening(api, requestedId); }
+    catch (error) {
+      if (error.code !== 'FOLD_REPAIR_REQUIRED') throw error;
+      const accepted = await dialog('源研究改变，折叠需要展开', container => {
+        container.append(el('p', error.message, 'note'), el('p', '确认后只展开失效折叠并保存此视图，保留叠加关系和位置；取消则留在当前文件。', 'note'));
+      }, () => true, '展开并打开视图');
+      if (!accepted) return false;
+      candidate = await readOpening(api, error.viewId, { repairFolds: true });
+    }
+    if (!first) rememberCamera();
+    workspace = candidate.workspace; viewId = candidate.viewId; legacy = candidate.legacy;
+    returnView = viewId !== null ? null : sourceView ?? previousReturn;
+    assignLayer(candidate.activeId); assignSnapshot(candidate.snapshot); graphHistory = null;
+    autosave.reset(); $('startup-help').hidden = true; $('error').hidden = true; render();
+    if (first) canvas.fit(); else restoreCamera();
+    return true;
   } catch (error) {
     if (error.code === 'SAVE_UNCERTAIN') autosave.pause(error);
     if (workspace) error.message = '打开失败；仍保留原画面和草稿，内容未刷新。\n' + error.message;
     showError(error);
+    return false;
   } finally { opening = false; updateStatus(); }
 }
-async function newView() {
+async function newView({ empty = false } = {}) {
   await writeQueue;
-  if (!workspace || busy() || autosave.blocked) return;
+  if (!workspace || busy() || autosave.blocked || !await guard({ allowLegacy: !empty })) return;
+  const source = empty ? { graphIds: [], activeLayerId: null, collapsedNodeIds: [], positions: {} }
+    : viewId !== null || legacy ? viewSnapshot()
+      : { graphIds: activeId === null ? [] : [activeId], activeLayerId: null, collapsedNodeIds: [], positions: graphPositions(workspace, compose(workspace, activeId === null ? [] : [activeId]), {}, activeId) };
   let label, id, directory;
-  await dialog('保存为视图文件', container => {
+  await dialog(empty ? '新建空白视图' : viewId !== null ? '视图另存为' : '保存为视图文件', container => {
     label = field(container, '视图名称', '', { required: true });
     id = field(container, '文件 ID', uid('view'), { required: true, pattern: '[a-z][a-z0-9._-]{0,95}' });
     const sourcePath = workspace.files.find(item => item.kind === 'view' && item.id === viewId)?.path || filePath();
     directory = field(container, '相对目录', sourcePath.split('/').slice(0, -1).join('/') || '.', { required: true });
-    container.append(el('p', '保存当前勾选、编辑层与折叠状态为 <目录>/<ID>.view.json。此后修改自动写回；不会保存未提交的规则草稿。', 'note'));
+    container.append(el('p', empty ? '创建空视图后，勾选研究进行叠加。' : '保存研究选择、布局与折叠为 <目录>/<ID>.view.json。视图自动保存，源研究只读。', 'note'));
   }, async () => {
-    const document = { schemaVersion: 1, kind: 'view', workspaceId: workspace.manifest.id, id: id.value, name: label.value.trim(), ...viewSnapshot() };
+    const document = { schemaVersion: 1, kind: 'view', workspaceId: workspace.manifest.id, id: id.value, name: label.value.trim(), ...source };
     const parent = directory.value.trim(), file = (parent === '.' ? '' : parent + '/') + document.id + '.view.json';
     opening = true; updateStatus();
     try {
       const next = await createAndRememberView(api, workspace.revision, document, file);
-      workspace = next; viewId = document.id; autosave.reset(); $('error').hidden = true; render();
+      const candidate = prepareOpening(next, document.id);
+      rememberCamera(); workspace = next; viewId = document.id; legacy = false; returnView = null;
+      assignLayer(null); assignSnapshot(candidate.snapshot); autosave.reset(); $('error').hidden = true; render();
     } catch (error) {
       if (['VIEW_CREATED_UNBOUND', 'SAVE_UNCERTAIN'].includes(error.code)) {
         autosave.pause(error); $('dialog').close('cancel'); showError(error); return false;
@@ -499,26 +559,22 @@ async function newView() {
     } finally { opening = false; updateStatus(); }
   }, '创建视图文件');
 }
-async function leaveView() {
-  await writeQueue;
-  if (busy() || autosave.blocked || viewId === null) return;
-  opening = true; updateStatus();
-  try {
-    const snapshot = viewSnapshot();
-    await write(revision => api('/api/save', { revision, kind: 'workspace', document: { ...workspace.manifest, lastView: snapshot } }));
-    viewId = null; autosave.reset(); render();
-  } catch (error) { autosave.pause(error); showError(error); }
-  finally { opening = false; updateStatus(); }
+async function discardLegacy() {
+  if (!legacy || busy()) return;
+  const accepted = await dialog('放弃旧叠加记录？', container => container.append(el('p', '仅移除旧的组合选择与展示记录，不删除任何研究文件。也可以取消并保存为视图。', 'note')), () => true, '放弃旧叠加');
+  if (accepted) await load({ kind: 'analysis', id: visible[0] ?? workspace.analyses[0]?.id ?? null }, { allowLegacy: true });
 }
 $('new-graph').onclick = () => newGraph().catch(showError);
 $('save-view').onclick = () => newView().catch(showError);
-$('leave-view').onclick = () => leaveView().catch(showError);
+$('new-view').onclick = () => newView({ empty: true }).catch(showError);
+$('return-view').onclick = () => load(returnView).catch(showError);
+$('discard-legacy').onclick = () => discardLegacy().catch(showError);
 $('table-view').onclick = () => openConcepts().catch(showError);
-$('graph-view').onclick = () => openLayer(activeId).catch(showError);
+$('graph-view').onclick = () => resumeGraph().catch(showError);
 $('save').onclick = saveDraft;
 $('add-node').onclick = () => addNode().catch(showError);
 $('empty-add').onclick = () => (activeId === null ? newGraph() : addNode()).catch(showError);
-$('reload').onclick = () => load().catch(showError);
+$('reload').onclick = () => load(viewId ?? (legacy ? undefined : { kind: 'analysis', id: activeId }), { reload: true }).catch(showError);
 $('reload-error').onclick = $('reload').onclick;
 $('undo').onclick = () => undo(); $('redo').onclick = () => undo(true);
 $('fit').onclick = () => canvas.fit();
@@ -526,7 +582,11 @@ $('zoom-in').onclick = () => canvas.zoom(1.2); $('zoom-out').onclick = () => can
 $('toggle-sidebar').onclick = () => document.body.classList.toggle('sidebar-hidden');
 $('close-inspector').onclick = () => { selection = null; render(); };
 $('diagnostics').onclick = () => { selection = { type: 'diagnostics' }; inspect(); };
-$('unfold').onclick = () => { folded = []; render(); void persistView(); };
+$('unfold').onclick = () => {
+  if (legacy || busy()) return;
+  if (viewMode()) editView(snapshot => { snapshot.collapsedNodeIds = []; });
+  else { folded = []; render(); }
+};
 $('dismiss-error').onclick = () => { $('error').hidden = true; };
 $('close-dialog').onclick = $('cancel-dialog').onclick = () => $('dialog').close('cancel');
 for (const mode of ['select', 'positive', 'negative']) $(mode + '-tool').onclick = () => setMode(mode);

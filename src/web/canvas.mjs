@@ -132,7 +132,7 @@ export class GraphCanvas {
         labelX = a.x + WIDTH / 2; labelY = a.y - 55 - offset;
       } else path = `M${x1},${y1} C${x1 + (right ? control : -control)},${y1 + offset} ${x2 + (right ? -control : control)},${y2 + offset} ${x2},${y2}`;
       const sign = edge.sign === 1 ? 'positive' : 'negative';
-      const own = edge.steps.length === 1 && edge.steps[0].graphId === this.activeId;
+      const own = this.activeId === null || (edge.steps.length === 1 && edge.steps[0].graphId === this.activeId);
       const selected = this.selection?.type === 'edge' && this.selection.id === edge.id;
       const group = svg('g', { 'data-edge': edge.id, tabindex: 0, role: 'button', 'aria-label': `${this.callbacks.name(edge.source)} ${edge.sign === 1 ? '促进' : '抑制'} ${this.callbacks.name(edge.target)}` });
       group.append(svg('path', { d: path, class: 'edge-hit' }), svg('path', { d: path, class: `edge-line edge-${sign} ${own ? '' : 'reference'} ${selected ? 'selected' : ''}`, 'marker-end': `url(#${sign})`, 'pointer-events': 'none' }));
@@ -141,7 +141,7 @@ export class GraphCanvas {
     }
     for (const node of this.graph.nodes) {
       const point = positions[node.id];
-      const own = this.definitionMode || node.sourceGraphIds?.includes(this.activeId);
+      const own = this.activeId === null || this.definitionMode || node.sourceGraphIds?.includes(this.activeId);
       const selected = this.selection?.type === 'node' && this.selection.id === node.id;
       const group = svg('g', { 'data-node': node.id, transform: `translate(${point.x} ${point.y})`, class: `node ${own ? '' : 'reference'} ${selected ? 'selected' : ''} ${this.linkSource === node.id ? 'link-source' : ''}`, tabindex: 0, role: 'button', 'aria-label': node.label });
       const title = svg('title'); title.textContent = `${node.label}\n${node.description}`;
