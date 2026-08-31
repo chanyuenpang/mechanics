@@ -14,6 +14,14 @@ export function validateConcept(node) {
   }
 }
 
+export function prepareConceptUpdate(definitions, id, values) {
+  const next = copy(definitions), node = next.nodes.find(item => item.id === id);
+  if (!node) throw new Error('概念已不存在，请重新读取。');
+  for (const key of ['label', 'description', 'increaseMeaning']) node[key] = values[key]?.trim();
+  validateConcept(node);
+  return next;
+}
+
 // 新引用的位置只写当前研究草稿；现有节点保持原位，不以全局定义排序重新排布。
 export function referencePositions(existing, ids, center) {
   const positions = copy(existing);

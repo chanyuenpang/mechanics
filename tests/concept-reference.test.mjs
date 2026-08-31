@@ -4,11 +4,34 @@ import { mkdtemp, cp, readFile, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createWorkspaceStore } from '../src/server/store.mjs';
-import { matchingConcepts, sameNamedConcepts, prepareReference, ReferenceCommit } from '../src/web/glossary.mjs';
+import { matchingConcepts, sameNamedConcepts, prepareReference, ReferenceCommit, prepareConceptUpdate } from '../src/web/glossary.mjs';
 import { graphPositions } from '../src/web/view-files.mjs';
-import { compose } from '../src/domain/graph.mjs';
+import { compose, downstreamNodes } from '../src/domain/graph.mjs';
 
 const node = (id = 'aaa-new', label = '新概念') => ({ id, label, description: '新概念的定义', increaseMeaning: '新概念更容易发生' });
+
+test('追踪候选仅包含当前图的直接与间接下游；环、自身、上游和无关联节点不会混入', () => {
+  const graph = { nodes: ['up', 'a', 'b', 'c', 'other'].map(id => ({ id })), edges: [
+    { source: 'up', target: 'a' }, { source: 'a', target: 'b' },
+    { source: 'b', target: 'c', relation: 'contains' }, { source: 'c', target: 'a' },
+  ] };
+  assert.deepEqual(downstreamNodes(graph, 'a').map(item => item.id), ['b', 'c']);
+  assert.deepEqual(downstreamNodes(graph, 'other'), []);
+});
+
+test('修改概念只保存指定定义文案，稳定ID、布局、其余定义和研究文件不变', async t => {
+  const { root, workspace, store } = await fixture(t), original = structuredClone(workspace.definitions);
+  const target = original.nodes[0], files = ['workspace.json', ...workspace.files.filter(item => item.kind === 'analysis').map(item => item.path)];
+  const before = await Promise.all(files.map(file => readFile(join(root, file), 'utf8')));
+  const next = prepareConceptUpdate(original, target.id, { id: 'cannot-change', label: '修改后名称', description: '修改后含义', increaseMeaning: '修改后方向' });
+  assert.deepEqual(workspace.definitions, original);
+  assert.equal(next.nodes[0].id, target.id); assert.deepEqual(next.positions, original.positions);
+  assert.deepEqual(next.nodes.slice(1), original.nodes.slice(1));
+  await store.save({ revision: workspace.revision, kind: 'definitions', document: next });
+  assert.equal((await store.read()).definitions.nodes[0].label, '修改后名称');
+  assert.deepEqual(await Promise.all(files.map(file => readFile(join(root, file), 'utf8'))), before);
+  assert.throws(() => prepareConceptUpdate(original, target.id, { ...target, label: ' ' }), /名称必填/);
+});
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'rule-reference-'));
   await cp(new URL('../examples/card-game/', import.meta.url), root, { recursive: true });

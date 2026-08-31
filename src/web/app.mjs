@@ -1,6 +1,6 @@
-import { compose, canCollapse, collapse, tracePaths, diagnose, upgradeAnalysis } from '/domain/graph.mjs';
+import { compose, canCollapse, collapse, tracePaths, diagnose, upgradeAnalysis, downstreamNodes } from '/domain/graph.mjs';
 import { GraphCanvas } from '/canvas.mjs';
-import { GlossaryTable, ConceptPicker, prepareReference, ReferenceCommit } from '/glossary.mjs';
+import { GlossaryTable, ConceptPicker, prepareReference, ReferenceCommit, prepareConceptUpdate } from '/glossary.mjs';
 import { ViewAutosave, viewSaveRequest, readOpening, createAndRememberView, graphPositions, changeViewMembers, prepareOpening } from '/view-files.mjs';
 
 const $ = id => document.getElementById(id);
@@ -29,6 +29,7 @@ let graphHistory = null;
 const cameras = new Map();
 const implicitPositions = new Map();
 let referenceSession = null;
+let conceptEditDirty = false;
 // 目录折叠和文本筛选只属于本页，不参与视图快照或文件保存。
 const sidebarState = { query: '', collapsed: false, folders: new Set() };
 const busy = () => opening || pending > 0;
@@ -427,7 +428,7 @@ function inspect() {
   if (!node) { $('inspector').hidden = true; return; }
   $('inspector-title').textContent = '节点属性';
   detail(panel, node.label, node.description); detail(panel, '增加方向', node.increaseMeaning);
-  panel.append(button('在概念表中编辑', async () => { await openConcepts(); if (definitionMode()) glossary.focusNode(node.id); }));
+  if (!legacy) panel.append(button('修改概念', () => editConcept(node.id)));
   if (draft && !draft.nodeIds.includes(node.id)) panel.append(button('引用到当前图层', () => edit(data => { data.nodeIds.push(node.id); })));
   detail(panel, '稳定 ID', node.id);
   const owners = workspace.analyses.filter(item => item.nodeIds.includes(node.id)).map(item => item.name);
@@ -442,8 +443,10 @@ function inspect() {
   }));
   if (draft?.nodeIds.includes(node.id)) actions.append(button('移出当前图层', removeSelection, 'danger'));
   panel.append(actions);
-  if (graph.nodes.some(item => item.id === node.id) && graph.nodes.length > 1) {
-    const target = field(panel, '追踪影响至', original.nodes.find(item => item.id !== node.id).id, { options: original.nodes.filter(item => item.id !== node.id).map(item => [item.id, item.label]) });
+  const downstream = downstreamNodes(original, node.id);
+  if (!downstream.length) panel.append(el('p', '当前范围内没有下游节点', 'note'));
+  if (downstream.length) {
+    const target = field(panel, '追踪影响至', downstream[0].id, { options: downstream.map(item => [item.id, item.label]) });
     const output = el('div', undefined, 'trace-result');
     panel.append(button('解释影响路径', () => {
       const result = tracePaths(original, node.id, target.value); output.replaceChildren(el('p', result.interpretation, 'note'));
@@ -453,6 +456,43 @@ function inspect() {
       if (result.truncated) output.append(el('p', '已达到查询上限，结果不完整。'));
     }), output);
   }
+}
+async function editConcept(id) {
+  await writeQueue;
+  if (!workspace || busy() || definitionMode() || legacy || autosave.blocked) return;
+  if (referenceSession?.commit) throw new Error('请先处理尚未完成的概念引用。');
+  const node = workspace.definitions.nodes.find(item => item.id === id);
+  if (!node) throw new Error('概念已不存在，请重新读取。');
+  let fields, inputs, exportButton, blocked = false;
+  const values = () => Object.fromEntries(Object.entries(inputs).map(([key, input]) => [key, input.value]));
+  try {
+    await dialog('修改概念', container => {
+      fields = el('fieldset'); fields.className = 'concept-picker-fields'; container.append(fields);
+      inputs = Object.fromEntries([['label', '名称'], ['description', '概念含义'], ['increaseMeaning', '增加方向']].map(([key, label]) => {
+        const input = field(fields, label, node[key], { required: true, multiline: key !== 'label', onChange: () => { conceptEditDirty = true; } });
+        input.maxLength = 8000; return [key, input];
+      }));
+      container.onkeydown = event => { if (event.key === 'Enter' && (event.isComposing || event.keyCode === 229)) event.preventDefault(); };
+      container.append(el('p', '保存到共享概念表，所有引用此概念的研究都会更新；当前研究草稿不受影响。', 'note'));
+      exportButton = button('导出概念修改', () => download({ kind: 'concept-edit-draft', id, ...values() }, id + '.concept-edit.draft.json'));
+      exportButton.hidden = true; container.append(exportButton);
+      queueMicrotask(() => inputs.label.focus());
+    }, async () => {
+      if (blocked) throw new Error('请先导出修改，关闭窗口并重新读取磁盘核实。');
+      const document = prepareConceptUpdate(workspace.definitions, id, values());
+      if (json(document) === json(workspace.definitions)) return;
+      fields.disabled = true;
+      try {
+        await write(revision => api('/api/save', { revision, kind: 'definitions', document }));
+      } catch (error) {
+        blocked = ['REVISION_CONFLICT', 'SAVE_UNCERTAIN'].includes(error.code);
+        exportButton.hidden = false;
+        if (blocked) error.message += '\n请导出概念修改，关闭窗口后重新读取磁盘核实；不会自动覆盖或重复提交。';
+        throw error;
+      } finally { fields.disabled = false; }
+      conceptEditDirty = false; render();
+    }, '保存概念', { settled: () => { $('confirm-dialog').disabled = blocked; } });
+  } finally { conceptEditDirty = false; $('dialog-content').onkeydown = null; }
 }
 async function removeSelection() {
   if (!selection || busy() || viewMode() || legacy || autosave.blocked) return;
@@ -717,7 +757,7 @@ $('export-view').onclick = () => {
   if (workspace) download(viewSaveRequest(workspace, viewId, viewSnapshot()).document, (viewId ?? 'workspace') + (viewId === null ? '.draft.json' : '.view.draft.json'));
 };
 window.addEventListener('beforeunload', event => {
-  if (dirty() || busy() || autosave.blocked || referenceSession?.commit || referenceSession?.form || referenceSession?.selected.size) { event.preventDefault(); event.returnValue = ''; }
+  if (dirty() || conceptEditDirty || busy() || autosave.blocked || referenceSession?.commit || referenceSession?.form || referenceSession?.selected.size) { event.preventDefault(); event.returnValue = ''; }
 });
 document.addEventListener('keydown', event => {
   if ($('dialog').open || opening) return;

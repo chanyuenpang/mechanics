@@ -133,6 +133,20 @@ export function tracePaths(graph, source, target, { maxPaths = 50, maxDepth = 16
   return { graphIds: [...graph.graphIds], paths, truncated, interpretation: '仅解释当前模型中的有限简单路径；未找到不等于现实中无作用，不推断净收益或胜率。' };
 }
 
+// 沿原始关系查找下游，折叠不改变可追踪范围，循环不重复包含起点。
+export function downstreamNodes(graph, source) {
+  const adjacent = new Map();
+  for (const edge of graph.edges) {
+    if (!adjacent.has(edge.source)) adjacent.set(edge.source, []);
+    adjacent.get(edge.source).push(edge.target);
+  }
+  const seen = new Set([source]), queue = [source];
+  for (let i = 0; i < queue.length; i++) for (const id of adjacent.get(queue[i]) ?? []) {
+    if (!seen.has(id)) { seen.add(id); queue.push(id); }
+  }
+  return graph.nodes.filter(node => node.id !== source && seen.has(node.id));
+}
+
 export function diagnose(graph) {
   const findings = [];
   const patterns = new Map();
