@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "urn:game-rule-analyzer:legacy-workspace:1",
+  "title": "仅供显式迁移的旧工作区清单",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "id", "name", "definitions", "analyses", "compositions"],
+  "properties": {
+    "schemaVersion": { "const": 1 }, "kind": { "const": "workspace" },
+    "id": { "$ref": "urn:game-rule-analyzer:protocol:2#/definitions/id" },
+    "name": { "$ref": "urn:game-rule-analyzer:protocol:2#/definitions/text" },
+    "definitions": { "$ref": "urn:game-rule-analyzer:protocol:2#/definitions/relativePath" },
+    "analyses": { "type": "array", "uniqueItems": true, "items": { "$ref": "urn:game-rule-analyzer:protocol:2#/definitions/relativePath" } },
+    "compositions": { "type": "array", "items": { "$ref": "urn:game-rule-analyzer:protocol:2#/definitions/composition" } },
+    "lastView": { "$ref": "urn:game-rule-analyzer:protocol:2#/definitions/lastView" }
+  }
+}

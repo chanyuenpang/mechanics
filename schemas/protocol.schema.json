@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "urn:game-rule-analyzer:protocol:1",
-  "title": "游戏规则分析文件协议 v1",
+  "$id": "urn:game-rule-analyzer:protocol:2",
+  "title": "工作区 v2 与游戏规则文档 v1",
   "oneOf": [
     { "$ref": "#/definitions/workspace" },
     { "$ref": "#/definitions/definitionGraph" },
@@ -11,7 +11,7 @@
     "id": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{0,95}$" },
     "text": { "type": "string", "minLength": 1, "maxLength": 8000 },
     "ids": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/definitions/id" } },
-    "relativePath": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+(?:[./][a-zA-Z0-9_-]+)*\\.json$" },
+    "relativePath": { "type": "string", "minLength": 6, "maxLength": 512, "pattern": "^[^\\\\:\\u0000-\\u001f<>\"|?*]+\\.json$" },
     "position": {
       "type": "object", "additionalProperties": false, "required": ["x", "y"],
       "properties": { "x": { "type": "number", "minimum": -100000, "maximum": 100000 }, "y": { "type": "number", "minimum": -100000, "maximum": 100000 } }
@@ -33,12 +33,11 @@
       }
     },
     "workspace": {
-      "type": "object", "additionalProperties": false, "required": ["schemaVersion", "kind", "id", "name", "definitions", "analyses", "compositions"],
+      "type": "object", "additionalProperties": false, "required": ["schemaVersion", "kind", "id", "name", "definitions", "compositions"],
       "properties": {
-        "schemaVersion": { "const": 1 }, "kind": { "const": "workspace" },
+        "schemaVersion": { "const": 2 }, "kind": { "const": "workspace" },
         "id": { "$ref": "#/definitions/id" }, "name": { "$ref": "#/definitions/text" },
         "definitions": { "$ref": "#/definitions/relativePath" },
-        "analyses": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/definitions/relativePath" } },
         "compositions": { "type": "array", "items": { "$ref": "#/definitions/composition" } },
         "lastView": { "$ref": "#/definitions/lastView" }
       }

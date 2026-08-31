@@ -5,3 +5,7 @@ coverage/
 .env.*
 !.env.example
 .DS_Store
+dist/
+*.tgz
+.rule-analyzer.lock
+*.rule-analyzer.tmp

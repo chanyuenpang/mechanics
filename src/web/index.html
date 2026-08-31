@@ -7,9 +7,11 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+  <div id="startup-help" role="status">请通过 CLI 启动编辑器，再打开终端打印的完整 http://127.0.0.1 网址。直接双击 index.html 无法加载模块或读写工作区。<code>game-rule-analyzer serve --workspace &lt;资料目录&gt;</code></div>
   <aside id="sidebar">
     <div class="brand"><span class="brand-mark">⌘</span><strong>规则图</strong><span class="badge">本地</span></div>
     <div class="workspace-heading"><span id="workspace-name">正在读取工作区…</span></div>
+    <div id="workspace-root" class="workspace-root"></div>
     <div class="section-label"><span>文件 / LAYERS</span><button id="new-graph" class="icon-button" title="新建分析图" aria-label="新建分析图">＋</button></div>
     <nav id="files" aria-label="工作区文件目录"></nav>
     <div class="section-label views-heading"><span>叠加组合</span><button id="save-view" class="icon-button" title="保存当前叠加组合" aria-label="保存当前叠加组合">＋</button></div>
@@ -21,12 +23,14 @@
     <header class="topbar">
       <button id="toggle-sidebar" class="icon-button" title="切换文件侧栏" aria-label="切换文件侧栏">☰</button>
       <div class="breadcrumb"><span id="file-kind">工作区</span><span class="slash">/</span><strong id="file-name">加载中</strong><span id="dirty-dot" hidden>●</span></div>
+      <div id="definition-views" class="view-switch" role="group" aria-label="定义视图" hidden><button id="table-view">名词表</button><button id="graph-view">节点图</button></div>
       <div class="header-actions"><span id="save-state">本地文件</span><button id="export" class="quiet" title="导出当前文件或未保存草稿">导出 JSON</button><button id="save" class="primary" disabled>保存 <kbd>Ctrl S</kbd></button></div>
     </header>
+    <div id="error" role="alert" hidden><span id="error-text"></span><button id="reload-error" hidden>重新读取</button><button id="dismiss-error" class="icon-button" aria-label="关闭错误提示">×</button></div>
+    <section id="glossary" aria-label="节点定义表格" hidden></section>
     <section id="stage" aria-label="节点画布区域">
       <svg id="canvas" aria-label="规则节点画布" tabindex="0"></svg>
       <div id="empty" hidden><span class="empty-symbol">＋</span><h2>从一个概念开始</h2><p id="empty-hint">添加节点，将抽象规则连接起来。</p><button id="empty-add">添加节点</button></div>
-      <div id="error" role="alert" hidden><span id="error-text"></span><button id="dismiss-error" class="icon-button" aria-label="关闭错误提示">×</button></div>
       <div id="canvas-context"><span id="scope-chip"></span><span id="overlay-count"></span></div>
       <div id="toolbar" class="floating" role="toolbar" aria-label="画布工具">
         <button id="select-tool" class="tool active" title="选择与拖拽 V" aria-label="选择工具">↖</button>
@@ -36,11 +40,11 @@
         <span class="divider"></span><button id="undo" class="tool" title="撤销 Ctrl Z" aria-label="撤销" disabled>↶</button><button id="redo" class="tool" title="重做 Ctrl Shift Z" aria-label="重做" disabled>↷</button>
       </div>
       <div id="tool-hint" aria-live="polite">拖拽节点 · 滚轮缩放 · 空格拖拽画布</div>
-      <aside id="inspector" class="floating" hidden><div class="panel-header"><strong id="inspector-title">属性</strong><button id="close-inspector" class="icon-button" aria-label="关闭属性">×</button></div><div id="properties"></div></aside>
       <div class="bottom-left"><button id="diagnostics" class="floating small-button">◉ 结构提示</button><button id="unfold" class="floating small-button" hidden>展开节点</button><span id="counts"></span></div>
       <div class="zoom floating"><button id="zoom-out" class="icon-button" aria-label="缩小">−</button><span id="zoom">100%</span><button id="zoom-in" class="icon-button" aria-label="放大">＋</button><span class="divider"></span><button id="fit" class="icon-button" title="适应画布 F" aria-label="适应画布">⛶</button></div>
       <div id="legend"><span class="positive">＋ 促进</span><span class="negative">− 抑制</span><span>浅色关系为其他图层</span></div>
     </section>
+    <aside id="inspector" class="floating" hidden><div class="panel-header"><strong id="inspector-title">属性</strong><button id="close-inspector" class="icon-button" aria-label="关闭属性">×</button></div><div id="properties"></div></aside>
   </main>
   <dialog id="dialog"><form id="dialog-form"><div class="panel-header"><h2 id="dialog-title"></h2><button id="close-dialog" class="icon-button" type="button" aria-label="关闭对话框">×</button></div><div id="dialog-content"></div><div id="dialog-error" role="alert" hidden></div><div class="dialog-actions"><button id="cancel-dialog" type="button">取消</button><button id="confirm-dialog" type="submit" class="primary">确定</button></div></form></dialog>
   <script type="module" src="/app.mjs"></script>

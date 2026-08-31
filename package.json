@@ -1,15 +1,19 @@
 {
   "name": "game-rule-analyzer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "独立的游戏规则正负因果图分析工具",
   "type": "module",
+  "bin": { "game-rule-analyzer": "src/server/cli.mjs" },
+  "files": ["src/", "schemas/", "docs/", "examples/", "README.md"],
+  "repository": { "type": "git", "url": "https://github.com/chanyuenpang/game-rule-analyzer.git" },
   "engines": { "node": ">=24" },
   "scripts": {
     "dev": "node src/server/cli.mjs serve",
     "validate": "node src/server/cli.mjs validate",
     "test": "node --test",
-    "check": "node scripts/check.mjs"
+    "check": "node scripts/check.mjs",
+    "check:package": "node scripts/check-package.mjs"
   },
   "dependencies": { "ajv": "^8.17.1" }
 }

@@ -7,6 +7,7 @@ const assets = new Map([
   ['/', [new URL('../web/index.html', import.meta.url), 'text/html; charset=utf-8']],
   ['/app.mjs', [new URL('../web/app.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/canvas.mjs', [new URL('../web/canvas.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/glossary.mjs', [new URL('../web/glossary.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/style.css', [new URL('../web/style.css', import.meta.url), 'text/css; charset=utf-8']],
   ['/domain/graph.mjs', [new URL('../domain/graph.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
 ]);

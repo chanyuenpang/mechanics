@@ -1,10 +1,9 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "workspace",
   "id": "sample-card-game",
   "name": "卡牌规则示例 · 假设模型",
   "definitions": "definitions.graph.json",
-  "analyses": ["analyses/basic-rules.analysis.json", "analyses/encounter.analysis.json", "analyses/hand.analysis.json"],
   "compositions": [
     { "id": "encounter-with-hand", "name": "基础规则＋遭遇＋手牌", "graphIds": ["basic-rules", "encounter", "hand"], "collapsedNodeIds": [], "positions": {} },
     { "id": "encounter-only", "name": "基础规则＋遭遇", "graphIds": ["basic-rules", "encounter"], "collapsedNodeIds": [], "positions": {} }

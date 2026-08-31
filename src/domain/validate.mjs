@@ -1,9 +1,11 @@
 import Ajv from 'ajv';
 import schema from '../../schemas/protocol.schema.json' with { type: 'json' };
+import legacy from '../../schemas/legacy-workspace-v1.schema.json' with { type: 'json' };
 
 // 文件结构只由 JSON Schema 定义；这里补充跨文件语义，不修正输入。
 const ajv = new Ajv({ allErrors: true, strict: true });
 ajv.addSchema(schema);
+ajv.addSchema(legacy);
 const kinds = { workspace: 'workspace', definitions: 'definitionGraph', analysis: 'analysis' };
 
 export class ContractError extends Error {
@@ -20,6 +22,11 @@ export function assertDocument(document, kind, location = kind) {
   if (!validator(document)) {
     throw new ContractError('INVALID_DOCUMENT', `${location}：${ajv.errorsText(validator.errors, { separator: '；' })}`);
   }
+}
+
+export function assertLegacyManifest(document) {
+  const validator = ajv.getSchema(legacy.$id);
+  if (!validator(document)) throw new ContractError('INVALID_LEGACY_WORKSPACE', ajv.errorsText(validator.errors));
 }
 
 function unique(items, label) {
@@ -42,8 +49,7 @@ function positionsExist(positions, ids, location) {
 export function validateWorkspace({ manifest, definitions, analyses }) {
   assertDocument(manifest, 'workspace', 'workspace.json');
   assertDocument(definitions, 'definitions', manifest.definitions);
-  if (analyses.length !== manifest.analyses.length) throw new ContractError('FILE_COUNT', '分析图数量与工作区登记不一致');
-  analyses.forEach((graph, index) => assertDocument(graph, 'analysis', manifest.analyses[index]));
+  analyses.forEach(graph => assertDocument(graph, 'analysis', graph.id));
   const documents = [definitions, ...analyses];
   for (const document of documents) {
     if (document.workspaceId !== manifest.id) throw new ContractError('WORKSPACE_MISMATCH', '文档所属工作区与清单不一致');
