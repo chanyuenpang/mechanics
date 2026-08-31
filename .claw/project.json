@@ -1,0 +1,33 @@
+{
+  "version": "0.2.32",
+  "id": "game-rule-analyzer",
+  "name": "游戏规则分析工具",
+  "maxTasksToKeep": 9,
+  "planning": true,
+  "autoUpdate": true,
+  "goalMode": true,
+  "knowledgeWriter": {
+    "executionPolicy": "subagent",
+    "externalSkills": [],
+    "model": null,
+    "reasoningEffort": "medium",
+    "datedSectionsToKeep": 6
+  },
+  "externalPlanningSkill": null,
+  "defaultPlanTemplate": null,
+  "contextPaths": [
+    "AGENTS.md"
+  ],
+  "memory": {
+    "enabled": true,
+    "autoUpdate": true,
+    "externalDocPaths": [
+      "docs"
+    ],
+    "embedding": {
+      "provider": "local",
+      "model": "jinaai/jina-embeddings-v2-base-zh"
+    }
+  },
+  "gitnexus": false
+}

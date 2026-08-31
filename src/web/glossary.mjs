@@ -2,7 +2,7 @@
 export class GlossaryTable {
   constructor(container, { change, add, remove, locate }) {
     this.container = container; this.change = change; this.add = add; this.remove = remove; this.locate = locate;
-    container.innerHTML = `<div class="glossary-heading"><div><h1>节点名词表 <span id="glossary-count"></span></h1><p>直接编辑单元格 · 所有图层共用这些概念</p></div><button id="glossary-add">＋ 新增概念</button></div>
+    container.innerHTML = `<div class="glossary-heading"><div><h1>概念表 <span id="glossary-count"></span></h1><p>直接编辑单元格 · 所有分析图共用这些概念</p></div><button id="glossary-add">＋ 新增概念</button></div>
       <div class="glossary-tools"><input id="glossary-search" type="search" aria-label="搜索节点名词表" placeholder="搜索名称、ID 或定义…"><span>修改后 Ctrl S 保存</span></div>
       <div class="glossary-scroll"><table aria-label="统一节点名词表"><colgroup><col class="term-index"><col class="term-name"><col class="term-id"><col class="term-description"><col class="term-increase"><col class="term-actions"></colgroup><thead><tr><th scope="col">#</th><th scope="col">名称</th><th scope="col">稳定 ID</th><th scope="col">概念含义</th><th scope="col">增加方向</th><th scope="col">操作</th></tr></thead><tbody></tbody></table><div id="glossary-empty" hidden>没有匹配的概念</div><button id="glossary-add-row">＋ 新增一行</button></div>
       <div class="glossary-footer">名称、含义和增加方向必填。稳定 ID 不随改名变化；定义修改会被所有引用图层使用。</div>`;
@@ -39,14 +39,14 @@ export class GlossaryTable {
       }
       const actions = document.createElement('td'); actions.className = 'term-action-cell';
       const owners = this.analyses.filter(graph => graph.nodeIds.includes(node.id));
-      const locate = document.createElement('button'); locate.textContent = '↗'; locate.title = '在画布中查看'; locate.setAttribute('aria-label', '画布查看 ' + node.id); locate.onclick = () => this.locate(node.id);
+      const locate = document.createElement('button'); locate.textContent = '↗'; locate.title = owners.length ? '查看引用此概念的分析图' : '尚未被分析图引用'; locate.disabled = !owners.length || !!this.pending; locate.setAttribute('aria-label', '查看引用 ' + node.id); locate.onclick = () => this.locate(node.id);
       const remove = document.createElement('button'); remove.textContent = '−'; remove.setAttribute('aria-label', '删除概念 ' + node.id); remove.disabled = !!this.pending;
       remove.title = owners.length ? '已被 ' + owners.map(graph => graph.name).join('、') + ' 引用，删除时会检查引用' : '删除未引用概念';
       remove.onclick = () => this.remove(node.id);
       actions.append(locate, remove); row.append(actions); body.append(row);
     }
   }
-  focusNew(id) {
+  focusNode(id) {
     this.search.value = ''; this.draw();
     const row = [...this.container.querySelectorAll('tbody tr')].find(item => item.dataset.nodeId === id);
     row?.querySelector('input')?.focus(); row?.scrollIntoView({ block: 'nearest' });

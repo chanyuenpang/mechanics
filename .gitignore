@@ -9,3 +9,10 @@ dist/
 *.tgz
 .rule-analyzer.lock
 *.rule-analyzer.tmp
+
+# claw-kit
+.claw/*
+!.claw/project.json
+!.claw/truth/
+!.claw/truth/**
+.claw/project-override.json

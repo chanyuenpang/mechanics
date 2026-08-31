@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { readWorkspace } from '../src/server/workspace.mjs';
 import { createWorkspaceStore } from '../src/server/store.mjs';
 import { initWorkspace, findWorkspace, migrateWorkspace } from '../src/server/workspace-commands.mjs';
+import packageInfo from '../package.json' with { type: 'json' };
 
 const example = fileURLToPath(new URL('../examples/card-game/', import.meta.url));
 const cli = fileURLToPath(new URL('../src/server/cli.mjs', import.meta.url));
@@ -39,7 +40,7 @@ test('CLI 在仓库外初始化，子目录定位同一根，显式目标优先�
   const { temp, root } = await fixture(t);
   const target = join(temp, '另一个 工作区');
   assert.equal(call(['--help'], temp).status, 0);
-  assert.match(call(['--version'], temp).stdout, /^0\.2\.0/);
+  assert.equal(call(['--version'], temp).stdout.trim(), packageInfo.version);
   const init = call(['init', target, '--name', '规则资料', '--id', 'another-game'], temp);
   assert.equal(init.status, 0, init.stderr);
   const filesBefore = await snapshot(target);
