@@ -5,6 +5,24 @@ const svg = (tag, attributes = {}) => {
 };
 const WIDTH = 166, HEIGHT = 62;
 
+// 四边端点只属于展示。平行边沿同一节点对的固定法线错开，反向不翻转偏移。
+export function edgeGeometry(a, b, source, target, offset = 0) {
+  if (source === target) return { path: `M${a.x + WIDTH},${a.y + HEIGHT / 2} C${a.x + WIDTH + 100},${a.y - 90 - offset} ${a.x + WIDTH / 2},${a.y - 90 - offset} ${a.x + WIDTH / 2},${a.y}`, labelX: a.x + WIDTH, labelY: a.y - 65 - offset };
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const horizontal = Math.abs(dx) / WIDTH >= Math.abs(dy) / HEIGHT;
+  const direction = (horizontal ? dx : dy) >= 0 ? 1 : -1;
+  const nx = horizontal ? direction : 0, ny = horizontal ? 0 : direction;
+  const x1 = a.x + WIDTH / 2 + nx * WIDTH / 2, y1 = a.y + HEIGHT / 2 + ny * HEIGHT / 2;
+  const x2 = b.x + WIDTH / 2 - nx * WIDTH / 2, y2 = b.y + HEIGHT / 2 - ny * HEIGHT / 2;
+  const length = Math.hypot(dx, dy) || 1, order = source < target ? 1 : -1;
+  const ox = -dy / length * order * offset, oy = dx / length * order * offset;
+  const control = Math.max(60, Math.hypot(x2 - x1, y2 - y1) * .5);
+  const c1 = { x: x1 + nx * control + ox, y: y1 + ny * control + oy };
+  const c2 = { x: x2 - nx * control + ox, y: y2 - ny * control + oy };
+  return { path: `M${x1},${y1} C${c1.x},${c1.y} ${c2.x},${c2.y} ${x2},${y2}`,
+    labelX: (x1 + 3 * c1.x + 3 * c2.x + x2) / 8, labelY: (y1 + 3 * c1.y + 3 * c2.y + y2) / 8 - 7 };
+}
+
 export function nodesInBox(nodes, positions, start, end) {
   const left = Math.min(start.x, end.x), right = Math.max(start.x, end.x);
   const top = Math.min(start.y, end.y), bottom = Math.max(start.y, end.y);
@@ -34,7 +52,7 @@ export class GraphCanvas {
     root.addEventListener('pointermove', event => this.move(event));
     root.addEventListener('pointerup', event => this.up(event));
     root.addEventListener('pointercancel', () => this.cancel());
-    root.addEventListener('lostpointercapture', () => this.cancel());
+    root.addEventListener('lostpointercapture', () => { if (this.gesture) this.cancel(); });
     root.addEventListener('contextmenu', event => event.preventDefault());
     root.addEventListener('keydown', event => {
       if (event.key !== 'Enter') return;
@@ -57,6 +75,7 @@ export class GraphCanvas {
   selectedIds() { return this.selection?.type === 'nodes' ? this.selection.ids : this.selection?.type === 'node' ? [this.selection.id] : []; }
   selectNodes(ids) { this.callbacks.select(ids.length === 1 ? { type: 'node', id: ids[0] } : ids.length ? { type: 'nodes', ids } : null); }
   cancel() {
+    this.linkSource = null; this.lastClick = null;
     const gesture = this.gesture; if (!gesture) return;
     this.gesture = null;
     if (gesture.type === 'pan') this.camera = gesture.original;
@@ -71,10 +90,12 @@ export class GraphCanvas {
     if (this.gesture || ![0, 1, 2].includes(event.button)) return;
     const node = event.target.closest('[data-node]'), edge = event.target.closest('[data-edge]');
     if (event.button === 2 || event.button === 1 || this.space) {
+      this.lastClick = null;
       event.preventDefault(); this.gesture = { type: 'pan', pointerId: event.pointerId, x: event.clientX, y: event.clientY, original: { ...this.camera }, moved: false };
       this.root.setPointerCapture(event.pointerId); this.root.classList.add('panning'); return;
     }
     if (!node && !edge) {
+      this.lastClick = null;
       if (this.mode !== 'select') return;
       event.preventDefault();
       this.gesture = { type: 'box', point: this.point(event), end: this.point(event), x: event.clientX, y: event.clientY,
@@ -85,7 +106,7 @@ export class GraphCanvas {
       const id = node.dataset.node;
       if (this.mode !== 'select') { event.preventDefault(); this.pick(id); return; }
       const selected = this.selectedIds();
-      if (event.shiftKey) { this.selectNodes(selected.includes(id) ? selected.filter(item => item !== id) : [...selected, id]); return; }
+      if (event.shiftKey) { this.lastClick = null; this.selectNodes(selected.includes(id) ? selected.filter(item => item !== id) : [...selected, id]); return; }
       const ids = selected.includes(id) ? selected : [id];
       this.selectNodes(ids);
       if (ids.every(item => this.callbacks.canMove(item))) {
@@ -93,7 +114,7 @@ export class GraphCanvas {
           x: event.clientX, y: event.clientY, original: Object.fromEntries(ids.map(item => [item, { ...this.positions[item] }])), moved: false };
         this.root.setPointerCapture(event.pointerId);
       }
-    } else if (edge) this.callbacks.select({ type: 'edge', id: edge.dataset.edge });
+    } else if (edge) { this.lastClick = null; this.callbacks.select({ type: 'edge', id: edge.dataset.edge }); }
   }
   move(event) {
     const gesture = this.gesture; if (!gesture || gesture.pointerId !== event.pointerId) return;
@@ -117,12 +138,19 @@ export class GraphCanvas {
     if (gesture.type === 'nodes' && gesture.moved && gesture.ids.every(id => this.graph.nodes.some(node => node.id === id) && this.callbacks.canMove(id))) this.callbacks.move(gesture.next);
     else if (gesture.type === 'box' && gesture.moved) this.selectNodes([...new Set([...gesture.original, ...nodesInBox(this.graph.nodes, this.positions, gesture.point, gesture.end)])]);
     else if (gesture.type === 'box' && !gesture.additive && !gesture.moved) this.callbacks.select(null);
+    if (gesture.type === 'nodes' && !gesture.moved && gesture.ids.length === 1) {
+      const id = gesture.ids[0], now = performance.now(), previous = this.lastClick;
+      this.lastClick = { id, time: now, x: event.clientX, y: event.clientY };
+      if (previous?.id === id && now - previous.time <= 400 && Math.hypot(event.clientX - previous.x, event.clientY - previous.y) <= 5) {
+        this.lastClick = null; this.callbacks.quickLink?.(id);
+      }
+    } else this.lastClick = null;
     this.draw();
   }
   pick(id) {
     if (this.mode === 'select') { this.callbacks.select({ type: 'node', id }); return; }
     if (!this.linkSource) { this.linkSource = id; this.callbacks.hint('现在点击目标节点 · Esc 取消连线'); this.draw(); }
-    else { const source = this.linkSource; this.linkSource = null; this.callbacks.link(source, id, this.mode === 'contains' ? 'contains' : this.mode === 'positive' ? 1 : -1); this.draw(); }
+    else { const source = this.linkSource; if (this.callbacks.link(source, id, this.mode === 'contains' ? 'contains' : this.mode === 'positive' ? 1 : -1)) this.linkSource = null; this.draw(); }
   }
   zoom(factor, x = this.root.clientWidth / 2, y = this.root.clientHeight / 2) {
     if (this.gesture) return;
@@ -151,7 +179,7 @@ export class GraphCanvas {
     this.root.replaceChildren();
     const defs = svg('defs');
     for (const [id, fill] of [['positive', '#328577'], ['negative', '#bd7064'], ['contains', '#c49a26']]) {
-      const marker = svg('marker', { id, markerWidth: 7, markerHeight: 7, refX: 6, refY: 3.5, orient: 'auto', markerUnits: 'strokeWidth' });
+      const marker = svg('marker', { id, markerWidth: 7, markerHeight: 7, refX: 6, refY: 3.5, orient: 'auto-start-reverse', markerUnits: 'strokeWidth' });
       marker.append(svg('path', { d: 'M0,0 L7,3.5 L0,7 Z', fill })); defs.append(marker);
     }
     this.world = svg('g'); this.root.append(defs, this.world);
@@ -162,24 +190,17 @@ export class GraphCanvas {
       const key = [edge.source, edge.target].sort().join('/');
       if (!parallel.has(key)) parallel.set(key, []); parallel.get(key).push(edge.id);
     }
+    for (const ids of parallel.values()) ids.sort();
     for (const edge of this.graph.edges) {
       const a = positions[edge.source], b = positions[edge.target]; if (!a || !b) continue;
       const siblings = parallel.get([edge.source, edge.target].sort().join('/'));
       const offset = (siblings.indexOf(edge.id) - (siblings.length - 1) / 2) * 34;
-      const right = a.x <= b.x;
-      const x1 = a.x + (right ? WIDTH : 0), y1 = a.y + HEIGHT / 2;
-      const x2 = b.x + (right ? 0 : WIDTH), y2 = b.y + HEIGHT / 2;
-      const control = Math.max(60, Math.abs(x2 - x1) * .5);
-      let path, labelX = (x1 + x2) / 2, labelY = (y1 + y2) / 2 + offset * .75 - 7;
-      if (edge.source === edge.target) {
-        path = `M${a.x + WIDTH - 25},${a.y} C${a.x + WIDTH + 50},${a.y - 75 - offset} ${a.x - 50},${a.y - 75 - offset} ${a.x + 25},${a.y}`;
-        labelX = a.x + WIDTH / 2; labelY = a.y - 55 - offset;
-      } else path = `M${x1},${y1} C${x1 + (right ? control : -control)},${y1 + offset} ${x2 + (right ? -control : control)},${y2 + offset} ${x2},${y2}`;
+      const { path, labelX, labelY } = edgeGeometry(a, b, edge.source, edge.target, offset);
       const sign = edge.relation === 'contains' ? 'contains' : edge.sign === 1 ? 'positive' : 'negative';
       const own = this.activeId === null || (edge.steps.length === 1 && edge.steps[0].graphId === this.activeId);
       const selected = this.selection?.type === 'edge' && this.selection.id === edge.id;
       const group = svg('g', { 'data-edge': edge.id, tabindex: 0, role: 'button', 'aria-label': `${this.callbacks.name(edge.source)} ${sign === 'contains' ? '包含' : edge.sign === 1 ? '促进' : '抑制'} ${this.callbacks.name(edge.target)}` });
-      group.append(svg('path', { d: path, class: 'edge-hit' }), svg('path', { d: path, class: `edge-line edge-${sign} ${own ? '' : 'reference'} ${selected ? 'selected' : ''}`, 'marker-end': `url(#${sign})`, 'pointer-events': 'none' }));
+      group.append(svg('path', { d: path, class: 'edge-hit' }), svg('path', { d: path, class: `edge-line edge-${sign} ${own ? '' : 'reference'} ${selected ? 'selected' : ''}`, 'marker-end': `url(#${sign})`, ...(sign === 'contains' ? { 'marker-start': 'url(#contains)' } : {}), 'pointer-events': 'none' }));
       const label = svg('text', { x: labelX, y: labelY, class: `edge-label ${sign}`, opacity: own || selected ? 1 : .4 });
       label.textContent = sign === 'contains' ? '=' : edge.sign === 1 ? '+' : '−'; group.append(label); this.world.append(group);
     }
@@ -192,7 +213,8 @@ export class GraphCanvas {
       const label = svg('text', { x: 16, y: 27 }); label.textContent = node.label.length > 10 ? `${node.label.slice(0, 10)}…` : node.label;
       const meta = svg('text', { x: 16, y: 45, class: 'node-meta' });
       meta.textContent = this.definitionMode ? node.id.slice(0, 23) : (node.sourceGraphIds ?? []).map(this.callbacks.graphName).join(' · ').slice(0, 23);
-      group.append(title, svg('rect', { width: WIDTH, height: HEIGHT, rx: 7 }), label, meta, svg('circle', { cx: 0, cy: HEIGHT / 2, r: 3.5 }), svg('circle', { cx: WIDTH, cy: HEIGHT / 2, r: 3.5 }));
+      group.append(title, svg('rect', { width: WIDTH, height: HEIGHT, rx: 7 }), label, meta);
+      for (const [cx, cy] of [[0, HEIGHT / 2], [WIDTH, HEIGHT / 2], [WIDTH / 2, 0], [WIDTH / 2, HEIGHT]]) group.append(svg('circle', { cx, cy, r: 3.5 }));
       this.world.append(group);
     }
     if (this.gesture?.type === 'box' && this.gesture.moved) {

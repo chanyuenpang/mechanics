@@ -7,7 +7,8 @@ const $ = id => document.getElementById(id);
 const clone = value => structuredClone(value);
 const json = value => JSON.stringify(value);
 const uid = prefix => prefix + '-' + crypto.randomUUID().slice(0, 8);
-const arrow = edge => edge.relation === 'contains' ? ' ＝→ ' : edge.sign === 1 ? ' ＋→ ' : ' −→ ';
+const arrow = edge => edge.relation === 'contains' ? ' ←＝→ ' : edge.sign === 1 ? ' ＋→ ' : ' −→ ';
+let lastRelation = 1;
 const el = (tag, text, className) => {
   const item = document.createElement(tag);
   if (text !== undefined) item.textContent = text;
@@ -398,13 +399,13 @@ function inspect() {
   if (selection.type === 'edge') {
     const edge = graph.edges.find(item => item.id === selection.id); if (!edge) { $('inspector').hidden = true; return; }
     $('inspector-title').textContent = edge.hiddenNodes.length ? '折叠关系 · 只读摘要' : edge.relation === 'contains' ? '包含关系' : '因果关系';
-    detail(panel, '方向', name(edge.source) + ' → ' + name(edge.target));
-    if (edge.relation === 'contains') detail(panel, '包含语义', `${name(edge.target)} 是 ${name(edge.source)} 的一种。作用向子类传递，＝不改变路径正负号；不反向传递。`);
+    detail(panel, '影响方向', name(edge.source) + arrow(edge) + name(edge.target));
+    if (edge.relation === 'contains') detail(panel, '包含语义', '宏观影响可双向传递，＝不改变路径正负号；不推断具体效果或数值。');
     const owned = edge.steps.length === 1 && edge.steps[0].graphId === activeId;
     if (owned) {
       const id = edge.steps[0].edgeId, originalEdge = draft.edges.find(item => item.id === id);
       field(panel, '关系', originalEdge.relation === 'contains' ? 'contains' : String(originalEdge.sign), {
-        options: [['1', '＋ 促进'], ['-1', '− 抑制'], ['contains', '＝ 包含（父类 → 子类）']],
+        options: [['1', '＋ 促进'], ['-1', '− 抑制'], ['contains', '＝ 包含（双向传递）']],
         onChange: value => {
           const changed = edit(data => {
             if (value === 'contains') Object.assign(data, upgradeAnalysis(data));
@@ -412,10 +413,13 @@ function inspect() {
             if (value === 'contains') { item.relation = 'contains'; delete item.sign; }
             else { item.sign = Number(value); if (data.schemaVersion === 2) item.relation = 'influence'; }
           });
-          if (!changed) inspect();
+          if (changed) lastRelation = value === 'contains' ? value : Number(value);
+          else inspect();
         },
       });
-      for (const [key, label] of [['condition', '机制条件（可选）'], ['note', '规则说明（可选）']]) field(panel, label, originalEdge[key], { multiline: true, onChange: value => edit(data => { data.edges.find(item => item.id === id)[key] = value; }, { inspect: false }) });
+      for (const [key, label] of [['condition', '机制条件（可选）'], ['note', '规则说明（可选）']]) field(panel, label, originalEdge[key], { multiline: true, onChange: value => {
+        if (edit(data => { data.edges.find(item => item.id === id)[key] = value; }, { inspect: false })) lastRelation = originalEdge.relation === 'contains' ? 'contains' : originalEdge.sign;
+      } });
       panel.append(button('删除此连线', () => removeSelection(), 'danger'));
     } else panel.append(el('p', '视图中的源规则与折叠摘要只读。编辑源研究后，可返回当前视图。', 'note'));
     edge.steps.forEach(step => {
@@ -450,7 +454,7 @@ function inspect() {
     const output = el('div', undefined, 'trace-result');
     panel.append(button('解释影响路径', () => {
       const result = tracePaths(original, node.id, target.value); output.replaceChildren(el('p', result.interpretation, 'note'));
-      result.paths.forEach(path => output.append(el('div', (path.kind === 'containment' ? '包含路径（无正负作用）' : path.sign === 1 ? '促进路径' : '抑制路径') + '\n' + path.steps.map(step => name(step.source) + arrow(step) + name(step.target) + ' [' + graphName(step.graphId) + ' / ' + step.edgeId + ']'
+      result.paths.forEach(path => output.append(el('div', (path.kind === 'containment' ? '包含路径（不改变正负号）' : path.sign === 1 ? '促进路径' : '抑制路径') + '\n' + path.steps.map(step => name(step.traversalSource ?? step.source) + arrow(step) + name(step.traversalTarget ?? step.target) + ' [' + graphName(step.graphId) + ' / ' + step.edgeId + ']'
         + (step.condition ? '\n条件：' + step.condition : '') + (step.note ? '\n说明：' + step.note : '')).join('\n'), 'trace-path')));
       if (!result.paths.length) output.append(el('p', '当前图层范围内未找到路径。'));
       if (result.truncated) output.append(el('p', '已达到查询上限，结果不完整。'));
@@ -606,7 +610,7 @@ function setMode(mode) {
   if (!definitionMode() || mode === 'select') {
     canvas.setMode(mode);
     for (const key of ['select', 'positive', 'negative', 'contains']) $(key + '-tool').classList.toggle('active', key === mode);
-    $('tool-hint').textContent = legacy ? '旧叠加只读 · 左键框选 · 右键平移' : mode === 'select' ? '左键框选 · 右键平移 · Shift 增选 · 拖动选中节点' : mode === 'contains' ? '先点父类，再点其中一种 · ＝不改变作用符号' : '先点击源节点，再点击目标节点 · 写入当前研究';
+    $('tool-hint').textContent = legacy ? '旧叠加只读 · 左键框选 · 右键平移' : mode === 'select' ? '左键框选 · 右键平移 · 双击节点连线 · Shift 增选' : mode === 'contains' ? '依次选择两个节点 · ＝双向传递，不改变正负号' : '先点击影响源，再点击受影响节点 · 写入当前研究';
   }
 }
 function addTerm() {
@@ -637,6 +641,11 @@ const canvas = new GraphCanvas($('canvas'), {
   move: positions => viewMode() ? editView(data => { Object.assign(data.positions, positions); }, { keepSelection: true }) : edit(data => { Object.assign(data.positions, positions); }, { topology: false }),
   zoom: value => { $('zoom').textContent = value + '%'; },
   hint: text => { $('tool-hint').textContent = text; },
+  quickLink: id => {
+    if (busy() || autosave.blocked || viewMode() || legacy || definitionMode() || !draft?.nodeIds.includes(id)) return;
+    setMode(lastRelation === 'contains' ? 'contains' : lastRelation === 1 ? 'positive' : 'negative');
+    canvas.pick(id);
+  },
   link: (source, target, sign) => {
     if (busy() || definitionMode() || activeId === null) return;
     if (!draft.nodeIds.includes(source) || !draft.nodeIds.includes(target)) { showError(new Error('请先把两个节点引用到当前图层，再建立此图层的关系。')); return; }
@@ -645,7 +654,8 @@ const canvas = new GraphCanvas($('canvas'), {
       if (sign === 'contains') Object.assign(data, upgradeAnalysis(data));
       data.edges.push({ id, source, target, ...(sign === 'contains' ? { relation: 'contains' } : { sign, ...(data.schemaVersion === 2 ? { relation: 'influence' } : {}) }), condition: '', note: '' });
     });
-    if (changed) { setMode('select'); selection = { type: 'edge', id: activeId + '/' + id }; render(); }
+    if (changed) { lastRelation = sign; setMode('select'); selection = { type: 'edge', id: activeId + '/' + id }; render(); }
+    return changed;
   },
 });
 autosave = new ViewAutosave(write, body => api('/api/save', body), state => { viewState = state; updateStatus(); });

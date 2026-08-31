@@ -1,6 +1,33 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { GraphCanvas, nodesInBox, movePositions } from '../src/web/canvas.mjs';
+import { GraphCanvas, nodesInBox, movePositions, edgeGeometry } from '../src/web/canvas.mjs';
+
+test('四边自动端点保持影响方向；反向平行边错开，重合与自环有有限坐标', () => {
+  const a = { x: 0, y: 0 };
+  for (const [b, start, end] of [
+    [{ x: 300, y: 0 }, 'M166,31 ', ' 300,31'], [{ x: -300, y: 0 }, 'M0,31 ', ' -134,31'],
+    [{ x: 0, y: 200 }, 'M83,62 ', ' 83,200'], [{ x: 0, y: -200 }, 'M83,0 ', ' 83,-138'],
+  ]) {
+    const geometry = edgeGeometry(a, b, 'a', 'b');
+    assert.ok(geometry.path.startsWith(start)); assert.ok(geometry.path.endsWith(end));
+    const forward = edgeGeometry(a, b, 'a', 'b', -17), reverse = edgeGeometry(b, a, 'b', 'a', 17);
+    assert.notDeepEqual([forward.labelX, forward.labelY], [reverse.labelX, reverse.labelY]);
+  }
+  for (const target of ['a', 'b']) assert.doesNotMatch(edgeGeometry(a, a, 'a', target).path, /NaN|Infinity/);
+});
+
+test('同节点双击只启动一次连接；拖动和取消清理候选，失败保留连接源', () => {
+  const { canvas, event } = harness(), started = [];
+  canvas.callbacks.quickLink = id => { started.push(id); canvas.mode = 'negative'; canvas.linkSource = id; };
+  const click = () => { canvas.down(event(20, 20, { node: 'a' })); canvas.up(event(20, 20, { node: 'a' })); };
+  click(); assert.deepEqual(started, []); click(); assert.deepEqual(started, ['a']);
+  const links = []; canvas.callbacks.link = (...args) => { links.push(args); return false; };
+  canvas.pick('b'); assert.deepEqual(links, [['a', 'b', -1]]); assert.equal(canvas.linkSource, 'a');
+  canvas.callbacks.link = () => true; canvas.pick('b'); assert.equal(canvas.linkSource, null);
+  canvas.mode = 'select'; click(); canvas.cancel(); click(); assert.deepEqual(started, ['a']);
+  canvas.down(event(20, 20, { node: 'a' })); canvas.up(event(40, 20, { node: 'a' }));
+  assert.equal(canvas.lastClick, null); canvas.cancel(); assert.equal(canvas.linkSource, null);
+});
 
 function harness() {
   // 直接驱动真实手势方法；DOM 绘制由浏览器验收覆盖。

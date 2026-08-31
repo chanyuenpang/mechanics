@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { cp, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { compose, tracePaths, canCollapse, diagnose, upgradeAnalysis } from '../src/domain/graph.mjs';
+import { compose, tracePaths, canCollapse, diagnose, upgradeAnalysis, downstreamNodes } from '../src/domain/graph.mjs';
 import { assertDocument, validateWorkspace } from '../src/domain/validate.mjs';
 import { createWorkspaceStore } from '../src/server/store.mjs';
 import { changeViewMembers, prepareOpening } from '../src/web/view-files.mjs';
@@ -31,9 +31,14 @@ test('正负作用沿目标端包含链传递，包含步骤保留证据但不�
     assert.equal(tracePaths(graph, 'x', 'y', { maxDepth: 3 }).truncated, true);
   }
 });
-test('不反向、跨兄弟或从包含起步继承输出，纯包含链没有正负号', () => {
+test('等号前后均可接影响，双向与跨等号链传递，保留反向来源；纯等号没有正负号', () => {
   const graph = compose(model([edge('p', 'c'), edge('p', 's'), edge('x', 'c', 'influence'), edge('p', 'y', 'influence'), edge('c', 'g', 'influence')]), ['rule']);
-  for (const [a, b] of [['x', 'p'], ['x', 's'], ['c', 'y'], ['p', 'g']]) assert.deepEqual(tracePaths(graph, a, b).paths, []);
+  for (const [a, b] of [['x', 'p'], ['x', 's'], ['c', 'y'], ['p', 'g']]) assert.equal(tracePaths(graph, a, b).paths[0].sign, -1);
+  const reversed = tracePaths(graph, 'c', 'p').paths[0].steps[0];
+  assert.equal(reversed.source, 'p'); assert.equal(reversed.target, 'c');
+  assert.equal(reversed.traversalSource, 'c'); assert.equal(reversed.traversalTarget, 'p');
+  assert.deepEqual(downstreamNodes(graph, 'c').map(node => node.id).sort(), ['g', 'p', 's', 'y']);
+  assert.deepEqual(tracePaths(graph, 'y', 'c').paths, []);
   const path = tracePaths(graph, 'p', 'c').paths[0];
   assert.equal(path.kind, 'containment'); assert.equal('sign' in path, false);
   assert.equal(canCollapse(graph, 'c'), false);
@@ -63,20 +68,23 @@ test('已知 v1 只在显式草稿升级时转 v2，结构分支严格互斥', (
     d => { d.schemaVersion = 7; }, d => { d.schemaVersion = 1; },
   ]) { const invalid = structuredClone(upgraded); mutate(invalid); assert.throws(() => assertDocument(invalid, 'analysis')); }
 });
-test('包含自环和跨图环明确拒绝，无效组合不妨碍单独打开研究', () => {
-  assert.throws(() => validateWorkspace(model([edge('p', 'p')])), { code: 'CONTAINMENT_CYCLE' });
+test('包含自连接拒绝；跨图闭环允许且简单路径查询不会无限循环', () => {
+  assert.throws(() => validateWorkspace(model([edge('p', 'p')])), { code: 'CONTAINMENT_SELF_LINK' });
   const data = model([edge('p', 'c')]);
   data.analyses.push({ ...structuredClone(data.analyses[0]), id: 'reverse', edges: [edge('c', 'p')] });
   data.views.push({ schemaVersion: 1, kind: 'view', workspaceId: 'sample', id: 'view', name: '视图', graphIds: ['rule', 'reverse'], activeLayerId: null, positions: {}, collapsedNodeIds: [] });
   validateWorkspace(data);
   const before = JSON.stringify(data);
-  assert.throws(() => compose(data, ['rule', 'reverse']), error => error.code === 'CONTAINMENT_CYCLE' && error.message.includes('reverse/c-p') && error.message.includes('rule/p-c'));
-  assert.throws(() => prepareOpening(data, 'view'), { code: 'CONTAINMENT_CYCLE' });
+  const graph = compose(data, ['rule', 'reverse']);
+  assert.equal(tracePaths(graph, 'c', 'p').paths.length, 2);
+  assert.equal(tracePaths(graph, 'c', 'x').paths.length, 0);
+  assert.equal(tracePaths(graph, 'c', 'p', { maxPaths: 1 }).truncated, true);
+  assert.equal(prepareOpening(data, 'view').viewId, 'view');
   assert.equal(prepareOpening(data, { kind: 'analysis', id: 'rule' }).activeId, 'rule');
-  assert.throws(() => changeViewMembers(data, data.views[0], ['rule', 'reverse']), { code: 'CONTAINMENT_CYCLE' });
+  assert.doesNotThrow(() => changeViewMembers(data, data.views[0], ['rule', 'reverse']));
   assert.equal(JSON.stringify(data), before);
 });
-test('实际保存只升级指定研究；视图成环保存拒绝且源研究仍可修复', async t => {
+test('实际保存只升级指定研究；双向等号闭环视图可以保存并回读', async t => {
   const root = await mkdtemp(join(tmpdir(), 'rule-contains-'));
   await cp(new URL('../examples/card-game/', import.meta.url), root, { recursive: true });
   const store = await createWorkspaceStore(root);
@@ -93,9 +101,9 @@ test('实际保存只升级指定研究；视图成环保存拒绝且源研究�
   assert.deepEqual(await readFile(join(root, 'analyses/basic-rules.analysis.json')), before);
   const reverse = { ...structuredClone(upgraded), id: 'reverse', edges: [edge('repel', 'evade')] };
   workspace = await store.createAnalysis({ revision: workspace.revision, document: reverse });
-  const view = { schemaVersion: 1, kind: 'view', workspaceId: workspace.manifest.id, id: 'invalid', name: '无效组合', graphIds: ['hand', 'reverse'], activeLayerId: null, positions: {}, collapsedNodeIds: [] };
-  await assert.rejects(store.createView({ revision: workspace.revision, document: view, file: 'invalid.view.json' }), { code: 'CONTAINMENT_CYCLE' });
-  assert.equal((await store.read()).revision, workspace.revision);
+  const view = { schemaVersion: 1, kind: 'view', workspaceId: workspace.manifest.id, id: 'cycle', name: '等号组合', graphIds: ['hand', 'reverse'], activeLayerId: null, positions: {}, collapsedNodeIds: [] };
+  workspace = await store.createView({ revision: workspace.revision, document: view, file: 'cycle.view.json' });
+  assert.equal((await store.read()).views[0].id, 'cycle');
   reverse.edges = [];
   await store.save({ revision: workspace.revision, kind: 'analysis', id: 'reverse', document: reverse });
 });

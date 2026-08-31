@@ -22,28 +22,20 @@ export function compose(workspace, selectedIds) {
   return result;
 }
 
-// 只校验当前研究/组合；未选研究不会构成隐含的全局类型系统。
+// 等号双向传递宏观影响，允许闭环；自连接不表达两个概念间的关系。
 export function assertContainment(edges) {
-  const outgoing = new Map(), active = new Set(), done = new Set(), path = [];
-  for (const edge of edges.filter(edge => edge.relation === 'contains')) {
-    if (!outgoing.has(edge.source)) outgoing.set(edge.source, []);
-    outgoing.get(edge.source).push(edge);
+  for (const edge of edges) if (edge.relation === 'contains' && edge.source === edge.target) {
+    const error = new Error(`包含关系不能连接自身：[${edge.id}]`);
+    error.code = 'CONTAINMENT_SELF_LINK'; throw error;
   }
-  function visit(id) {
-    if (done.has(id)) return;
-    active.add(id);
-    for (const edge of outgoing.get(id) ?? []) {
-      path.push(edge);
-      if (active.has(edge.target)) {
-        const cycle = path.slice(path.findIndex(step => step.source === edge.target));
-        const error = new Error('包含关系成环：' + cycle.map(step => `${step.source} → ${step.target} [${step.id}]`).join('；'));
-        error.code = 'CONTAINMENT_CYCLE'; error.edges = structuredClone(cycle); throw error;
-      }
-      visit(edge.target); path.pop();
-    }
-    active.delete(id); done.add(id);
-  }
-  for (const id of outgoing.keys()) visit(id);
+}
+
+// 只展开计算方向，不新增或改写持久化关系。反向步骤保留原始来源。
+function traversableEdges(graph) {
+  return graph.edges.flatMap(edge => edge.relation === 'contains' ? [edge, {
+    ...edge, source: edge.target, target: edge.source,
+    steps: edge.steps?.slice().reverse().map(step => ({ ...step, traversalSource: step.target, traversalTarget: step.source })),
+  }] : [edge]);
 }
 
 export function upgradeAnalysis(document) {
@@ -68,7 +60,7 @@ function hasPath(graph, from, to) {
     if (node === to) return true;
     if (visited.has(node)) continue;
     visited.add(node);
-    for (const edge of graph.edges) if (edge.source === node) pending.push(edge.target);
+    for (const edge of traversableEdges(graph)) if (edge.source === node) pending.push(edge.target);
   }
   return false;
 }
@@ -109,6 +101,7 @@ export function tracePaths(graph, source, target, { maxPaths = 50, maxDepth = 16
   const ids = new Set(graph.nodes.map(node => node.id));
   if (!ids.has(source) || !ids.has(target)) throw new Error('查询端点不在当前组合中');
   const paths = [];
+  const traversal = traversableEdges(graph);
   let truncated = false;
   function visit(node, edges, seen) {
     if (node === target && edges.length) {
@@ -119,10 +112,7 @@ export function tracePaths(graph, source, target, { maxPaths = 50, maxDepth = 16
         steps: edges.flatMap(edge => structuredClone(edge.steps)) });
       return;
     }
-    // 包含起步只能查询种属；作用起步才可沿目标端包含关系向下传递。
-    const containmentOnly = edges.length && edges[0].relation === 'contains';
-    const nextEdges = graph.edges.filter(edge => edge.source === node && !seen.has(edge.target)
-      && (!containmentOnly || edge.relation === 'contains'));
+    const nextEdges = traversal.filter(edge => edge.source === node && !seen.has(edge.target));
     if (edges.length >= maxDepth) { if (nextEdges.length) truncated = true; return; }
     for (const edge of nextEdges) {
       if (paths.length >= maxPaths) { truncated = true; return; }
@@ -136,7 +126,7 @@ export function tracePaths(graph, source, target, { maxPaths = 50, maxDepth = 16
 // 沿原始关系查找下游，折叠不改变可追踪范围，循环不重复包含起点。
 export function downstreamNodes(graph, source) {
   const adjacent = new Map();
-  for (const edge of graph.edges) {
+  for (const edge of traversableEdges(graph)) {
     if (!adjacent.has(edge.source)) adjacent.set(edge.source, []);
     adjacent.get(edge.source).push(edge.target);
   }
