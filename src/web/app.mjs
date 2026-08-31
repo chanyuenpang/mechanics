@@ -18,12 +18,17 @@ const button = (text, run, className) => {
   const item = el('button', text, className); item.type = 'button';
   item.onclick = () => Promise.resolve().then(run).catch(showError); return item;
 };
+function toggleWithKeyboard(event) {
+  if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.currentTarget.click(); }
+}
 const token = new URLSearchParams(location.hash.slice(1)).get('session');
 let workspace, activeId = null, draft, baseline, visible = [], folded = [], viewPositions = {};
 let selection = null, graph, original, history = [], future = [], pending = 0, viewState = 'saved', writeQueue = Promise.resolve();
 let screen = 'analysis', viewId = null, opening = false, autosave, legacy = false, returnView = null;
 let graphHistory = null;
 const cameras = new Map();
+// 目录折叠和文本筛选只属于本页，不参与视图快照或文件保存。
+const sidebarState = { query: '', collapsed: false, folders: new Set() };
 const busy = () => opening || pending > 0;
 const dirty = () => draft && json(draft) !== json(baseline);
 const definitionMode = () => screen === 'concepts';
@@ -90,7 +95,9 @@ function updateStatus() {
   $('save-view').disabled = !workspace || busy() || !!autosave?.blocked;
   $('new-graph').disabled = !workspace || busy() || legacy || !!autosave?.blocked;
   $('new-view').disabled = !workspace || busy() || !!autosave?.blocked || legacy;
-  $('save-view').textContent = viewId !== null ? '▦ 视图另存为…' : legacy ? '▦ 保存旧叠加为视图…' : '▦ 以此研究新建视图…';
+  $('save-view').textContent = viewId !== null ? '另存为…' : legacy ? '保存旧叠加为视图…' : '存为视图…';
+  $('save-view').title = viewId !== null ? '将当前视图另存为新文件' : '以当前研究或旧叠加新建视图';
+  $('save-view').hidden = definitionMode();
   $('save-view').disabled ||= definitionMode() || (!legacy && viewId === null && activeId === null);
   $('return-view').hidden = returnView === null || viewId !== null || definitionMode();
   $('return-view').disabled = busy() || !!autosave?.blocked;
@@ -232,47 +239,83 @@ async function toggleLayer(id, checked) {
 }
 function renderSidebar() {
   $('workspace-name').textContent = workspace.manifest.name;
-  $('workspace-root').textContent = workspace.workspaceRoot;
-  $('workspace-root').title = '固定保存目录：' + workspace.workspaceRoot;
-  const files = $('files'); files.replaceChildren();
-  const row = (label, id, path, parent) => {
+  $('workspace-name').title = workspace.manifest.name + '\n固定保存目录：' + workspace.workspaceRoot;
+  const views = $('view-files'), analyses = $('analysis-files'); views.replaceChildren(); analyses.replaceChildren();
+  const files = [...workspace.files].sort((a, b) => a.path.localeCompare(b.path));
+  const researchName = id => id === activeId && !definitionMode() ? draft.name : graphName(id);
+  const query = sidebarState.query.trim().toLowerCase();
+  const researchFiles = files.filter(file => file.kind === 'analysis');
+  const matches = researchFiles.filter(file => [researchName(file.id), file.id, file.path].some(value => value.toLowerCase().includes(query)));
+  $('view-file-count').textContent = workspace.views.length;
+  $('analysis-file-count').textContent = query ? `${matches.length}/${researchFiles.length}` : researchFiles.length;
+  $('analysis-file-count').title = query ? '匹配数量 / 研究总数' : '研究总数';
+  $('selected-count').hidden = !viewMode();
+  $('selected-count').textContent = `已选 ${visible.length}`;
+  $('selected-count').title = '当前视图的全部成员数，不受筛选影响';
+  $('analysis-body').hidden = sidebarState.collapsed;
+  $('toggle-analyses').setAttribute('aria-expanded', String(!sidebarState.collapsed));
+  $('analysis-chevron').textContent = sidebarState.collapsed ? '›' : '⌄';
+  $('analysis-empty').hidden = matches.length > 0;
+  $('analysis-empty-text').textContent = researchFiles.length ? '无匹配研究' : '暂无研究';
+  $('clear-filter').hidden = !query;
+
+  // 视图固定在上方，仍按实际路径稳定排序，不生成第二份文件清单。
+  for (const file of files.filter(file => file.kind === 'view')) {
+    const view = workspace.views.find(item => item.id === file.id);
+    const item = el('div', undefined, 'file-row view-row' + (file.id === viewId ? ' current-view' : ''));
+    const open = button('', () => load(view.id), 'file'); open.title = file.path;
+    open.setAttribute('aria-label', '打开视图 ' + view.name);
+    open.append(el('span', '▦', 'file-icon'), el('span', view.name, 'file-text')); item.append(open); views.append(item);
+  }
+  if (!workspace.views.length) views.append(el('p', '暂无视图', 'sidebar-empty'));
+
+  // 只呈现有匹配研究的真实目录；搜索时临时展开，不覆盖用户的折叠集合。
+  const folders = new Map([['', analyses]]);
+  const folder = directory => {
+    const parts = directory ? directory.split('/') : [];
+    let current = '', parent = analyses;
+    for (const part of parts) {
+      current += part + '/';
+      if (!folders.has(current)) {
+        const key = current, children = el('div', undefined, 'tree-children');
+        children.hidden = !query && sidebarState.folders.has(key);
+        const toggle = button((children.hidden ? '› ' : '⌄ ') + part, () => {
+          if (query) return;
+          children.hidden = !children.hidden;
+          if (children.hidden) sidebarState.folders.add(key); else sidebarState.folders.delete(key);
+          toggle.textContent = (children.hidden ? '› ' : '⌄ ') + part;
+          toggle.setAttribute('aria-expanded', String(!children.hidden));
+        }, 'folder-toggle');
+        toggle.title = query ? key + '（筛选时展开）' : key;
+        toggle.setAttribute('aria-label', '目录 ' + key);
+        toggle.setAttribute('aria-expanded', String(!children.hidden));
+        toggle.setAttribute('aria-disabled', String(!!query));
+        toggle.onkeydown = toggleWithKeyboard;
+        parent.append(toggle, children); folders.set(current, children);
+      }
+      parent = folders.get(current);
+    }
+    return parent;
+  };
+  for (const file of matches) {
+    const parts = file.path.split('/'); parts.pop();
+    const parent = folder(parts.join('/')), id = file.id, label = researchName(id);
     const item = el('div', undefined, 'file-row' + (id === activeId && !definitionMode() ? ' active' : ''));
-    const open = button('', () => openLayer(id), 'file'); open.title = path;
+    const open = button('', () => openLayer(id), 'file'); open.title = file.path;
     open.setAttribute('aria-label', '打开研究 ' + label);
     open.append(el('span', '▱', 'file-icon'), el('span', label, 'file-text')); item.append(open);
-    if (id !== null && viewMode()) {
+    if (viewMode()) {
       const labelEl = el('label', undefined, 'visibility'), input = el('input'); input.type = 'checkbox'; input.checked = visible.includes(id);
       input.setAttribute('aria-label', '叠加研究 ' + label); input.title = '加入 / 移出当前视图'; input.disabled = busy() || autosave.blocked;
       input.onchange = () => toggleLayer(id, input.checked).catch(error => { renderSidebar(); showError(error); }); labelEl.append(input); item.append(labelEl);
     }
     parent.append(item);
-  };
-  // 树结构来自服务读取的磁盘目录，包含空目录；路径映射不落盘。
-  const folders = new Map([['', files]]);
-  const folder = directory => {
-    const parts = directory ? directory.split('/') : [];
-    let current = '', parent = files;
-    for (const part of parts) {
-      current += part + '/';
-      if (!folders.has(current)) { parent.append(el('div', '⌄ ' + part, 'folder-label')); const children = el('div', undefined, 'tree-children'); parent.append(children); folders.set(current, children); }
-      parent = folders.get(current);
-    }
-    return parent;
-  };
-  for (const file of [...workspace.files].sort((a, b) => a.path.localeCompare(b.path))) {
-    if (!['analysis', 'view'].includes(file.kind)) continue;
-    const parts = file.path.split('/'); parts.pop();
-    const parent = folder(parts.join('/'));
-    if (file.kind === 'view') {
-      const view = workspace.views.find(item => item.id === file.id);
-      const item = el('div', undefined, 'file-row view-row' + (file.id === viewId ? ' current-view' : ''));
-      const open = button('', () => load(view.id), 'file'); open.title = file.path;
-      open.setAttribute('aria-label', '打开视图 ' + view.name);
-      open.append(el('span', '▦', 'file-icon'), el('span', view.name, 'file-text')); item.append(open); parent.append(item);
-    } else row(file.id === activeId && !definitionMode() ? draft.name : graphName(file.id), file.id, file.path, parent);
   }
-  for (const directory of workspace.directories) folder(directory);
-  if (!workspace.analyses.length) files.append(el('p', '还没有分析图，点击上方新建。', 'note'));
+}
+function revealNewResearch(id) {
+  sidebarState.query = ''; $('analysis-filter').value = ''; sidebarState.collapsed = false;
+  const path = workspace.files.find(file => file.kind === 'analysis' && file.id === id).path;
+  for (const folder of sidebarState.folders) if (path.startsWith(folder)) sidebarState.folders.delete(folder);
 }
 function projection() {
   const data = { ...workspace,
@@ -480,7 +523,7 @@ async function newGraph() {
       const candidate = await readOpening(api, { kind: 'analysis', id: document.id });
       rememberCamera(); workspace = candidate.workspace; viewId = null; legacy = false;
       if (sourceView !== null) returnView = sourceView;
-      assignLayer(document.id); assignSnapshot(candidate.snapshot); autosave.reset(); render(); restoreCamera();
+      assignLayer(document.id); assignSnapshot(candidate.snapshot); autosave.reset(); revealNewResearch(document.id); render(); restoreCamera();
     } catch (error) {
       $('dialog').close('cancel'); showError(new Error('研究文件已创建：' + file + '，但打开未完成。请重新读取，不要重复创建。\n' + error.message));
     }
@@ -601,6 +644,10 @@ async function discardLegacy() {
   if (accepted) await load({ kind: 'analysis', id: visible[0] ?? workspace.analyses[0]?.id ?? null }, { allowLegacy: true });
 }
 $('new-graph').onclick = () => newGraph().catch(showError);
+$('analysis-filter').oninput = event => { sidebarState.query = event.target.value; renderSidebar(); };
+$('clear-filter').onclick = () => { sidebarState.query = ''; $('analysis-filter').value = ''; renderSidebar(); $('analysis-filter').focus(); };
+$('toggle-analyses').onclick = () => { sidebarState.collapsed = !sidebarState.collapsed; renderSidebar(); };
+$('toggle-analyses').onkeydown = toggleWithKeyboard;
 $('save-view').onclick = () => newView().catch(showError);
 $('new-view').onclick = () => newView({ empty: true }).catch(showError);
 $('return-view').onclick = () => load(returnView).catch(showError);

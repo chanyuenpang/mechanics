@@ -9,16 +9,22 @@
 <body>
   <div id="startup-help" role="status">请通过 CLI 启动编辑器，再打开终端打印的完整 http://127.0.0.1 网址。直接双击 index.html 无法加载模块或读写工作区。<code>game-rule-analyzer serve --workspace &lt;资料目录&gt;</code></div>
   <aside id="sidebar">
-    <div class="brand"><span class="brand-mark">⌘</span><strong>规则图</strong><span class="badge">本地</span></div>
+    <div class="brand"><span class="brand-mark">⌘</span><strong>规则图</strong><button id="reload" class="icon-button" title="重新读取磁盘文件" aria-label="重新读取磁盘文件">↻</button></div>
     <div class="workspace-heading"><span id="workspace-name">正在读取工作区…</span></div>
-    <div id="workspace-root" class="workspace-root"></div>
-    <button id="new-graph" class="new-analysis" aria-label="新建研究">＋ 新建研究</button>
-    <button id="new-view" class="new-analysis">▦ 新建视图</button>
-    <button id="save-view" class="new-analysis">▦ 以此研究新建视图…</button>
-    <div class="section-label"><span>文件</span></div>
-    <nav id="files" aria-label="工作区文件目录"></nav>
-    <p class="layer-help">点研究：单图编辑 · 手动保存<br>点视图：勾选叠加 · 自动保存</p>
-    <div class="sidebar-footer"><span class="status-dot"></span><span>JSON 文件保存在项目内</span><button id="reload" class="icon-button" title="重新读取磁盘文件" aria-label="重新读取磁盘文件">↻</button></div>
+    <nav id="files" aria-label="工作区文件目录">
+      <section class="file-section" aria-label="视图列表">
+        <div class="section-heading"><span>视图 <span id="view-file-count" class="file-count"></span></span><button id="new-view" class="icon-button" title="新建空白视图" aria-label="新建视图">＋</button></div>
+        <div id="view-files"></div>
+      </section>
+      <section class="file-section" aria-label="研究列表">
+        <div class="section-heading"><button id="toggle-analyses" class="section-toggle" aria-expanded="true" aria-controls="analysis-body"><span id="analysis-chevron">⌄</span> 研究 <span id="analysis-file-count" class="file-count"></span></button><button id="new-graph" class="icon-button" title="新建独立研究" aria-label="新建研究">＋</button></div>
+        <div id="analysis-body">
+          <div class="research-filter"><input id="analysis-filter" type="search" placeholder="筛选研究…" aria-label="筛选研究" autocomplete="off"><span id="selected-count" hidden></span></div>
+          <div id="analysis-files"></div>
+          <div id="analysis-empty" class="sidebar-empty" hidden><span id="analysis-empty-text"></span><button id="clear-filter" class="quiet" hidden>清除筛选</button></div>
+        </div>
+      </section>
+    </nav>
   </aside>
   <main id="main">
     <header class="topbar">
@@ -27,8 +33,8 @@
       <div class="breadcrumb"><span id="file-kind">工作区</span><span class="slash">/</span><strong id="file-name">加载中</strong><span id="dirty-dot" hidden>●</span></div>
       <div class="header-actions"><span id="save-state">本地文件</span><button id="export" class="quiet" title="导出当前文件或未保存草稿">导出 JSON</button><button id="save" class="primary" disabled>保存 <kbd>Ctrl S</kbd></button></div>
     </header>
-    <div class="viewbar"><strong id="view-name">研究 · 单文件编辑</strong><span id="view-state" role="status">正在读取…</span><button id="export-view" class="quiet" hidden>导出视图草稿</button><button id="return-view" class="quiet" hidden>返回视图</button></div>
-    <div id="legacy-notice" role="status" hidden>已保留旧叠加记录。请在侧栏保存为视图，或<button id="discard-legacy" class="quiet">放弃旧叠加</button>后打开研究。</div>
+    <div class="viewbar"><strong id="view-name">研究 · 单文件编辑</strong><span id="view-state" role="status">正在读取…</span><button id="export-view" class="quiet" hidden>导出视图草稿</button><button id="return-view" class="quiet" hidden>返回视图</button><button id="save-view" class="quiet">存为视图…</button></div>
+    <div id="legacy-notice" role="status" hidden>已保留旧叠加记录。请保存为视图，或<button id="discard-legacy" class="quiet">放弃旧叠加</button>后打开研究。</div>
     <div id="error" role="alert" hidden><span id="error-text"></span><button id="reload-error" hidden>重新读取</button><button id="dismiss-error" class="icon-button" aria-label="关闭错误提示">×</button></div>
     <div id="upgrade-notice" role="status" hidden>保存将把当前研究升级为 v2，旧版工具无法读取；撤销或放弃可恢复未保存的 v1 草稿。其他文件不变。</div>
     <section id="glossary" aria-label="节点定义表格" hidden></section>
