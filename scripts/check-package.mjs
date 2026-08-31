@@ -22,7 +22,7 @@ for (const path of names) {
   assert.match(path, /^(src\/|schemas\/|docs\/|examples\/|README\.md$|package\.json$)/);
   assert.ok(!/(?:^|\/)(?:node_modules|\.git|\.claw|design)(?:\/|$)|\.lock$|\.tmp$|\.log$/.test(path), path);
 }
-for (const path of ['src/server/cli.mjs', 'src/web/glossary.mjs', 'src/web/index.html', 'schemas/protocol.schema.json']) assert.ok(names.includes(path), path);
+for (const path of ['src/server/cli.mjs', 'src/web/glossary.mjs', 'src/web/view-files.mjs', 'src/web/index.html', 'schemas/protocol.schema.json', 'schemas/legacy-workspace-v2.schema.json']) assert.ok(names.includes(path), path);
 await mkdir(join(root, 'dist'), { recursive: true });
 const [packed] = JSON.parse(command(process.execPath, [npm, ...packArgs, '--pack-destination', join(root, 'dist')]));
 assert.deepEqual(packed.files.map(file => file.path), names);
@@ -61,7 +61,7 @@ try {
     child.stdout.on('data', chunk => { output += chunk; const match = output.match(/http:\/\/127\.0\.0\.1:\d+\/#session=[\w-]+/); if (match) { clearTimeout(timeout); accept(match[0]); } });
   });
   const origin = new URL(url).origin, token = new URL(url).hash.slice('#session='.length);
-  for (const asset of ['/', '/app.mjs', '/canvas.mjs', '/glossary.mjs', '/style.css', '/domain/graph.mjs']) assert.equal((await fetch(origin + asset)).status, 200, asset);
+  for (const asset of ['/', '/app.mjs', '/canvas.mjs', '/glossary.mjs', '/view-files.mjs', '/style.css', '/domain/graph.mjs']) assert.equal((await fetch(origin + asset)).status, 200, asset);
   const response = await fetch(origin + '/api/workspace', { headers: { Authorization: 'Bearer ' + token } });
   assert.equal(response.status, 200);
   assert.equal((await response.json()).workspaceRoot, await realpath(workspace));

@@ -93,7 +93,7 @@ test('结构和引用错误明确拒绝，不修补原始数据', () => {
 
 test('工具可处理无任何卡牌概念的另一游戏工作区', () => {
   const data = {
-    manifest: { schemaVersion: 2, kind: 'workspace', id: 'platform-game', name: '跳跃游戏', definitions: 'definitions.graph.json', compositions: [] },
+    manifest: { schemaVersion: 3, kind: 'workspace', id: 'platform-game', name: '跳跃游戏', definitions: 'definitions.graph.json', compositions: [] },
     definitions: { schemaVersion: 1, kind: 'definitions', workspaceId: 'platform-game', nodes: ['jump', 'fall'].map(id => ({ id, label: id, description: '测试概念', increaseMeaning: '发生增加' })), positions: {} },
     analyses: [{ schemaVersion: 1, kind: 'analysis', workspaceId: 'platform-game', id: 'jump-rule', name: '跳跃规则', scope: '假设模型', nodeIds: ['jump', 'fall'], edges: [{ id: 'avoid', source: 'jump', target: 'fall', sign: -1, condition: '及时起跳', note: '' }], positions: {} }],
   };

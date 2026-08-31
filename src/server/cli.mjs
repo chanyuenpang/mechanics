@@ -45,7 +45,7 @@ try {
       } else {
         const data = await readWorkspace(root);
         if (command === 'root') console.log(root);
-        else if (command === 'validate') console.log(JSON.stringify({ ok: true, root, workspaceId: data.manifest.id, nodes: data.definitions.nodes.length, analyses: data.analyses.length, revision: data.revision }, null, 2));
+        else if (command === 'validate') console.log(JSON.stringify({ ok: true, root, workspaceId: data.manifest.id, nodes: data.definitions.nodes.length, analyses: data.analyses.length, views: data.views.length, revision: data.revision }, null, 2));
         else {
           const rawPort = values.port ?? '4319', port = Number(rawPort);
           if (!/^\d+$/.test(rawPort) || !Number.isInteger(port) || port > 65535) throw new Error('端口必须是 0–65535 的整数');

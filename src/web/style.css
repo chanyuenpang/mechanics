@@ -3,7 +3,11 @@
 #sidebar{width:240px;flex:none;border-right:1px solid var(--line);background:#f5f7f3;display:flex;flex-direction:column;padding:28px 14px 12px;z-index:10}
 .brand{display:flex;align-items:center;gap:10px;padding:0 12px;letter-spacing:.5px}.brand strong{font-size:17px}.brand .badge{margin-left:auto}.brand-mark{font-size:24px;color:var(--accent)}
 .workspace-heading{padding:28px 12px 22px;color:#798578;font-size:12px;line-height:1.6}
-.new-analysis{margin:2px 8px 24px;padding:10px 12px;text-align:left;font-size:12px;color:var(--accent)}
+.new-analysis{margin:2px 8px 6px;padding:10px 12px;text-align:left;font-size:12px;color:var(--accent)}
+#save-view{margin-bottom:20px;background:transparent}
+.viewbar{min-height:39px;display:flex;align-items:center;gap:12px;padding:4px 25px;border-bottom:1px solid var(--line);background:#fdfefb;flex:none;font-size:11px}
+.viewbar strong{max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.viewbar #view-state{color:var(--muted);font-size:10px}.viewbar #view-state.danger{color:var(--negative)}.viewbar button{font-size:10px;padding:4px 7px}.viewbar #leave-view{margin-left:auto}
+.file-row.current-view{box-shadow:inset 2px 0 var(--accent);background:#edf2e9}.view-row .file-icon{color:var(--accent)}
 .section-label{padding:0 10px 8px;color:#939c92;font-size:11px;letter-spacing:1px}
 #files{overflow-y:auto;min-height:80px;flex:1}
 .file-row{display:flex;align-items:center;border-radius:5px;margin:2px 0;min-height:36px}.file-row.active{background:#e6ede3}

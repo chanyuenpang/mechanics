@@ -13,9 +13,10 @@
     <div class="workspace-heading"><span id="workspace-name">正在读取工作区…</span></div>
     <div id="workspace-root" class="workspace-root"></div>
     <button id="new-graph" class="new-analysis" aria-label="新建分析图">＋ 新建分析图</button>
-    <div class="section-label"><span>分析文件</span></div>
-    <nav id="files" aria-label="分析文件目录"></nav>
-    <p class="layer-help">勾选以叠加 · 点击以编辑<br>当前选择自动记忆</p>
+    <button id="save-view" class="new-analysis">▦ 保存为视图</button>
+    <div class="section-label"><span>文件</span></div>
+    <nav id="files" aria-label="工作区文件目录"></nav>
+    <p class="layer-help">分析图：勾选叠加 · 点击编辑<br>视图文件：点击打开 · 修改自动写回</p>
     <div class="sidebar-footer"><span class="status-dot"></span><span>JSON 文件保存在项目内</span><button id="reload" class="icon-button" title="重新读取磁盘文件" aria-label="重新读取磁盘文件">↻</button></div>
   </aside>
   <main id="main">
@@ -25,6 +26,7 @@
       <div class="breadcrumb"><span id="file-kind">工作区</span><span class="slash">/</span><strong id="file-name">加载中</strong><span id="dirty-dot" hidden>●</span></div>
       <div class="header-actions"><span id="save-state">本地文件</span><button id="export" class="quiet" title="导出当前文件或未保存草稿">导出 JSON</button><button id="save" class="primary" disabled>保存 <kbd>Ctrl S</kbd></button></div>
     </header>
+    <div class="viewbar"><strong id="view-name">临时浏览</strong><span id="view-state" role="status">正在读取…</span><button id="export-view" class="quiet" hidden>导出视图草稿</button><button id="leave-view" class="quiet" hidden>退出视图</button></div>
     <div id="error" role="alert" hidden><span id="error-text"></span><button id="reload-error" hidden>重新读取</button><button id="dismiss-error" class="icon-button" aria-label="关闭错误提示">×</button></div>
     <section id="glossary" aria-label="节点定义表格" hidden></section>
     <section id="stage" aria-label="节点画布区域">

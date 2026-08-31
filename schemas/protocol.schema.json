@@ -1,11 +1,12 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "urn:game-rule-analyzer:protocol:2",
-  "title": "工作区 v2 与游戏规则文档 v1",
+  "$id": "urn:game-rule-analyzer:protocol:3",
+  "title": "工作区 v3 与规则、视图文档 v1",
   "oneOf": [
     { "$ref": "#/definitions/workspace" },
     { "$ref": "#/definitions/definitionGraph" },
-    { "$ref": "#/definitions/analysis" }
+    { "$ref": "#/definitions/analysis" },
+    { "$ref": "#/definitions/view" }
   ],
   "definitions": {
     "id": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{0,95}$" },
@@ -24,7 +25,7 @@
         "graphIds": { "$ref": "#/definitions/ids" }, "collapsedNodeIds": { "$ref": "#/definitions/ids" }, "positions": { "$ref": "#/definitions/positions" }
       }
     },
-    "lastView": {
+    "inlineView": {
       "type": "object", "additionalProperties": false, "required": ["graphIds", "activeLayerId", "collapsedNodeIds", "positions"],
       "properties": {
         "graphIds": { "$ref": "#/definitions/ids" },
@@ -35,11 +36,26 @@
     "workspace": {
       "type": "object", "additionalProperties": false, "required": ["schemaVersion", "kind", "id", "name", "definitions", "compositions"],
       "properties": {
-        "schemaVersion": { "const": 2 }, "kind": { "const": "workspace" },
+        "schemaVersion": { "const": 3 }, "kind": { "const": "workspace" },
         "id": { "$ref": "#/definitions/id" }, "name": { "$ref": "#/definitions/text" },
         "definitions": { "$ref": "#/definitions/relativePath" },
         "compositions": { "type": "array", "items": { "$ref": "#/definitions/composition" } },
-        "lastView": { "$ref": "#/definitions/lastView" }
+        "lastView": { "oneOf": [{ "$ref": "#/definitions/inlineView" }, { "$ref": "#/definitions/viewReference" }] }
+      }
+    },
+    "viewReference": {
+      "type": "object", "additionalProperties": false, "required": ["viewId"],
+      "properties": { "viewId": { "$ref": "#/definitions/id" } }
+    },
+    "view": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schemaVersion", "kind", "workspaceId", "id", "name", "graphIds", "activeLayerId", "collapsedNodeIds", "positions"],
+      "properties": {
+        "schemaVersion": { "const": 1 }, "kind": { "const": "view" }, "workspaceId": { "$ref": "#/definitions/id" },
+        "id": { "$ref": "#/definitions/id" }, "name": { "$ref": "#/definitions/text" },
+        "graphIds": { "$ref": "#/definitions/ids" },
+        "activeLayerId": { "anyOf": [{ "$ref": "#/definitions/id" }, { "type": "null" }] },
+        "collapsedNodeIds": { "$ref": "#/definitions/ids" }, "positions": { "$ref": "#/definitions/positions" }
       }
     },
     "node": {

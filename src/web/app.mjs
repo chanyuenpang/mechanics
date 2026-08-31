@@ -1,6 +1,7 @@
 import { compose, canCollapse, collapse, tracePaths, diagnose } from '/domain/graph.mjs';
 import { GraphCanvas } from '/canvas.mjs';
 import { GlossaryTable } from '/glossary.mjs';
+import { ViewAutosave, viewSaveRequest, readOpening, createAndRememberView } from '/view-files.mjs';
 
 const $ = id => document.getElementById(id);
 const clone = value => structuredClone(value);
@@ -19,7 +20,8 @@ const button = (text, run, className) => {
 const token = new URLSearchParams(location.hash.slice(1)).get('session');
 let workspace, activeId = null, draft, baseline, visible = [], folded = [], viewPositions = {};
 let selection = null, graph, original, history = [], future = [], pending = 0, viewState = 'saved', writeQueue = Promise.resolve();
-let screen = 'analysis';
+let screen = 'analysis', viewId = null, opening = false, autosave;
+const busy = () => opening || pending > 0;
 const dirty = () => draft && json(draft) !== json(baseline);
 const definitionMode = () => screen === 'concepts';
 const name = id => (definitionMode() ? draft : workspace?.definitions)?.nodes.find(node => node.id === id)?.label ?? id;
@@ -30,22 +32,23 @@ const viewSnapshot = () => ({ graphIds: [...visible], activeLayerId: activeId, c
 function showError(error) {
   const conflict = error.code === 'REVISION_CONFLICT';
   $('error-text').textContent = error.message + (conflict ? '\n其他页面保存视图也会改变版本。请重新读取；有草稿时会先提示处理，不能强制覆盖。' : '');
-  $('reload-error').hidden = !conflict;
+  $('reload-error').hidden = false;
   $('error').hidden = false;
 }
 async function api(path, body) {
   if (!token) throw new Error('请使用服务启动时打印的完整网址打开，网址须含本机会话片段。');
-  let response;
+  let response, data;
   try {
     response = await fetch(path, {
       method: body ? 'POST' : 'GET',
       headers: { Authorization: 'Bearer ' + token, ...(body ? { 'Content-Type': 'application/json' } : {}) },
       ...(body ? { body: json(body) } : {}),
     });
+    data = await response.json();
   } catch (error) {
-    throw new Error(body ? '连接中断，写入结果待确认。草稿已保留，请重新读取磁盘核实后再操作。' : '无法连接本地服务：' + error.message);
+    const failure = new Error(body ? '连接中断或响应无法解析，写入结果待确认。草稿已保留，请重新读取磁盘核实后再操作。' : '无法读取本地服务：' + error.message);
+    failure.code = body ? 'SAVE_UNCERTAIN' : 'CONNECTION_FAILED'; throw failure;
   }
-  const data = await response.json();
   if (!response.ok) { const error = new Error(data.error + '：' + data.message); error.code = data.error; throw error; }
   return data;
 }
@@ -61,45 +64,51 @@ function write(operation) {
   return result.finally(() => { pending--; updateStatus(); });
 }
 function updateStatus() {
-  $('save').disabled = !dirty() || pending > 0;
+  $('save').disabled = !dirty() || busy();
   $('dirty-dot').hidden = !dirty();
-  $('undo').disabled = !history.length || pending > 0;
-  $('redo').disabled = !future.length || pending > 0;
-  $('positive-tool').disabled = !workspace || definitionMode() || activeId === null || pending > 0;
+  $('undo').disabled = !history.length || busy();
+  $('redo').disabled = !future.length || busy();
+  $('positive-tool').disabled = !workspace || definitionMode() || activeId === null || busy();
   $('negative-tool').disabled = $('positive-tool').disabled;
   $('export').disabled = !draft;
-  $('save-state').textContent = pending ? '正在写入…' : dirty() ? '文件未保存' : viewState === 'failed' ? '视图未保存' : '已保存到项目';
+  $('save-state').textContent = dirty() ? '规则未保存' : '规则已保存';
+  $('view-state').textContent = opening ? '正在打开…' : ({ saved: '视图已保存', saving: '视图正在保存…', failed: '视图保存失败', uncertain: '视图写入待确认' })[viewState];
+  $('view-state').classList.toggle('danger', !!autosave?.blocked);
+  $('export-view').hidden = !autosave?.blocked;
+  $('save-view').disabled = !workspace || busy() || !!autosave?.blocked;
+  $('new-graph').disabled = !workspace || busy();
+  $('leave-view').hidden = viewId === null;
+  $('leave-view').disabled = busy() || !!autosave?.blocked;
+  for (const id of ['files', 'stage', 'glossary', 'main-views']) $(id).inert = opening;
 }
 async function persistView() {
-  const snapshot = viewSnapshot(); viewState = 'saving';
   try {
-    await write(revision => api('/api/save', { revision, kind: 'workspace', document: { ...clone(workspace.manifest), lastView: snapshot } }));
-    if (json(snapshot) === json(viewSnapshot())) viewState = 'saved';
-  } catch (error) { viewState = 'failed'; showError(error); }
-  updateStatus();
+    return await autosave.save(viewSaveRequest(workspace, viewId, viewSnapshot()));
+  } catch (error) { showError(error); return false; }
 }
 async function saveDraft() {
+  if (opening) return false;
   if (!dirty()) return true;
   const saved = clone(draft), isDefinition = definitionMode(), id = isDefinition ? null : activeId;
   try {
     await write(revision => api('/api/save', { revision, kind: id === null ? 'definitions' : 'analysis', id, document: saved }));
     if (definitionMode() === isDefinition && (isDefinition || activeId === id)) baseline = saved;
-    $('error').hidden = true; render(); return true;
+    if (!autosave.blocked) $('error').hidden = true; render(); return true;
   } catch (error) { showError(error); return false; }
 }
 function edit(change, { inspect = true, refresh = true } = {}) {
-  if (!draft) return;
+  if (!draft || opening) return;
   const previous = clone(draft); change(draft);
   if (json(previous) === json(draft)) return;
   history.push(previous); if (history.length > 80) history.shift(); future = [];
   // 拓扑改变时展开摘要；修改对象仍然是原始文件，不编辑折叠结果。
-  const hadFold = !definitionMode() && folded.length > 0;
+  const hadFold = !definitionMode() && (folded.length > 0 || Object.keys(viewPositions).length > 0);
   if (!definitionMode()) { folded = []; viewPositions = {}; }
   if (refresh) render(inspect); else updateStatus();
   if (hadFold) void persistView();
 }
 function undo(redo = false) {
-  if (pending) return;
+  if (busy()) return;
   const from = redo ? future : history, to = redo ? history : future;
   if (!from.length) return;
   to.push(clone(draft)); draft = from.pop(); selection = null;
@@ -120,7 +129,7 @@ function detail(container, label, text) {
 }
 async function dialog(title, build, submit, confirmText = '确定') {
   $('dialog-title').textContent = title; $('dialog-content').replaceChildren(); $('dialog-error').hidden = true;
-  $('confirm-dialog').textContent = confirmText; $('confirm-dialog').disabled = false;
+  $('confirm-dialog').textContent = confirmText; $('confirm-dialog').disabled = false; $('confirm-dialog').hidden = false;
   build($('dialog-content'));
   return new Promise(resolve => {
     const modal = $('dialog'); modal.returnValue = '';
@@ -134,12 +143,18 @@ async function dialog(title, build, submit, confirmText = '确定') {
     modal.showModal();
   });
 }
-async function guard() {
+async function guard({ reload = false } = {}) {
   await writeQueue;
-  if (!dirty()) return true;
+  if (opening) return false;
+  if (autosave.blocked && !reload) { showError(new Error('视图自动保存未完成。请先导出视图草稿，再通过「重新读取」核实磁盘并处理未保存内容。')); return false; }
+  if (!dirty() && !autosave.blocked) return true;
   return dialog('当前文件有未保存修改', container => {
-    container.append(el('p', '切换文件前，请保存修改或明确放弃。取消会保留当前草稿。', 'note'));
-    container.append(button('放弃修改并继续', () => { draft = clone(baseline); history = []; future = []; $('dialog').close('ok'); }, 'danger'));
+    container.append(el('p', '请保存、放弃或取消。放弃只在目标成功打开后生效；取消或打开失败会保留草稿。', 'note'));
+    if (autosave.blocked) {
+      container.append(el('p', '视图保存失败或结果待确认：请先导出草稿，重新读取会使用磁盘版本。', 'note'));
+      $('confirm-dialog').hidden = true;
+    }
+    container.append(button('放弃修改并继续', () => { $('dialog').close('ok'); }, 'danger'));
   }, saveDraft, '保存并继续');
 }
 function assignLayer(id) {
@@ -150,6 +165,7 @@ function assignLayer(id) {
   setMode('select');
 }
 async function openLayer(id) {
+  if (opening) return;
   if (id === activeId && !definitionMode()) { if (id !== null) { selection = { type: 'file' }; inspect(); } return; }
   if (!await guard()) return;
   const changedLayer = id !== activeId;
@@ -165,6 +181,7 @@ async function openConcepts() {
   history = []; future = []; selection = null; render();
 }
 async function toggleLayer(id, checked) {
+  if (opening || autosave.blocked) { renderSidebar(); if (autosave.blocked) showError(autosave.error); return; }
   if (!checked && id === activeId) {
     const next = visible.find(item => item !== id) ?? null;
     if (definitionMode()) activeId = next;
@@ -205,11 +222,17 @@ function renderSidebar() {
     }
     return parent;
   };
-  for (const file of workspace.files) {
-    if (file.kind !== 'analysis') continue;
+  for (const file of [...workspace.files].sort((a, b) => a.path.localeCompare(b.path))) {
+    if (!['analysis', 'view'].includes(file.kind)) continue;
     const parts = file.path.split('/'); parts.pop();
     const parent = folder(parts.join('/'));
-    row(file.id === activeId && !definitionMode() ? draft.name : graphName(file.id), file.id, file.path, parent);
+    if (file.kind === 'view') {
+      const view = workspace.views.find(item => item.id === file.id);
+      const item = el('div', undefined, 'file-row view-row' + (file.id === viewId ? ' current-view' : ''));
+      const open = button('', () => load(view.id), 'file'); open.title = file.path;
+      open.setAttribute('aria-label', '打开视图 ' + view.name);
+      open.append(el('span', '▦', 'file-icon'), el('span', view.name, 'file-text')); item.append(open); parent.append(item);
+    } else row(file.id === activeId && !definitionMode() ? draft.name : graphName(file.id), file.id, file.path, parent);
   }
   for (const directory of workspace.directories) folder(directory);
   if (!workspace.analyses.length) files.append(el('p', '还没有分析图，点击上方新建。', 'note'));
@@ -229,6 +252,8 @@ function projection() {
 function render(withInspector = true) {
   if (!workspace) return;
   const table = definitionMode();
+  $('view-name').textContent = viewId === null ? '临时浏览' : workspace.views.find(item => item.id === viewId).name;
+  $('view-name').title = viewId === null ? '未保存为独立视图文件' : workspace.files.find(item => item.kind === 'view' && item.id === viewId).path;
   $('stage').hidden = table; $('glossary').hidden = !table;
   $('table-view').classList.toggle('active', table); $('graph-view').classList.toggle('active', !table);
   $('table-view').setAttribute('aria-pressed', String(table)); $('graph-view').setAttribute('aria-pressed', String(!table));
@@ -322,7 +347,7 @@ function inspect() {
   }
 }
 async function removeSelection() {
-  if (!selection || pending) return;
+  if (!selection || busy()) return;
   if (selection.type === 'edge') {
     const edge = graph.edges.find(item => item.id === selection.id);
     if (edge?.steps.length !== 1 || edge.steps[0].graphId !== activeId) return;
@@ -346,7 +371,7 @@ async function removeSelection() {
   });
 }
 async function addNode() {
-  if (!workspace || pending) return;
+  if (!workspace || busy()) return;
   if (definitionMode()) { addTerm(); return; }
   if (activeId === null) return;
   setMode('select');
@@ -397,7 +422,7 @@ function setMode(mode) {
   }
 }
 function addTerm() {
-  if (!workspace || !definitionMode() || pending) return;
+  if (!workspace || !definitionMode() || busy()) return;
   const id = uid('node');
   edit(data => { data.nodes.push({ id, label: '', description: '', increaseMeaning: '' }); });
   glossary.focusNode(id);
@@ -420,31 +445,74 @@ const glossary = new GlossaryTable($('glossary'), {
 const canvas = new GraphCanvas($('canvas'), {
   name, graphName,
   select: value => { selection = value; render(); },
-  canMove: id => !pending && !definitionMode() && !!draft?.nodeIds.includes(id),
+  canMove: id => !busy() && !definitionMode() && !!draft?.nodeIds.includes(id),
   move: (id, point) => edit(data => { data.positions[id] = point; }),
   zoom: value => { $('zoom').textContent = value + '%'; },
   hint: text => { $('tool-hint').textContent = text; },
   link: (source, target, sign) => {
-    if (pending || definitionMode() || activeId === null) return;
+    if (busy() || definitionMode() || activeId === null) return;
     if (!draft.nodeIds.includes(source) || !draft.nodeIds.includes(target)) { showError(new Error('请先把两个节点引用到当前图层，再建立此图层的关系。')); return; }
     const id = uid('edge');
     edit(data => { data.edges.push({ id, source, target, sign, condition: '', note: '' }); });
     setMode('select'); selection = { type: 'edge', id: activeId + '/' + id }; render();
   },
 });
-async function load() {
-  if (workspace && !await guard()) return;
+autosave = new ViewAutosave(write, body => api('/api/save', body), state => { viewState = state; updateStatus(); });
+async function load(requestedId) {
+  if (opening || (workspace && !await guard({ reload: true }))) return;
+  opening = true; updateStatus();
   try {
-    const data = await api('/api/workspace'); workspace = data; $('startup-help').hidden = true;
-    const last = data.manifest.lastView;
-    visible = last ? [...last.graphIds] : data.analyses.map(item => item.id);
-    assignLayer(last ? last.activeLayerId : data.analyses[0]?.id ?? null);
-    folded = last ? [...last.collapsedNodeIds] : []; viewPositions = last ? clone(last.positions) : {};
-    viewState = 'saved'; $('error').hidden = true; render(); canvas.fit();
-    if (!last) await persistView();
-  } catch (error) { showError(error); }
+    // 读取、校验叠加与记录最近打开全部确认后，才替换当前画面和草稿。
+    const candidate = await readOpening(api, requestedId);
+    workspace = candidate.workspace; viewId = candidate.viewId;
+    visible = [...candidate.snapshot.graphIds]; assignLayer(candidate.snapshot.activeLayerId);
+    folded = [...candidate.snapshot.collapsedNodeIds]; viewPositions = clone(candidate.snapshot.positions);
+    autosave.reset(); $('startup-help').hidden = true; $('error').hidden = true; render(); canvas.fit();
+  } catch (error) {
+    if (error.code === 'SAVE_UNCERTAIN') autosave.pause(error);
+    if (workspace) error.message = '打开失败；仍保留原画面和草稿，内容未刷新。\n' + error.message;
+    showError(error);
+  } finally { opening = false; updateStatus(); }
+}
+async function newView() {
+  await writeQueue;
+  if (!workspace || busy() || autosave.blocked) return;
+  let label, id, directory;
+  await dialog('保存为视图文件', container => {
+    label = field(container, '视图名称', '', { required: true });
+    id = field(container, '文件 ID', uid('view'), { required: true, pattern: '[a-z][a-z0-9._-]{0,95}' });
+    const sourcePath = workspace.files.find(item => item.kind === 'view' && item.id === viewId)?.path || filePath();
+    directory = field(container, '相对目录', sourcePath.split('/').slice(0, -1).join('/') || '.', { required: true });
+    container.append(el('p', '保存当前勾选、编辑层与折叠状态为 <目录>/<ID>.view.json。此后修改自动写回；不会保存未提交的规则草稿。', 'note'));
+  }, async () => {
+    const document = { schemaVersion: 1, kind: 'view', workspaceId: workspace.manifest.id, id: id.value, name: label.value.trim(), ...viewSnapshot() };
+    const parent = directory.value.trim(), file = (parent === '.' ? '' : parent + '/') + document.id + '.view.json';
+    opening = true; updateStatus();
+    try {
+      const next = await createAndRememberView(api, workspace.revision, document, file);
+      workspace = next; viewId = document.id; autosave.reset(); $('error').hidden = true; render();
+    } catch (error) {
+      if (['VIEW_CREATED_UNBOUND', 'SAVE_UNCERTAIN'].includes(error.code)) {
+        autosave.pause(error); $('dialog').close('cancel'); showError(error); return false;
+      }
+      throw error;
+    } finally { opening = false; updateStatus(); }
+  }, '创建视图文件');
+}
+async function leaveView() {
+  await writeQueue;
+  if (busy() || autosave.blocked || viewId === null) return;
+  opening = true; updateStatus();
+  try {
+    const snapshot = viewSnapshot();
+    await write(revision => api('/api/save', { revision, kind: 'workspace', document: { ...workspace.manifest, lastView: snapshot } }));
+    viewId = null; autosave.reset(); render();
+  } catch (error) { autosave.pause(error); showError(error); }
+  finally { opening = false; updateStatus(); }
 }
 $('new-graph').onclick = () => newGraph().catch(showError);
+$('save-view').onclick = () => newView().catch(showError);
+$('leave-view').onclick = () => leaveView().catch(showError);
 $('table-view').onclick = () => openConcepts().catch(showError);
 $('graph-view').onclick = () => openLayer(activeId).catch(showError);
 $('save').onclick = saveDraft;
@@ -462,17 +530,22 @@ $('unfold').onclick = () => { folded = []; render(); void persistView(); };
 $('dismiss-error').onclick = () => { $('error').hidden = true; };
 $('close-dialog').onclick = $('cancel-dialog').onclick = () => $('dialog').close('cancel');
 for (const mode of ['select', 'positive', 'negative']) $(mode + '-tool').onclick = () => setMode(mode);
-$('export').onclick = () => {
-  if (!draft) return;
-  const url = URL.createObjectURL(new Blob([JSON.stringify(draft, null, 2) + '\n'], { type: 'application/json' }));
-  const link = el('a'); link.href = url; link.download = (definitionMode() ? 'definitions' : activeId) + (dirty() ? '.draft' : '') + '.json'; link.click();
+function download(document, filename) {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(document, null, 2) + '\n'], { type: 'application/json' }));
+  const link = el('a'); link.href = url; link.download = filename; link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+$('export').onclick = () => {
+  if (draft) download(draft, (definitionMode() ? 'definitions' : activeId) + (dirty() ? '.draft' : '') + '.json');
+};
+$('export-view').onclick = () => {
+  if (workspace) download(viewSaveRequest(workspace, viewId, viewSnapshot()).document, (viewId ?? 'workspace') + (viewId === null ? '.draft.json' : '.view.draft.json'));
 };
 window.addEventListener('beforeunload', event => {
-  if (dirty() || pending || viewState === 'failed') { event.preventDefault(); event.returnValue = ''; }
+  if (dirty() || busy() || autosave.blocked) { event.preventDefault(); event.returnValue = ''; }
 });
 document.addEventListener('keydown', event => {
-  if ($('dialog').open) return;
+  if ($('dialog').open || opening) return;
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); document.activeElement?.blur(); void saveDraft(); return; }
   if (event.target.closest('input,textarea,select')) return;
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') { event.preventDefault(); undo(event.shiftKey); }

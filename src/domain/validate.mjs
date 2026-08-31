@@ -1,12 +1,14 @@
 import Ajv from 'ajv';
 import schema from '../../schemas/protocol.schema.json' with { type: 'json' };
 import legacy from '../../schemas/legacy-workspace-v1.schema.json' with { type: 'json' };
+import legacyV2 from '../../schemas/legacy-workspace-v2.schema.json' with { type: 'json' };
 
 // 文件结构只由 JSON Schema 定义；这里补充跨文件语义，不修正输入。
 const ajv = new Ajv({ allErrors: true, strict: true });
 ajv.addSchema(schema);
 ajv.addSchema(legacy);
-const kinds = { workspace: 'workspace', definitions: 'definitionGraph', analysis: 'analysis' };
+ajv.addSchema(legacyV2);
+const kinds = { workspace: 'workspace', definitions: 'definitionGraph', analysis: 'analysis', view: 'view' };
 
 export class ContractError extends Error {
   constructor(code, message) {
@@ -25,7 +27,7 @@ export function assertDocument(document, kind, location = kind) {
 }
 
 export function assertLegacyManifest(document) {
-  const validator = ajv.getSchema(legacy.$id);
+  const validator = ajv.getSchema(document.schemaVersion === 2 ? legacyV2.$id : legacy.$id);
   if (!validator(document)) throw new ContractError('INVALID_LEGACY_WORKSPACE', ajv.errorsText(validator.errors));
 }
 
@@ -46,11 +48,12 @@ function positionsExist(positions, ids, location) {
   for (const id of Object.keys(positions)) requireReference(ids, id, `${location}.positions`);
 }
 
-export function validateWorkspace({ manifest, definitions, analyses }) {
+export function validateWorkspace({ manifest, definitions, analyses, views = [], files = [] }) {
   assertDocument(manifest, 'workspace', 'workspace.json');
   assertDocument(definitions, 'definitions', manifest.definitions);
   analyses.forEach(graph => assertDocument(graph, 'analysis', graph.id));
-  const documents = [definitions, ...analyses];
+  views.forEach(view => assertDocument(view, 'view', view.id));
+  const documents = [definitions, ...analyses, ...views];
   for (const document of documents) {
     if (document.workspaceId !== manifest.id) throw new ContractError('WORKSPACE_MISMATCH', '文档所属工作区与清单不一致');
   }
@@ -68,15 +71,19 @@ export function validateWorkspace({ manifest, definitions, analyses }) {
     positionsExist(graph.positions, included, graph.id);
   }
   unique(manifest.compositions, '叠加组合');
-  if (manifest.lastView?.activeLayerId !== null && manifest.lastView?.activeLayerId !== undefined) {
-    requireReference(graphIds, manifest.lastView.activeLayerId, '最近视图的编辑图层');
-    if (!manifest.lastView.graphIds.includes(manifest.lastView.activeLayerId)) throw new ContractError('HIDDEN_ACTIVE_LAYER', '当前编辑图层必须可见');
-  }
-  for (const view of [...manifest.compositions, ...(manifest.lastView ? [{ id: 'lastView', ...manifest.lastView }] : [])]) {
-    view.graphIds.forEach(id => requireReference(graphIds, id, `组合 ${view.id}`));
+  const viewIds = unique(views, '视图文件');
+  const last = manifest.lastView;
+  if (last?.viewId !== undefined) requireReference(viewIds, last.viewId, '最近打开的视图文件');
+  for (const view of [...views, ...manifest.compositions, ...(last && !('viewId' in last) ? [{ id: 'lastView', ...last }] : [])]) {
+    const location = view.kind === 'view' ? files.find(file => file.kind === 'view' && file.id === view.id)?.path ?? `视图 ${view.id}` : `组合 ${view.id}`;
+    view.graphIds.forEach(id => requireReference(graphIds, id, location));
+    if (view.activeLayerId !== null && view.activeLayerId !== undefined) {
+      requireReference(graphIds, view.activeLayerId, location + ' 的编辑层');
+      if (!view.graphIds.includes(view.activeLayerId)) throw new ContractError('HIDDEN_ACTIVE_LAYER', location + ' 的编辑图层必须可见');
+    }
     const included = new Set(analyses.filter(graph => view.graphIds.includes(graph.id)).flatMap(graph => graph.nodeIds));
-    view.collapsedNodeIds.forEach(id => requireReference(included, id, `组合 ${view.id} 的折叠节点`));
-    positionsExist(view.positions, included, `组合 ${view.id}`);
+    view.collapsedNodeIds.forEach(id => requireReference(included, id, location + ' 的折叠节点'));
+    positionsExist(view.positions, included, location);
   }
-  return { manifest, definitions, analyses };
+  return { manifest, definitions, analyses, views };
 }

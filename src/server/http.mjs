@@ -8,6 +8,7 @@ const assets = new Map([
   ['/app.mjs', [new URL('../web/app.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/canvas.mjs', [new URL('../web/canvas.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/glossary.mjs', [new URL('../web/glossary.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/view-files.mjs', [new URL('../web/view-files.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/style.css', [new URL('../web/style.css', import.meta.url), 'text/css; charset=utf-8']],
   ['/domain/graph.mjs', [new URL('../domain/graph.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
 ]);
@@ -40,7 +41,7 @@ export async function startServer({ workspaceRoot, port = 4319 }) {
         if (request.method === 'GET' && url.pathname === '/api/workspace') {
           send(200, await store.read()); return;
         }
-        if (request.method === 'POST' && ['/api/save', '/api/analyses'].includes(url.pathname)) {
+        if (request.method === 'POST' && ['/api/save', '/api/analyses', '/api/views'].includes(url.pathname)) {
           if (request.headers.origin !== origin || request.headers['content-type'] !== 'application/json') {
             send(403, { error: 'WRITE_ORIGIN_REQUIRED', message: '写入必须来自同源页面并使用 JSON' }); return;
           }
@@ -52,7 +53,7 @@ export async function startServer({ workspaceRoot, port = 4319 }) {
           }
           const body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
           if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('请求必须是 JSON 对象');
-          send(200, await (url.pathname === '/api/save' ? store.save(body) : store.createAnalysis(body))); return;
+          send(200, await (url.pathname === '/api/save' ? store.save(body) : url.pathname === '/api/views' ? store.createView(body) : store.createAnalysis(body))); return;
         }
         send(405, { error: 'METHOD_NOT_ALLOWED', message: '此接口不支持该操作' }); return;
       }

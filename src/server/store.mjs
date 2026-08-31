@@ -27,6 +27,24 @@ export async function createWorkspaceStore(workspaceRoot) {
     try { return await readWorkspace(root); }
     catch (error) { fail('SAVE_UNCERTAIN', '提交后工作区回读失败：' + error.message + '。请核实磁盘内容。'); }
   };
+  const create = (kind, body) => enqueue(async () => {
+    const workspace = await current(body.revision), document = body.document;
+    assertDocument(document, kind);
+    const documents = kind === 'analysis' ? workspace.analyses : workspace.views;
+    if (documents.some(item => item.id === document.id)) fail('DUPLICATE_ID', '此文件类型中的 ID 已存在');
+    if (documents.length >= 300) fail('FILE_LIMIT', '工作区每种类型最多 300 个文件');
+    const file = kind === 'analysis' ? body.file ?? ('analyses/' + document.id + '.analysis.json') : body.file;
+    assertRelativeFile(file);
+    if (!file.endsWith('.' + kind + '.json') || file.split('/').some(part => part.startsWith('.') || part === 'node_modules')) {
+      fail('UNSAFE_PATH', '文件须使用 .' + kind + '.json 后缀，不能存入隐藏或依赖目录');
+    }
+    documents.push(document); workspace.files.push({ kind, id: document.id, path: file }); validateWorkspace(workspace);
+    const text = encode(document), parent = posix.dirname(file);
+    await ensureWorkspaceDirectory(root, parent === '.' ? '' : parent);
+    try { await commitFile(root, file, text, { create: true }); }
+    catch (error) { error.message += '；目标：' + file + '。父目录可能已创建，请重新读取目录。'; throw error; }
+    return verified();
+  });
   return {
     read: () => enqueue(() => readWorkspace(root)),
     save: body => enqueue(async () => {
@@ -36,11 +54,12 @@ export async function createWorkspaceStore(workspaceRoot) {
       let file;
       if (kind === 'definitions') {
         file = workspace.manifest.definitions; workspace.definitions = document;
-      } else if (kind === 'analysis') {
-        const index = workspace.analyses.findIndex(graph => graph.id === id);
-        if (index < 0 || document.id !== id) fail('ID_CHANGED', '分析图 ID 不存在或被更改');
-        file = workspace.files.find(item => item.kind === 'analysis' && item.id === id).path;
-        workspace.analyses[index] = document;
+      } else if (kind === 'analysis' || kind === 'view') {
+        const documents = kind === 'analysis' ? workspace.analyses : workspace.views;
+        const index = documents.findIndex(item => item.id === id);
+        if (index < 0 || document.id !== id) fail('ID_CHANGED', '此类型的文件 ID 不存在或被更改');
+        file = workspace.files.find(item => item.kind === kind && item.id === id).path;
+        documents[index] = document;
       } else if (kind === 'workspace') {
         const { name: oldName, compositions: oldViews, lastView: oldView, ...oldFixed } = workspace.manifest;
         const { name, compositions, lastView, ...fixed } = document;
@@ -51,24 +70,8 @@ export async function createWorkspaceStore(workspaceRoot) {
       await commitFile(root, file, encode(document));
       return verified();
     }),
-    createAnalysis: body => enqueue(async () => {
-      const workspace = await current(body.revision), document = body.document;
-      assertDocument(document, 'analysis');
-      if (workspace.analyses.some(graph => graph.id === document.id)) fail('DUPLICATE_ID', '此分析图 ID 已存在');
-      if (workspace.analyses.length >= 300) fail('FILE_LIMIT', '工作区最多 300 张分析图');
-      const file = body.file ?? ('analyses/' + document.id + '.analysis.json');
-      assertRelativeFile(file);
-      if (!file.endsWith('.analysis.json') || file.split('/').some(part => part.startsWith('.') || part === 'node_modules')) {
-        fail('UNSAFE_PATH', '分析图须使用 .analysis.json 后缀，不能存入隐藏或依赖目录');
-      }
-      workspace.analyses.push(document); validateWorkspace(workspace);
-      const text = encode(document), parent = posix.dirname(file);
-      await ensureWorkspaceDirectory(root, parent === '.' ? '' : parent);
-      try { await commitFile(root, file, text, { create: true }); }
-      catch (error) { error.message += '；目标：' + file + '。父目录可能已创建，请重新读取目录。'; throw error; }
-      // 文件一旦完整创建，就由目录扫描发现，无第二份登记清单。
-      return verified();
-    }),
+    createAnalysis: body => create('analysis', body),
+    createView: body => create('view', body),
     close: async () => { if (closed) return; closed = true; await queue; await release(); },
   };
 }

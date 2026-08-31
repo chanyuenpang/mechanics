@@ -9,5 +9,6 @@
 - [CLI 与文件保存](features/cli-workspace-storage.md)：安装与资料分离、目录发现、版本、保存门禁及验证范围。
 - [编辑器与图层](features/editor-navigation-and-layers.md)：概念表、分析图、草稿保存归属与最近视图。
 - [独立工作流决策](adr/2026-08-31-independent-project-ownership.md)：源码、游戏资料与开发知识的归属。
+- [独立视图文件决策](adr/2026-08-31-view-file-autosave.md)：自动写回、最近引用、失败草稿保护与显式 v3 迁移。
 
 操作说明和完整字段说明位于 `docs/`；Truth 记录当前事实，ADR 记录重要取舍。任务报告与成功提示本身不证明知识文档已经更新。

@@ -61,7 +61,7 @@ export async function readDocument(root, file) {
   catch (error) { throw new ContractError('INVALID_JSON', file + ' 不是有效的 UTF-8 JSON：' + error.message); }
 }
 export async function discover(root) {
-  const analysisPaths = [], directories = []; let count = 0;
+  const analysisPaths = [], viewPaths = [], directories = []; let count = 0;
   async function visit(directory, depth) {
     if (depth > 24) throw new ContractError('FILE_LIMIT', '工作区目录深度超过 24 层');
     const path = directory ? resolve(root, directory) : root;
@@ -76,17 +76,18 @@ export async function discover(root) {
       const info = await lstat(resolve(root, file));
       if (info.isSymbolicLink()) throw new ContractError('UNSAFE_PATH', '拒绝目录中的符号链接或 junction：' + file);
       if (info.isDirectory()) { assertRelativeFile(file + '/check.json'); directories.push(file); await visit(file, depth + 1); }
-      else if (entry.name.endsWith('.analysis.json')) {
-        if (!info.isFile()) throw new ContractError('UNSAFE_PATH', '分析图必须是普通文件：' + file);
-        analysisPaths.push(file);
-        if (analysisPaths.length > 300) throw new ContractError('FILE_LIMIT', '工作区最多 300 张分析图');
+      else if (entry.name.endsWith('.analysis.json') || entry.name.endsWith('.view.json')) {
+        if (!info.isFile()) throw new ContractError('UNSAFE_PATH', '规则与视图必须是普通文件：' + file);
+        const paths = entry.name.endsWith('.view.json') ? viewPaths : analysisPaths;
+        paths.push(file);
+        if (paths.length > 300) throw new ContractError('FILE_LIMIT', '工作区每种类型最多 300 个文件');
       }
     }
   }
   await visit('', 0);
-  return { analysisPaths: analysisPaths.sort(), directories: directories.sort() };
+  return { analysisPaths: analysisPaths.sort(), viewPaths: viewPaths.sort(), directories: directories.sort() };
 }
-// override 只供显式 v1 迁移验证候选配置使用，HTTP 不开放此参数。
+// override 只供显式迁移验证候选配置使用，HTTP 不开放此参数。
 export async function readWorkspace(workspaceRoot, { manifestOverride } = {}) {
   if (!workspaceRoot) throw new ContractError('WORKSPACE_REQUIRED', '必须指定或定位工作区目录');
   const root = await realpath(resolve(workspaceRoot));
@@ -98,21 +99,24 @@ export async function readWorkspace(workspaceRoot, { manifestOverride } = {}) {
     physicalFiles.add(identity); snapshots.set(file, raw); return document;
   }
   const diskManifest = await read('workspace.json'), manifest = manifestOverride ?? diskManifest;
-  if (manifest.schemaVersion === 1 && manifest.kind === 'workspace') {
-    throw new ContractError('WORKSPACE_UPGRADE_REQUIRED', '此工作区仍使用 v1 文件清单。请关闭旧服务后执行 game-rule-analyzer migrate --workspace <目录>。');
+  if ([1, 2].includes(manifest.schemaVersion) && manifest.kind === 'workspace') {
+    throw new ContractError('WORKSPACE_UPGRADE_REQUIRED', '此工作区仍使用 v' + manifest.schemaVersion + '。请关闭旧服务后执行 game-rule-analyzer migrate --workspace <目录> 升级为 v3。');
   }
   assertDocument(manifest, 'workspace', 'workspace.json');
   const definitions = await read(manifest.definitions);
-  const { analysisPaths, directories } = await discover(root);
-  const analyses = [];
-  for (const file of analysisPaths) analyses.push(await read(file));
-  const workspace = validateWorkspace({ manifest, definitions, analyses });
+  const { analysisPaths, viewPaths, directories } = await discover(root);
+  const analyses = [], views = [];
+  for (const [paths, documents, kind] of [[analysisPaths, analyses, 'analysis'], [viewPaths, views, 'view']]) {
+    for (const file of paths) { const document = await read(file); assertDocument(document, kind, file); documents.push(document); }
+  }
+  const files = [{ kind: 'workspace', id: manifest.id, path: 'workspace.json' },
+    { kind: 'definitions', path: manifest.definitions },
+    ...analyses.map((graph, index) => ({ kind: 'analysis', id: graph.id, path: analysisPaths[index] })),
+    ...views.map((view, index) => ({ kind: 'view', id: view.id, path: viewPaths[index] }))];
+  const workspace = validateWorkspace({ manifest, definitions, analyses, views, files });
   const hash = createHash('sha256');
   for (const [file, raw] of [...snapshots].sort(([a], [b]) => a.localeCompare(b))) hash.update(JSON.stringify([file, raw]));
   // 空目录变化也会改变文件树版本，避免目录操作基于旧树执行。
   hash.update(JSON.stringify(directories));
-  const files = [{ kind: 'workspace', id: manifest.id, path: 'workspace.json' },
-    { kind: 'definitions', path: manifest.definitions },
-    ...analyses.map((graph, index) => ({ kind: 'analysis', id: graph.id, path: analysisPaths[index] }))];
   return { ...workspace, workspaceRoot: root, files, directories, revision: hash.digest('hex') };
 }
