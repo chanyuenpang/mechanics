@@ -1,7 +1,7 @@
 {
-  "version": "0.2.32",
-  "id": "game-rule-analyzer",
-  "name": "游戏规则分析工具",
+  "version": "0.2.35",
+  "id": "game-graph",
+  "name": "Game-Graph",
   "maxTasksToKeep": 9,
   "planning": true,
   "autoUpdate": true,

@@ -22,7 +22,8 @@ for (const path of names) {
   assert.match(path, /^(src\/|schemas\/|docs\/|examples\/|README\.md$|package\.json$)/);
   assert.ok(!/(?:^|\/)(?:node_modules|\.git|\.claw|design)(?:\/|$)|\.lock$|\.tmp$|\.log$/.test(path), path);
 }
-for (const path of ['src/server/cli.mjs', 'src/web/glossary.mjs', 'src/web/view-files.mjs', 'src/web/index.html', 'schemas/protocol.schema.json', 'schemas/legacy-workspace-v2.schema.json']) assert.ok(names.includes(path), path);
+for (const path of ['src/server/cli.mjs', 'src/web/glossary.mjs', 'src/web/view-files.mjs', 'src/web/graph-compute.mjs',
+  'src/web/graph-compute-kernel.mjs', 'src/web/graph-compute-worker.js', 'src/web/geometry-settle.mjs', 'src/web/index.html', 'schemas/protocol.schema.json']) assert.ok(names.includes(path), path);
 await mkdir(join(root, 'dist'), { recursive: true });
 const [packed] = JSON.parse(command(process.execPath, [npm, ...packArgs, '--pack-destination', join(root, 'dist')]));
 assert.deepEqual(packed.files.map(file => file.path), names);
@@ -33,8 +34,8 @@ let child;
 try {
   const install = join(temporary, 'install');
   command(process.execPath, [npm, 'install', '--prefix', install, '--ignore-scripts', '--no-audit', '--no-fund', tarball], temporary);
-  const installed = join(install, 'node_modules/game-rule-analyzer');
-  const bin = join(install, 'node_modules/.bin/game-rule-analyzer' + (process.platform === 'win32' ? '.cmd' : ''));
+  const installed = join(install, 'node_modules/game-graph');
+  const bin = join(install, 'node_modules/.bin/game-graph' + (process.platform === 'win32' ? '.cmd' : ''));
   let binVersion;
   if (process.platform === 'win32') {
     // 只运行安装生成的命令 shim；不把此 shell 用于文件操作。
@@ -48,10 +49,17 @@ try {
   const workspace = join(temporary, '规则资料');
   command(process.execPath, [cli, 'init', workspace, '--id', 'package-check'], temporary);
   const manifestBefore = await readFile(join(workspace, 'workspace.json'), 'utf8');
-  const data = JSON.parse(command(process.execPath, [cli, 'validate'], join(workspace, 'analyses')));
+  const data = JSON.parse(command(process.execPath, [cli, 'validate'], join(workspace, 'mechanics')));
   assert.equal(data.workspaceId, 'package-check');
+  const scopes = JSON.parse(command(process.execPath, [cli, 'agent', 'scopes'], join(workspace, 'mechanics')));
+  assert.equal(scopes.workspaceId, 'package-check');
+  assert.equal(scopes.queryApiVersion, 2);
+  const guide = JSON.parse(command(process.execPath, [cli, 'agent', 'guide'], temporary));
+  assert.equal(guide.readingContract.version, 2);
+  const search = JSON.parse(command(process.execPath, [cli, 'agent', 'search', '--query', '未建模概念'], join(workspace, 'mechanics')));
+  assert.equal(search.output.totalMatches, 0);
   // 真实运行安装包中的 CLI 和静态页面，启动 cwd 在资料子目录而非源码内。
-  child = spawn(process.execPath, [cli, 'serve', '--port', '0'], { cwd: join(workspace, 'analyses'), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  child = spawn(process.execPath, [cli, 'serve', '--port', '0'], { cwd: join(workspace, 'mechanics'), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   const url = await new Promise((accept, reject) => {
     let output = '', errors = '';
     const timeout = setTimeout(() => reject(new Error('安装包 CLI 启动超时：' + errors)), 15000);
@@ -61,7 +69,11 @@ try {
     child.stdout.on('data', chunk => { output += chunk; const match = output.match(/http:\/\/127\.0\.0\.1:\d+\/#session=[\w-]+/); if (match) { clearTimeout(timeout); accept(match[0]); } });
   });
   const origin = new URL(url).origin, token = new URL(url).hash.slice('#session='.length);
-  for (const asset of ['/', '/app.mjs', '/canvas.mjs', '/glossary.mjs', '/view-files.mjs', '/style.css', '/domain/graph.mjs']) assert.equal((await fetch(origin + asset)).status, 200, asset);
+  for (const asset of ['/', '/app.mjs', '/canvas.mjs', '/glossary.mjs', '/view-files.mjs', '/graph-compute.mjs',
+    '/graph-compute-kernel.mjs', '/graph-compute-worker.js', '/geometry-settle.mjs', '/style.css',
+    '/vendor/elk.js', '/vendor/elk-worker.js', '/vendor/webcola.js', '/domain/graph.mjs', '/domain/view.mjs']) {
+    assert.equal((await fetch(origin + asset)).status, 200, asset);
+  }
   const response = await fetch(origin + '/api/workspace', { headers: { Authorization: 'Bearer ' + token } });
   assert.equal(response.status, 200);
   assert.equal((await response.json()).workspaceRoot, await realpath(workspace));

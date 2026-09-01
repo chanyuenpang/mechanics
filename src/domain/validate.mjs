@@ -1,15 +1,12 @@
 import Ajv from 'ajv';
 import { assertContainment } from './graph.mjs';
+import { registeredMechanicIds, visibleMechanicIds } from './view.mjs';
 import schema from '../../schemas/protocol.schema.json' with { type: 'json' };
-import legacy from '../../schemas/legacy-workspace-v1.schema.json' with { type: 'json' };
-import legacyV2 from '../../schemas/legacy-workspace-v2.schema.json' with { type: 'json' };
 
 // 文件结构只由 JSON Schema 定义；这里补充跨文件语义，不修正输入。
 const ajv = new Ajv({ allErrors: true, strict: true });
 ajv.addSchema(schema);
-ajv.addSchema(legacy);
-ajv.addSchema(legacyV2);
-const kinds = { workspace: 'workspace', definitions: 'definitionGraph', analysis: 'analysis', view: 'view' };
+const kinds = { workspace: 'workspace', definitions: 'definitionGraph', mechanic: 'mechanic', view: 'view' };
 
 export class ContractError extends Error {
   constructor(code, message) {
@@ -25,11 +22,6 @@ export function assertDocument(document, kind, location = kind) {
   if (!validator(document)) {
     throw new ContractError('INVALID_DOCUMENT', `${location}：${ajv.errorsText(validator.errors, { separator: '；' })}`);
   }
-}
-
-export function assertLegacyManifest(document) {
-  const validator = ajv.getSchema(document.schemaVersion === 2 ? legacyV2.$id : legacy.$id);
-  if (!validator(document)) throw new ContractError('INVALID_LEGACY_WORKSPACE', ajv.errorsText(validator.errors));
 }
 
 function unique(items, label) {
@@ -49,21 +41,21 @@ function positionsExist(positions, ids, location) {
   for (const id of Object.keys(positions)) requireReference(ids, id, `${location}.positions`);
 }
 
-export function validateWorkspace({ manifest, definitions, analyses, views = [], files = [] }) {
+export function validateWorkspace({ manifest, definitions, mechanics, views = [], files = [] }) {
   assertDocument(manifest, 'workspace', 'workspace.json');
   assertDocument(definitions, 'definitions', manifest.definitions);
-  analyses.forEach(graph => assertDocument(graph, 'analysis', graph.id));
+  mechanics.forEach(graph => assertDocument(graph, 'mechanic', graph.id));
   views.forEach(view => assertDocument(view, 'view', view.id));
-  const documents = [definitions, ...analyses, ...views];
+  const documents = [definitions, ...mechanics, ...views];
   for (const document of documents) {
     if (document.workspaceId !== manifest.id) throw new ContractError('WORKSPACE_MISMATCH', '文档所属工作区与清单不一致');
   }
   const nodes = unique(definitions.nodes, '节点定义图');
   positionsExist(definitions.positions, nodes, manifest.definitions);
-  const graphIds = unique(analyses, '分析图清单');
-  for (const graph of analyses) {
+  const graphIds = unique(mechanics, '机制图清单');
+  for (const graph of mechanics) {
     const included = new Set(graph.nodeIds);
-    unique(graph.edges, `分析图 ${graph.id} 的连线`);
+    unique(graph.edges, `机制图 ${graph.id} 的连线`);
     graph.nodeIds.forEach(id => requireReference(nodes, id, graph.id));
     for (const edge of graph.edges) {
       requireReference(included, edge.source, `${graph.id}/${edge.id}.source`);
@@ -76,16 +68,26 @@ export function validateWorkspace({ manifest, definitions, analyses, views = [],
   const viewIds = unique(views, '视图文件');
   const last = manifest.lastView;
   if (last?.viewId !== undefined) requireReference(viewIds, last.viewId, '最近打开的视图文件');
-  for (const view of [...views, ...manifest.compositions, ...(last && !('viewId' in last) ? [{ id: 'lastView', ...last }] : [])]) {
-    const location = view.kind === 'view' ? files.find(file => file.kind === 'view' && file.id === view.id)?.path ?? `视图 ${view.id}` : `组合 ${view.id}`;
+  for (const view of [...manifest.compositions, ...(last && !('viewId' in last) ? [{ id: 'lastView', ...last }] : [])]) {
+    const location = `组合 ${view.id}`;
     view.graphIds.forEach(id => requireReference(graphIds, id, location));
     if (view.activeLayerId !== null && view.activeLayerId !== undefined) {
       requireReference(graphIds, view.activeLayerId, location + ' 的编辑层');
       if (!view.graphIds.includes(view.activeLayerId)) throw new ContractError('HIDDEN_ACTIVE_LAYER', location + ' 的编辑图层必须可见');
     }
-    const included = new Set(analyses.filter(graph => view.graphIds.includes(graph.id)).flatMap(graph => graph.nodeIds));
+    const included = new Set(mechanics.filter(graph => view.graphIds.includes(graph.id)).flatMap(graph => graph.nodeIds));
     view.collapsedNodeIds.forEach(id => requireReference(included, id, location + ' 的折叠节点'));
-    positionsExist(view.positions, included, location);
+    // 视图可记住暂时隐藏的已定义节点坐标；Visible 只控制显示，不销毁布局。
+    positionsExist(view.positions, nodes, location);
   }
-  return { manifest, definitions, analyses, views };
+  for (const view of views) {
+    const location = files.find(file => file.kind === 'view' && file.id === view.id)?.path ?? `视图 ${view.id}`;
+    const registered = registeredMechanicIds(view);
+    if (new Set(registered).size !== registered.length) throw new ContractError('DUPLICATE_ID', `${location} 中机制注册重复`);
+    registered.forEach(id => requireReference(graphIds, id, location));
+    const included = new Set(mechanics.filter(graph => registered.includes(graph.id)).flatMap(graph => graph.nodeIds));
+    view.collapsedNodeIds.forEach(id => requireReference(included, id, location + ' 的折叠节点'));
+    positionsExist(view.positions, nodes, location);
+  }
+  return { manifest, definitions, mechanics, views };
 }

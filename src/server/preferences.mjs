@@ -6,7 +6,7 @@ import { writeExclusive } from './files.mjs';
 
 // 本机工具偏好独立于游戏工作区；只允许一个固定的布尔选项。
 export function preferencePath() {
-  return join(process.platform === 'win32' ? process.env.APPDATA || join(homedir(), 'AppData', 'Roaming') : process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'game-rule-analyzer', 'preferences.json');
+  return join(process.platform === 'win32' ? process.env.APPDATA || join(homedir(), 'AppData', 'Roaming') : process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'game-graph', 'preferences.json');
 }
 function validate(value) {
   if (!value || value.version !== 1 || typeof value.snapToGrid !== 'boolean' || Object.keys(value).some(key => !['version', 'snapToGrid'].includes(key))) throw new Error('工具偏好文件格式无效，请检查 preferences.json');

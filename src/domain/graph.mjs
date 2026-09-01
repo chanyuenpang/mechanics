@@ -2,8 +2,8 @@
 export function compose(workspace, selectedIds) {
   const graphIds = [...new Set(selectedIds)].sort();
   const graphs = graphIds.map(id => {
-    const graph = workspace.analyses.find(item => item.id === id);
-    if (!graph) throw new Error(`选中的分析图不存在：${id}`);
+    const graph = workspace.mechanics.find(item => item.id === id);
+    if (!graph) throw new Error(`选中的机制图不存在：${id}`);
     return graph;
   });
   const referenced = new Set(graphs.flatMap(graph => graph.nodeIds));
@@ -14,15 +14,15 @@ export function compose(workspace, selectedIds) {
     })),
     edges: graphs.flatMap(graph => graph.edges.map(edge => ({
       ...structuredClone(edge), id: `${graph.id}/${edge.id}`,
-      relation: graph.schemaVersion === 1 ? 'influence' : edge.relation,
-      steps: [{ graphId: graph.id, edgeId: edge.id, ...structuredClone(edge), relation: graph.schemaVersion === 1 ? 'influence' : edge.relation }], hiddenNodes: [],
+      relation: edge.relation,
+      steps: [{ graphId: graph.id, edgeId: edge.id, ...structuredClone(edge) }], hiddenNodes: [],
     }))).sort((a, b) => a.id.localeCompare(b.id)),
   };
   assertContainment(result.edges);
   return result;
 }
 
-// 等号双向传递宏观影响，允许闭环；自连接不表达两个概念间的关系。
+// 等号沿 source → target 单向传递宏观影响，允许显式闭环；自连接不表达两个概念间的关系。
 export function assertContainment(edges) {
   for (const edge of edges) if (edge.relation === 'contains' && edge.source === edge.target) {
     const error = new Error(`包含关系不能连接自身：[${edge.id}]`);
@@ -30,21 +30,9 @@ export function assertContainment(edges) {
   }
 }
 
-// 只展开计算方向，不新增或改写持久化关系。反向步骤保留原始来源。
+// 所有关系均按保存的箭头方向遍历，不隐式添加反向关系。
 function traversableEdges(graph) {
-  return graph.edges.flatMap(edge => edge.relation === 'contains' ? [edge, {
-    ...edge, source: edge.target, target: edge.source,
-    steps: edge.steps?.slice().reverse().map(step => ({ ...step, traversalSource: step.target, traversalTarget: step.source })),
-  }] : [edge]);
-}
-
-export function upgradeAnalysis(document) {
-  const next = structuredClone(document);
-  if (next.schemaVersion === 1) {
-    next.schemaVersion = 2;
-    next.edges.forEach(edge => { edge.relation = 'influence'; });
-  } else if (next.schemaVersion !== 2) throw new Error('不支持的研究版本');
-  return next;
+  return graph.edges;
 }
 
 export function multiplySigns(signs) {
@@ -95,15 +83,25 @@ export function collapse(graph, nodeId) {
   };
 }
 
-export function tracePaths(graph, source, target, { maxPaths = 50, maxDepth = 16 } = {}) {
+export function tracePaths(graph, source, target, { maxPaths = 50, maxDepth = 16, maxExpansions = 10000 } = {}) {
   assertContainment(graph.edges);
   if (!Number.isInteger(maxPaths) || maxPaths < 1 || !Number.isInteger(maxDepth) || maxDepth < 1) throw new Error('路径数量和深度上限必须是正整数');
   const ids = new Set(graph.nodes.map(node => node.id));
   if (!ids.has(source) || !ids.has(target)) throw new Error('查询端点不在当前组合中');
   const paths = [];
   const traversal = traversableEdges(graph);
+  if (!Number.isInteger(maxExpansions) || maxExpansions < 1) throw new Error('搜索展开上限必须是正整数');
+  const adjacent = new Map();
+  for (const edge of traversal) {
+    if (!adjacent.has(edge.source)) adjacent.set(edge.source, []);
+    adjacent.get(edge.source).push(edge);
+  }
+  const reasons = new Set();
+  let expandedStates = 0;
   let truncated = false;
   function visit(node, edges, seen) {
+    if (expandedStates >= maxExpansions) { truncated = true; reasons.add('maxExpansions'); return; }
+    expandedStates++;
     if (node === target && edges.length) {
       if (paths.length >= maxPaths) { truncated = true; return; }
       const influences = edges.filter(edge => edge.relation !== 'contains');
@@ -112,15 +110,25 @@ export function tracePaths(graph, source, target, { maxPaths = 50, maxDepth = 16
         steps: edges.flatMap(edge => structuredClone(edge.steps)) });
       return;
     }
-    const nextEdges = traversal.filter(edge => edge.source === node && !seen.has(edge.target));
-    if (edges.length >= maxDepth) { if (nextEdges.length) truncated = true; return; }
+    const nextEdges = (adjacent.get(node) ?? []).filter(edge => !seen.has(edge.target));
+    if (edges.length >= maxDepth) { if (nextEdges.length) { truncated = true; reasons.add('maxDepth'); } return; }
     for (const edge of nextEdges) {
-      if (paths.length >= maxPaths) { truncated = true; return; }
+      if (paths.length >= maxPaths) { truncated = true; reasons.add('maxPaths'); return; }
+      if (expandedStates >= maxExpansions) { truncated = true; reasons.add('maxExpansions'); return; }
       visit(edge.target, [...edges, edge], new Set([...seen, edge.target]));
     }
   }
   visit(source, [], new Set([source]));
-  return { graphIds: [...graph.graphIds], paths, truncated, interpretation: '仅解释当前模型中的有限简单路径；未找到不等于现实中无作用，不推断净收益或胜率。' };
+  return { graphIds: [...graph.graphIds], paths, truncated, expandedStates, truncationReasons: [...reasons], interpretation: '仅解释当前模型中的有限简单路径；未找到不等于现实中无作用，不推断净收益或胜率。' };
+}
+
+export function summarizePaths(result) {
+  const positive = result.paths.filter(path => path.sign === 1).length;
+  const negative = result.paths.filter(path => path.sign === -1).length;
+  const neutral = result.paths.length - positive - negative;
+  const kind = positive && negative ? 'mixed' : positive ? 'positive' : negative ? 'negative' : neutral ? 'neutral_only' : 'not_found';
+  const conclusion = { mixed: '促进与抑制路径并存', positive: '存在促进影响', negative: '存在抑制影响', neutral_only: '仅找到等号关联', not_found: '未找到影响路径' }[kind];
+  return { kind, conclusion, positive, negative, neutral, complete: !result.truncated };
 }
 
 // 沿原始关系查找下游，折叠不改变可追踪范围，循环不重复包含起点。

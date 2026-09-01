@@ -19,14 +19,14 @@ async function fixture(t) {
 
 test('单文件保存真实落盘，其他图层字节保持不变，释放锁后可以重新打开', async t => {
   const { directory, store, workspace } = await fixture(t);
-  const pathOf = id => workspace.files.find(file => file.kind === 'analysis' && file.id === id).path;
-  const before = await readFile(join(directory, pathOf(workspace.analyses[1].id)), 'utf8');
-  const document = structuredClone(workspace.analyses[0]);
+  const pathOf = id => workspace.files.find(file => file.kind === 'mechanic' && file.id === id).path;
+  const before = await readFile(join(directory, pathOf(workspace.mechanics[1].id)), 'utf8');
+  const document = structuredClone(workspace.mechanics[0]);
   document.positions.draw = { x: 123, y: 456 }; document.edges[0].sign = -1;
-  const saved = await store.save({ revision: workspace.revision, kind: 'analysis', id: document.id, document });
+  const saved = await store.save({ revision: workspace.revision, kind: 'mechanic', id: document.id, document });
   assert.notEqual(saved.revision, workspace.revision);
   assert.deepEqual(JSON.parse(await readFile(join(directory, pathOf(document.id)), 'utf8')), document);
-  assert.equal(await readFile(join(directory, pathOf(workspace.analyses[1].id)), 'utf8'), before);
+  assert.equal(await readFile(join(directory, pathOf(workspace.mechanics[1].id)), 'utf8'), before);
   await assert.rejects(createWorkspaceStore(directory), { code: 'WORKSPACE_LOCKED' });
   await store.close();
   const reopened = await createWorkspaceStore(directory); await reopened.close();
@@ -55,26 +55,26 @@ test('删除被其他图层引用的定义、非法文件登记和非法边失�
   assert.equal(await readFile(join(directory, workspace.manifest.definitions), 'utf8'), before);
   const manifest = structuredClone(workspace.manifest); manifest.definitions = 'different.json';
   await assert.rejects(store.save({ revision: workspace.revision, kind: 'workspace', document: manifest }), { code: 'MANIFEST_PROTECTED' });
-  const graph = structuredClone(workspace.analyses[0]); graph.edges[0].sign = 0;
-  await assert.rejects(store.save({ revision: workspace.revision, kind: 'analysis', id: graph.id, document: graph }), { code: 'INVALID_DOCUMENT' });
+  const graph = structuredClone(workspace.mechanics[0]); graph.edges[0].sign = 0;
+  await assert.rejects(store.save({ revision: workspace.revision, kind: 'mechanic', id: graph.id, document: graph }), { code: 'INVALID_DOCUMENT' });
   assert.equal((await store.read()).revision, workspace.revision);
 });
 
-test('新建嵌套分析文件自然发现，不改配置；同名文件绝不覆盖', async t => {
+test('新建嵌套机制文件自然发现，不改配置；同名文件绝不覆盖', async t => {
   const { directory, store, workspace } = await fixture(t);
-  const document = { schemaVersion: 1, kind: 'analysis', workspaceId: workspace.manifest.id, id: 'new-layer', name: '新图层', scope: '抽象规则', nodeIds: ['enemy', 'melee'], edges: [{ id: 'counter', source: 'enemy', target: 'melee', sign: -1, condition: '', note: '' }], positions: {} };
+  const document = { schemaVersion: 1, kind: 'mechanic', workspaceId: workspace.manifest.id, id: 'new-layer', name: '新图层', scope: '抽象规则', nodeIds: ['enemy', 'melee'], edges: [{ id: 'counter', source: 'enemy', target: 'melee', relation: 'influence', sign: -1, condition: '', note: '' }], positions: {} };
   const before = await readFile(join(directory, 'workspace.json'), 'utf8');
-  const occupied = workspace.files.find(item => item.kind === 'analysis').path;
+  const occupied = workspace.files.find(item => item.kind === 'mechanic').path;
   const occupiedBefore = await readFile(join(directory, occupied), 'utf8');
-  await assert.rejects(store.createAnalysis({ revision: workspace.revision, document, file: occupied }), { code: 'FILE_EXISTS' });
+  await assert.rejects(store.createMechanic({ revision: workspace.revision, document, file: occupied }), { code: 'FILE_EXISTS' });
   assert.equal(await readFile(join(directory, occupied), 'utf8'), occupiedBefore);
-  const path = '关卡/第一 层/new-layer.analysis.json', file = join(directory, path);
-  const created = await store.createAnalysis({ revision: workspace.revision, document, file: path });
-  assert.equal(created.analyses.length, workspace.analyses.length + 1);
+  const path = '关卡/第一 层/new-layer.mechanic.json', file = join(directory, path);
+  const created = await store.createMechanic({ revision: workspace.revision, document, file: path });
+  assert.equal(created.mechanics.length, workspace.mechanics.length + 1);
   assert.ok(created.files.some(file => file.path === path && file.id === document.id));
   assert.equal(await readFile(join(directory, 'workspace.json'), 'utf8'), before);
   assert.deepEqual(JSON.parse(await readFile(file, 'utf8')), document);
-  await assert.rejects(store.createAnalysis({ revision: created.revision, document }), { code: 'DUPLICATE_ID' });
+  await assert.rejects(store.createMechanic({ revision: created.revision, document }), { code: 'DUPLICATE_ID' });
 });
 
 test('最近叠加视图保存图层引用，重开时基于源文件最新内容组合', async t => {
@@ -82,8 +82,8 @@ test('最近叠加视图保存图层引用，重开时基于源文件最新内�
   const document = structuredClone(workspace.manifest);
   document.lastView = { graphIds: ['basic-rules', 'hand'], activeLayerId: 'hand', collapsedNodeIds: ['repel'], positions: {} };
   await store.save({ revision: workspace.revision, kind: 'workspace', document });
-  const hand = structuredClone(workspace.analyses.find(graph => graph.id === 'hand')); hand.edges[0].sign = -1;
-  const path = workspace.files.find(file => file.kind === 'analysis' && file.id === 'hand').path;
+  const hand = structuredClone(workspace.mechanics.find(graph => graph.id === 'hand')); hand.edges[0].sign = -1;
+  const path = workspace.files.find(file => file.kind === 'mechanic' && file.id === 'hand').path;
   await writeFile(join(directory, path), JSON.stringify(hand));
   const reopened = await readWorkspace(directory);
   assert.deepEqual(reopened.manifest.lastView, document.lastView);
@@ -102,11 +102,11 @@ test('创建图层逐级拒绝指向外部目录的 junction，未写外部文�
   const original = await readWorkspace(root);
   const manifest = structuredClone(original.manifest); manifest.compositions = [];
   await writeFile(join(root, 'workspace.json'), JSON.stringify(manifest));
-  await rm(join(root, 'analyses'), { recursive: true });
+  await rm(join(root, 'mechanics'), { recursive: true });
   const outside = join(directory, 'outside'); await mkdir(outside);
-  await symlink(outside, join(root, 'analyses'), process.platform === 'win32' ? 'junction' : 'dir');
+  await symlink(outside, join(root, 'mechanics'), process.platform === 'win32' ? 'junction' : 'dir');
   await assert.rejects(createWorkspaceStore(root), { code: 'UNSAFE_PATH' });
-  await assert.rejects(readFile(join(outside, 'escape.analysis.json')), { code: 'ENOENT' });
+  await assert.rejects(readFile(join(outside, 'escape.mechanic.json')), { code: 'ENOENT' });
 });
 
 test('HTTP 写入须携带同源 JSON 与会话，返回实际保存和过期冲突状态', async t => {

@@ -16,7 +16,7 @@ export async function writeExclusive(path, text) {
 }
 export async function commitFile(root, file, text, { create = false } = {}) {
   const path = await workspacePath(root, file, { allowMissing: create });
-  const temp = `${path}.${randomUUID()}.rule-analyzer.tmp`;
+  const temp = `${path}.${randomUUID()}.game-graph.tmp`;
   let committed = false;
   try {
     await writeExclusive(temp, text);
@@ -34,11 +34,11 @@ export async function commitFile(root, file, text, { create = false } = {}) {
   }
 }
 export async function acquireWorkspaceLock(root) {
-  const path = resolve(root, '.rule-analyzer.lock');
+  const path = resolve(root, '.game-graph.lock');
   const identity = JSON.stringify({ pid: process.pid, owner: randomUUID() });
   try { await writeExclusive(path, identity); }
   catch (error) {
-    if (error.code === 'EEXIST') throw new ContractError('WORKSPACE_LOCKED', '工作区已有服务或遗留锁。请关闭服务；确认无写入者后才可手动移除 .rule-analyzer.lock。');
+    if (error.code === 'EEXIST') throw new ContractError('WORKSPACE_LOCKED', '工作区已有服务或遗留锁。请关闭服务；确认无写入者后才可手动移除 .game-graph.lock。');
     throw error;
   }
   return async () => {

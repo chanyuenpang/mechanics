@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>规则图 · 游戏规则分析工具</title>
+  <title>规则图 · Game-Graph</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <div id="startup-help" role="status">请通过 CLI 启动编辑器，再打开终端打印的完整 http://127.0.0.1 网址。直接双击 index.html 无法加载模块或读写工作区。<code>game-rule-analyzer serve --workspace &lt;资料目录&gt;</code></div>
+  <div id="startup-help" role="status">请通过 CLI 启动编辑器，再打开终端打印的完整 http://127.0.0.1 网址。直接双击 index.html 无法加载模块或读写工作区。<code>game-graph serve --workspace &lt;资料目录&gt;</code></div>
   <aside id="sidebar">
     <div class="brand"><span class="brand-mark">⌘</span><strong>规则图</strong><button id="reload" class="icon-button" title="重新读取磁盘文件" aria-label="重新读取磁盘文件">↻</button></div>
     <div class="workspace-heading"><span id="workspace-name">正在读取工作区…</span></div>
@@ -16,12 +16,12 @@
         <div class="section-heading"><span>视图 <span id="view-file-count" class="file-count"></span></span><button id="new-view" class="icon-button" title="新建空白视图" aria-label="新建视图">＋</button></div>
         <div id="view-files"></div>
       </section>
-      <section class="file-section" aria-label="研究列表">
-        <div class="section-heading"><button id="toggle-analyses" class="section-toggle" aria-expanded="true" aria-controls="analysis-body"><span id="analysis-chevron">⌄</span> 研究 <span id="analysis-file-count" class="file-count"></span></button><button id="new-graph" class="icon-button" title="新建独立研究" aria-label="新建研究">＋</button></div>
-        <div id="analysis-body">
-          <div class="research-filter"><input id="analysis-filter" type="search" placeholder="筛选研究…" aria-label="筛选研究" autocomplete="off"><span id="selected-count" hidden></span></div>
-          <div id="analysis-files"></div>
-          <div id="analysis-empty" class="sidebar-empty" hidden><span id="analysis-empty-text"></span><button id="clear-filter" class="quiet" hidden>清除筛选</button></div>
+      <section class="file-section" aria-label="机制列表">
+        <div class="section-heading"><button id="toggle-mechanics" class="section-toggle" aria-expanded="true" aria-controls="mechanic-body"><span id="mechanic-chevron">⌄</span> 机制 <span id="mechanic-file-count" class="file-count"></span></button><button id="new-graph" class="icon-button" title="新建独立机制" aria-label="新建机制">＋</button></div>
+        <div id="mechanic-body">
+          <div class="mechanic-filter"><input id="mechanic-filter" type="search" placeholder="筛选机制…" aria-label="筛选机制" autocomplete="off"></div>
+          <div id="mechanic-files"></div>
+          <div id="mechanic-empty" class="sidebar-empty" hidden><span id="mechanic-empty-text"></span><button id="clear-filter" class="quiet" hidden>清除筛选</button></div>
         </div>
       </section>
     </nav>
@@ -29,35 +29,43 @@
   <main id="main">
     <header class="topbar">
       <button id="toggle-sidebar" class="icon-button" title="切换文件侧栏" aria-label="切换文件侧栏">☰</button>
-      <div id="main-views" class="view-switch" role="group" aria-label="工作视图"><button id="table-view">概念表</button><button id="graph-view">分析图</button></div>
+      <div id="main-views" class="view-switch" role="group" aria-label="工作视图"><button id="table-view">概念表</button><button id="graph-view">机制图</button></div>
       <div class="breadcrumb"><span id="file-kind">工作区</span><span class="slash">/</span><strong id="file-name">加载中</strong><span id="dirty-dot" hidden>●</span></div>
-      <div class="header-actions"><button id="snap-grid" class="quiet" aria-pressed="false" disabled title="本机全局选项：拖动结束后吸附到 5px 画布坐标">5px 吸附</button><span id="save-state">本地文件</span><button id="export" class="quiet" title="导出当前文件或未保存草稿">导出 JSON</button><button id="save" class="primary" disabled>保存 <kbd>Ctrl S</kbd></button></div>
+      <div class="header-actions"><button id="snap-grid" aria-pressed="false" disabled title="本机全局选项：拖动结束后吸附到 10px 画布坐标">吸附</button><span id="save-state">本地文件</span><button id="export" class="quiet" title="导出当前文件或未保存草稿">导出 JSON</button><button id="save" class="primary" disabled>保存 <kbd>Ctrl S</kbd></button></div>
     </header>
-    <div class="viewbar"><strong id="view-name">研究 · 单文件编辑</strong><span id="view-state" role="status">正在读取…</span><button id="export-view" class="quiet" hidden>导出视图草稿</button><button id="return-view" class="quiet" hidden>返回视图</button><button id="save-view" class="quiet">存为视图…</button></div>
-    <div id="legacy-notice" role="status" hidden>已保留旧叠加记录。请保存为视图，或<button id="discard-legacy" class="quiet">放弃旧叠加</button>后打开研究。</div>
+    <div class="viewbar"><strong id="view-name">机制 · 单文件编辑</strong><span id="view-state" role="status">正在读取…</span><button id="export-view" class="quiet" hidden>导出视图草稿</button><button id="return-view" class="quiet" hidden>返回视图</button><button id="save-view">存为视图…</button></div>
+    <div id="legacy-notice" role="status" hidden>已保留旧叠加记录。请保存为视图，或<button id="discard-legacy" class="quiet">放弃旧叠加</button>后打开机制。</div>
     <div id="error" role="alert" hidden><span id="error-text"></span><button id="reload-error" hidden>重新读取</button><button id="dismiss-error" class="icon-button" aria-label="关闭错误提示">×</button></div>
-    <div id="upgrade-notice" role="status" hidden>保存将把当前研究升级为 v2，旧版工具无法读取；撤销或放弃可恢复未保存的 v1 草稿。其他文件不变。</div>
     <section id="glossary" aria-label="节点定义表格" hidden></section>
     <section id="stage" aria-label="节点画布区域">
       <svg id="canvas" aria-label="规则节点画布" tabindex="0"></svg>
-      <div id="empty" hidden><span class="empty-symbol">＋</span><h2 id="empty-title">开始一张分析图</h2><p id="empty-hint">添加概念节点，将抽象规则连接起来。</p><button id="empty-add">概念节点</button></div>
+      <div id="opening-overlay" class="loading-overlay" role="status" aria-live="polite">
+        <span class="loading-spinner" aria-hidden="true"></span><span id="opening-message">正在读取工作区…</span>
+      </div>
+      <div id="compute-status" class="compute-status floating" role="status" aria-live="polite" hidden>
+        <span class="loading-spinner small" aria-hidden="true"></span><span id="compute-message">正在后台重绘连线…</span>
+      </div>
+      <div id="empty" hidden><span class="empty-symbol">＋</span><h2 id="empty-title">开始一张机制图</h2><p id="empty-hint">添加概念节点，将抽象规则连接起来。</p><button id="empty-add">概念节点</button></div>
       <div id="canvas-context"><span id="scope-chip"></span><span id="overlay-count"></span></div>
       <div id="toolbar" class="floating" role="toolbar" aria-label="画布工具">
         <button id="select-tool" class="tool active" title="选择与拖拽 V" aria-label="选择工具">↖</button>
         <span class="divider"></span><button id="add-node" class="tool text-tool">＋ <span>概念节点</span></button>
         <span class="divider"></span><button id="positive-tool" class="tool positive" title="先点源节点，再点目标节点" aria-label="促进连线">＋→</button>
         <button id="negative-tool" class="tool negative" title="先点源节点，再点目标节点" aria-label="抑制连线">−→</button>
-        <button id="contains-tool" class="tool contains" title="依次选择两个节点；＝双向传递影响，不改变正负号" aria-label="包含连线">↔＝</button>
+        <button id="contains-tool" class="tool contains" title="先点影响源，再点受影响节点；＝单向传递影响，不改变正负号" aria-label="包含连线">＝→</button>
+        <span class="divider"></span><button id="auto-layout" class="tool text-tool" title="没有选择时重排全部；选择节点后只重排选中节点">⌁ <span>自动排版</span></button>
         <span class="divider"></span><button id="undo" class="tool" title="撤销 Ctrl Z" aria-label="撤销" disabled>↶</button><button id="redo" class="tool" title="重做 Ctrl Shift Z" aria-label="重做" disabled>↷</button>
       </div>
       <div id="tool-hint" aria-live="polite">左键框选 · 右键平移 · Shift 增选 · 拖动选中节点</div>
       <div class="bottom-left"><button id="diagnostics" class="floating small-button">◉ 结构提示</button><button id="unfold" class="floating small-button" hidden>展开节点</button><span id="counts"></span></div>
       <div class="zoom floating"><button id="zoom-out" class="icon-button" aria-label="缩小">−</button><span id="zoom">100%</span><button id="zoom-in" class="icon-button" aria-label="放大">＋</button><span class="divider"></span><button id="fit" class="icon-button" title="适应画布 F" aria-label="适应画布">⛶</button></div>
-      <div id="legend"><span class="positive">＋ 促进</span><span class="negative">− 抑制</span><span class="contains">＝ 包含</span><span>关系详情可查看源研究</span></div>
+      <div id="legend"><span class="positive">＋ 促进</span><span class="negative">− 抑制</span><span class="contains">＝ 包含</span><span>关系详情可查看源机制</span></div>
     </section>
     <aside id="inspector" class="floating" hidden><div class="panel-header"><strong id="inspector-title">属性</strong><button id="close-inspector" class="icon-button" aria-label="关闭属性">×</button></div><div id="properties"></div></aside>
   </main>
   <dialog id="dialog"><form id="dialog-form"><div class="panel-header"><h2 id="dialog-title"></h2><button id="close-dialog" class="icon-button" type="button" aria-label="关闭对话框">×</button></div><div id="dialog-content"></div><div id="dialog-error" role="alert" hidden></div><div class="dialog-actions"><button id="cancel-dialog" type="button">取消</button><button id="confirm-dialog" type="submit" class="primary">确定</button></div></form></dialog>
+  <script src="/vendor/elk.js"></script>
+  <script src="/vendor/webcola.js"></script>
   <script type="module" src="/app.mjs"></script>
 </body>
 </html>

@@ -1,11 +1,43 @@
 import { compose, collapse, canCollapse } from '../domain/graph.mjs';
+import { composeView, registerMechanic, registeredMechanicIds, setMechanicVisibility, visibleMechanicIds } from '../domain/view.mjs';
 
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const fail = message => { throw new Error(message); };
+const NODE_WIDTH = 166, NODE_HEIGHT = 62, GRID_X = 235, GRID_Y = 160;
+
+function overlaps(a, b) {
+  return a.x < b.x + NODE_WIDTH + 20 && a.x + NODE_WIDTH + 20 > b.x
+    && a.y < b.y + NODE_HEIGHT + 20 && a.y + NODE_HEIGHT + 20 > b.y;
+}
+
+// 视图 positions 是独立布局记忆，不随 Visible 集合裁剪。只有从未出现过的可见节点才寻找新位置。
+export function completeViewPositions(workspace, graph, remembered = {}) {
+  const positions = structuredClone(remembered);
+  const definitions = workspace.definitions.nodes.map(node => node.id).sort();
+  const missing = graph.nodes.map(node => node.id).filter(id => positions[id] === undefined)
+    .sort((a, b) => definitions.indexOf(a) - definitions.indexOf(b));
+  for (const id of missing) {
+    const index = definitions.indexOf(id);
+    const preferred = workspace.definitions.positions[id]
+      ?? { x: (index % 4) * GRID_X + 40, y: Math.floor(index / 4) * GRID_Y + 40 };
+    let placed = false;
+    for (let ring = 0; ring < 200 && !placed; ring++) {
+      for (let y = -ring; y <= ring && !placed; y++) for (let x = -ring; x <= ring && !placed; x++) {
+        if (ring && Math.max(Math.abs(x), Math.abs(y)) !== ring) continue;
+        const point = { x: preferred.x + x * GRID_X, y: preferred.y + y * GRID_Y };
+        if (Math.abs(point.x) > 100000 || Math.abs(point.y) > 100000) continue;
+        if (Object.values(positions).some(other => overlaps(point, other))) continue;
+        positions[id] = point; placed = true;
+      }
+    }
+    if (!placed) fail('视图中没有可用于新节点的非重叠位置：' + id);
+  }
+  return positions;
+}
 
 // 先在候选数据上完成投影，调用方仅在整个打开过程成功后替换页面状态。
-export function graphPositions(workspace, graph, positions = {}, analysisId = null, implicitPositions = {}) {
-  const local = workspace.analyses.find(item => item.id === analysisId)?.positions ?? {};
+export function graphPositions(workspace, graph, positions = {}, mechanicId = null, implicitPositions = {}) {
+  const local = workspace.mechanics.find(item => item.id === mechanicId)?.positions ?? {};
   const ids = workspace.definitions.nodes.map(node => node.id).sort();
   return Object.fromEntries(graph.nodes.map(node => {
     const index = ids.indexOf(node.id);
@@ -14,47 +46,43 @@ export function graphPositions(workspace, graph, positions = {}, analysisId = nu
   }));
 }
 
-// 旧文件只在内存中物化原画面；打开本身不改视图文件，第一次展示编辑才接管坐标。
 function materializeView(workspace, snapshot, original, graph) {
-  const positions = graphPositions(workspace, original, snapshot.positions);
-  if (snapshot.activeLayerId !== null) {
-    const local = workspace.analyses.find(item => item.id === snapshot.activeLayerId).positions;
-    graph.nodes.forEach((node, index) => {
-      positions[node.id] = structuredClone(local[node.id] ?? snapshot.positions[node.id] ?? workspace.definitions.positions[node.id]
-        ?? { x: (index % 4) * 235 + 40, y: Math.floor(index / 4) * 160 + 40 });
-    });
-  }
-  return { graphIds: [...snapshot.graphIds], activeLayerId: null, collapsedNodeIds: [...snapshot.collapsedNodeIds], positions };
+  const positions = completeViewPositions(workspace, original, snapshot.positions);
+  return { mechanicRegistrations: snapshot.mechanicRegistrations.map(item => structuredClone(item)), collapsedNodeIds: [...snapshot.collapsedNodeIds], positions };
 }
 
-export function changeViewMembers(workspace, snapshot, graphIds) {
-  const original = compose(workspace, graphIds), ids = new Set(original.nodes.map(node => node.id));
-  let graph = original;
-  const folded = [];
-  for (const id of snapshot.collapsedNodeIds) {
-    if (canCollapse(graph, id)) { graph = collapse(graph, id); folded.push(id); }
-  }
-  const positions = Object.fromEntries(Object.entries(snapshot.positions).filter(([id]) => ids.has(id)));
+function updateViewProjection(workspace, snapshot) {
+  const original = composeView(workspace, snapshot);
   return {
-    graphIds: [...graphIds], activeLayerId: null, collapsedNodeIds: folded,
-    positions: graphPositions(workspace, original, positions),
+    mechanicRegistrations: snapshot.mechanicRegistrations.map(item => structuredClone(item)),
+    collapsedNodeIds: [...snapshot.collapsedNodeIds],
+    positions: completeViewPositions(workspace, original, snapshot.positions),
   };
 }
 
+export const registerViewMechanic = (workspace, snapshot, mechanicId) => updateViewProjection(workspace, registerMechanic(snapshot, mechanicId));
+
+export const changeViewVisibility = (workspace, snapshot, mechanicId, visible) => updateViewProjection(workspace, setMechanicVisibility(snapshot, mechanicId, visible));
+
 export function prepareOpening(workspace, requestedId, { repairFolds = false } = {}) {
   const remembered = workspace.manifest.lastView;
-  const research = typeof requestedId === 'object' && requestedId?.kind === 'analysis';
-  const viewId = research ? null : requestedId ?? remembered?.viewId ?? null;
+  const mechanic = typeof requestedId === 'object' && requestedId?.kind === 'mechanic';
+  const viewId = mechanic ? null : requestedId ?? remembered?.viewId ?? null;
   let snapshot = viewId !== null ? workspace.views.find(view => view.id === viewId)
-    : research ? { graphIds: requestedId.id === null ? [] : [requestedId.id], activeLayerId: requestedId.id, collapsedNodeIds: [], positions: {} }
-      : remembered ?? { graphIds: workspace.analyses.slice(0, 1).map(item => item.id), activeLayerId: workspace.analyses[0]?.id ?? null, collapsedNodeIds: [], positions: {} };
+    : mechanic ? { graphIds: requestedId.id === null ? [] : [requestedId.id], activeLayerId: requestedId.id, collapsedNodeIds: [], positions: {} }
+      : remembered ?? { graphIds: workspace.mechanics.slice(0, 1).map(item => item.id), activeLayerId: workspace.mechanics[0]?.id ?? null, collapsedNodeIds: [], positions: {} };
   if (!snapshot) fail('视图文件不存在：' + viewId);
-  if (snapshot.activeLayerId !== null && !snapshot.graphIds.includes(snapshot.activeLayerId)) fail('视图的编辑层必须可见');
-  const original = compose(workspace, snapshot.graphIds);
+  const graphIds = viewId !== null ? visibleMechanicIds(snapshot) : snapshot.graphIds;
+  if (viewId === null && snapshot.activeLayerId !== null && !snapshot.graphIds.includes(snapshot.activeLayerId)) fail('视图的编辑层必须可见');
+  const original = viewId !== null ? composeView(workspace, snapshot) : compose(workspace, graphIds);
   let graph = original;
   const invalidFolds = [], folded = [];
+  const registeredNodes = new Set(viewId === null ? original.nodes.map(node => node.id)
+    : workspace.mechanics.filter(item => registeredMechanicIds(snapshot).includes(item.id)).flatMap(item => item.nodeIds));
+  const visibleNodes = new Set(original.nodes.map(node => node.id));
   for (const id of snapshot.collapsedNodeIds) {
     if (canCollapse(graph, id)) { graph = collapse(graph, id); folded.push(id); }
+    else if (viewId !== null && registeredNodes.has(id) && !visibleNodes.has(id)) folded.push(id);
     else invalidFolds.push(id);
   }
   if (invalidFolds.length && (!repairFolds || viewId === null)) {
@@ -65,7 +93,9 @@ export function prepareOpening(workspace, requestedId, { repairFolds = false } =
   const legacy = viewId === null && (snapshot.graphIds.length > 1 || snapshot.collapsedNodeIds.length > 0 || Object.keys(snapshot.positions).length > 0);
   const activeId = viewId !== null || legacy ? null : snapshot.graphIds[0] ?? null;
   return { workspace, viewId, legacy, activeId, invalidFolds,
-    snapshot: viewId !== null || legacy ? materializeView(workspace, snapshot, original, graph) : structuredClone(snapshot), original, graph };
+    snapshot: viewId !== null ? materializeView(workspace, snapshot, original, graph)
+      : legacy ? { ...structuredClone(snapshot), positions: graphPositions(workspace, original, snapshot.positions, snapshot.activeLayerId) }
+        : structuredClone(snapshot), original, graph };
 }
 
 export async function readOpening(api, requestedId, { repairFolds = false } = {}) {

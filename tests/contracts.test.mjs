@@ -29,9 +29,9 @@ test('叠加按稳定 ID 接合，保留来源且不修改输入', () => {
 test('同名不同 ID 不合并；跨图异号关系不抵消', () => {
   const draft = structuredClone(source);
   draft.definitions.nodes.push({ id: 'enemy-two', label: '近战敌人', description: '第二名敌人', increaseMeaning: '行动增加' });
-  const encounter = draft.analyses.find(graph => graph.id === 'encounter');
+  const encounter = draft.mechanics.find(graph => graph.id === 'encounter');
   encounter.nodeIds.push('enemy-two');
-  encounter.edges.push({ id: 'opposite', source: 'enemy', target: 'melee', sign: -1, condition: '另一个假设条件', note: '' });
+  encounter.edges.push({ id: 'opposite', source: 'enemy', target: 'melee', relation: 'influence', sign: -1, condition: '另一个假设条件', note: '' });
   validateWorkspace(draft);
   const graph = compose(draft, selected);
   assert.equal(graph.nodes.filter(node => node.label === '近战敌人').length, 2);
@@ -58,7 +58,7 @@ test('单路径符号解释保留条件；折叠只生成摘要且可由源图�
 
 test('环中节点不被折叠，路径查询有明确截断状态', () => {
   const graph = compose(source, selected);
-  graph.edges.push({ id: 'cycle', source: 'melee', target: 'evade', sign: 1, steps: [], hiddenNodes: [] });
+  graph.edges.push({ id: 'cycle', source: 'melee', target: 'evade', relation: 'influence', sign: 1, steps: [], hiddenNodes: [] });
   assert.equal(canCollapse(graph, 'repel'), false);
   assert.throws(() => collapse(graph, 'repel'), /不能折叠/);
   const result = tracePaths(compose(source, selected), 'evade', 'failure', { maxDepth: 2 });
@@ -66,7 +66,7 @@ test('环中节点不被折叠，路径查询有明确截断状态', () => {
   assert.equal(result.truncated, true);
 });
 
-test('终点只有疑点提示，未纳入当前分析的全局定义不被误判', () => {
+test('终点只有疑点提示，未纳入当前机制的全局定义不被误判', () => {
   const result = diagnose(compose(source, selected));
   assert.ok(result.findings.some(item => item.kind === 'sink' && item.nodeIds.includes('failure')));
   assert.ok(result.findings.every(item => !item.nodeIds.includes('armor')));
@@ -76,13 +76,13 @@ test('终点只有疑点提示，未纳入当前分析的全局定义不被误�
 test('结构和引用错误明确拒绝，不修补原始数据', () => {
   for (const change of [
     data => { data.definitions.nodes.push(structuredClone(data.definitions.nodes[0])); },
-    data => { data.analyses[0].edges[0].target = 'missing'; },
-    data => { data.analyses[0].schemaVersion = 2; },
-    data => { data.analyses[0].edges[0].sign = 0; },
-    data => { data.analyses[0].workspaceId = 'other-game'; },
+    data => { data.mechanics[0].edges[0].target = 'missing'; },
+    data => { data.mechanics[0].schemaVersion = 2; },
+    data => { data.mechanics[0].edges[0].sign = 0; },
+    data => { data.mechanics[0].workspaceId = 'other-game'; },
     data => { data.definitions.nodes = data.definitions.nodes.filter(node => node.id !== 'melee'); },
     data => { data.manifest.compositions[0].graphIds.push('unknown'); },
-    data => { data.analyses[0].positions.missing = { x: 0, y: 0 }; },
+    data => { data.mechanics[0].positions.missing = { x: 0, y: 0 }; },
   ]) {
     const draft = structuredClone(source); change(draft);
     const before = JSON.stringify(draft);
@@ -91,18 +91,26 @@ test('结构和引用错误明确拒绝，不修补原始数据', () => {
   }
 });
 
+test('视图可保存暂时隐藏的定义节点坐标，但仍拒绝未知节点', () => {
+  const draft = structuredClone(source);
+  draft.views = [{ schemaVersion: 2, kind: 'view', workspaceId: draft.manifest.id, id: 'layout-memory', name: '布局记忆', mechanicRegistrations: [], collapsedNodeIds: [], positions: { melee: { x: 10, y: 20 } } }];
+  validateWorkspace(draft);
+  draft.views[0].positions.missing = { x: 0, y: 0 };
+  assert.throws(() => validateWorkspace(draft), /missing/);
+});
+
 test('工具可处理无任何卡牌概念的另一游戏工作区', () => {
   const data = {
-    manifest: { schemaVersion: 3, kind: 'workspace', id: 'platform-game', name: '跳跃游戏', definitions: 'definitions.graph.json', compositions: [] },
+    manifest: { schemaVersion: 4, kind: 'workspace', id: 'platform-game', name: '跳跃游戏', definitions: 'definitions.graph.json', compositions: [] },
     definitions: { schemaVersion: 1, kind: 'definitions', workspaceId: 'platform-game', nodes: ['jump', 'fall'].map(id => ({ id, label: id, description: '测试概念', increaseMeaning: '发生增加' })), positions: {} },
-    analyses: [{ schemaVersion: 1, kind: 'analysis', workspaceId: 'platform-game', id: 'jump-rule', name: '跳跃规则', scope: '假设模型', nodeIds: ['jump', 'fall'], edges: [{ id: 'avoid', source: 'jump', target: 'fall', sign: -1, condition: '及时起跳', note: '' }], positions: {} }],
+    mechanics: [{ schemaVersion: 1, kind: 'mechanic', workspaceId: 'platform-game', id: 'jump-rule', name: '跳跃规则', scope: '假设模型', nodeIds: ['jump', 'fall'], edges: [{ id: 'avoid', source: 'jump', target: 'fall', relation: 'influence', sign: -1, condition: '及时起跳', note: '' }], positions: {} }],
   };
   validateWorkspace(data);
   assert.equal(tracePaths(compose(data, ['jump-rule']), 'jump', 'fall').paths[0].sign, -1);
 });
 
 async function temporary(t) {
-  const root = await mkdtemp(join(tmpdir(), 'game-rule-analyzer-test-'));
+  const root = await mkdtemp(join(tmpdir(), 'game-graph-test-'));
   let close = async () => {};
   t.after(async () => { await close(); await rm(root, { recursive: true, force: true }); });
   await cp(example, join(root, 'workspace'), { recursive: true });
@@ -120,14 +128,14 @@ test('读取真实文件且版本戳反映外部修改，其他后缀的 JSON �
   await writeFile(file, JSON.stringify(definitions));
   const second = await readWorkspace(directory);
   assert.notEqual(second.revision, first.revision);
-  assert.equal(second.analyses[0].edges[0].source, 'turn-start');
+  assert.equal(second.mechanics[0].edges[0].source, 'turn-start');
 });
 
 test('坏 JSON、路径穿越及缺失文件失败，不返回部分成功', async t => {
   const { directory } = await temporary(t);
   const manifestPath = join(directory, 'workspace.json');
   const original = await readFile(manifestPath, 'utf8');
-  for (const file of ['../outside.json', '/outside.json', 'C:/outside.json', 'analyses/%2e%2e/outside.json', 'missing.json']) {
+  for (const file of ['../outside.json', '/outside.json', 'C:/outside.json', 'mechanics/%2e%2e/outside.json', 'missing.json']) {
     const manifest = JSON.parse(original); manifest.definitions = file;
     await writeFile(manifestPath, JSON.stringify(manifest));
     await assert.rejects(readWorkspace(directory));

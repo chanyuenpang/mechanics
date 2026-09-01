@@ -4,7 +4,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { readWorkspace, assertRelativeFile, ensureWorkspaceDirectory } from './workspace.mjs';
 import { encode, commitFile, acquireWorkspaceLock } from './files.mjs';
 import { assertDocument, validateWorkspace, ContractError } from '../domain/validate.mjs';
-import { compose } from '../domain/graph.mjs';
+import { composeView } from '../domain/view.mjs';
+import { readQuerySnapshot } from './query-snapshot.mjs';
 
 const fail = (code, message) => { throw new ContractError(code, message); };
 export async function createWorkspaceStore(workspaceRoot) {
@@ -31,16 +32,16 @@ export async function createWorkspaceStore(workspaceRoot) {
   const create = (kind, body) => enqueue(async () => {
     const workspace = await current(body.revision), document = body.document;
     assertDocument(document, kind);
-    const documents = kind === 'analysis' ? workspace.analyses : workspace.views;
+    const documents = kind === 'mechanic' ? workspace.mechanics : workspace.views;
     if (documents.some(item => item.id === document.id)) fail('DUPLICATE_ID', '此文件类型中的 ID 已存在');
     if (documents.length >= 300) fail('FILE_LIMIT', '工作区每种类型最多 300 个文件');
-    const file = kind === 'analysis' ? body.file ?? ('analyses/' + document.id + '.analysis.json') : body.file;
+    const file = kind === 'mechanic' ? body.file ?? ('mechanics/' + document.id + '.mechanic.json') : body.file;
     assertRelativeFile(file);
     if (!file.endsWith('.' + kind + '.json') || file.split('/').some(part => part.startsWith('.') || part === 'node_modules')) {
       fail('UNSAFE_PATH', '文件须使用 .' + kind + '.json 后缀，不能存入隐藏或依赖目录');
     }
     documents.push(document); workspace.files.push({ kind, id: document.id, path: file }); validateWorkspace(workspace);
-    if (kind === 'view') compose(workspace, document.graphIds);
+    if (kind === 'view') composeView(workspace, document);
     const text = encode(document), parent = posix.dirname(file);
     await ensureWorkspaceDirectory(root, parent === '.' ? '' : parent);
     try { await commitFile(root, file, text, { create: true }); }
@@ -49,6 +50,7 @@ export async function createWorkspaceStore(workspaceRoot) {
   });
   return {
     read: () => enqueue(() => readWorkspace(root)),
+    readForQuery: () => enqueue(() => readQuerySnapshot(root)),
     save: body => enqueue(async () => {
       const { revision, kind, id, document } = body;
       const workspace = await current(revision);
@@ -56,8 +58,8 @@ export async function createWorkspaceStore(workspaceRoot) {
       let file;
       if (kind === 'definitions') {
         file = workspace.manifest.definitions; workspace.definitions = document;
-      } else if (kind === 'analysis' || kind === 'view') {
-        const documents = kind === 'analysis' ? workspace.analyses : workspace.views;
+      } else if (kind === 'mechanic' || kind === 'view') {
+        const documents = kind === 'mechanic' ? workspace.mechanics : workspace.views;
         const index = documents.findIndex(item => item.id === id);
         if (index < 0 || document.id !== id) fail('ID_CHANGED', '此类型的文件 ID 不存在或被更改');
         file = workspace.files.find(item => item.kind === kind && item.id === id).path;
@@ -69,11 +71,11 @@ export async function createWorkspaceStore(workspaceRoot) {
         file = 'workspace.json'; workspace.manifest = document;
       }
       validateWorkspace(workspace);
-      if (kind === 'view') compose(workspace, document.graphIds);
+      if (kind === 'view') composeView(workspace, document);
       await commitFile(root, file, encode(document));
       return verified();
     }),
-    createAnalysis: body => create('analysis', body),
+    createMechanic: body => create('mechanic', body),
     createView: body => create('view', body),
     close: async () => { if (closed) return; closed = true; await queue; await release(); },
   };

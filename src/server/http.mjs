@@ -1,17 +1,31 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { createWorkspaceStore } from './store.mjs';
 import { createPreferences } from './preferences.mjs';
+import { queryWorkspace } from '../domain/query.mjs';
+import { queryFromSearch } from './agent.mjs';
+
+const dependency = createRequire(import.meta.url);
 
 const assets = new Map([
   ['/', [new URL('../web/index.html', import.meta.url), 'text/html; charset=utf-8']],
   ['/app.mjs', [new URL('../web/app.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/canvas.mjs', [new URL('../web/canvas.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/layout.mjs', [new URL('../web/layout.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/graph-compute.mjs', [new URL('../web/graph-compute.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/graph-compute-kernel.mjs', [new URL('../web/graph-compute-kernel.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/geometry-settle.mjs', [new URL('../web/geometry-settle.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/graph-compute-worker.js', [new URL('../web/graph-compute-worker.js', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/glossary.mjs', [new URL('../web/glossary.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/view-files.mjs', [new URL('../web/view-files.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/style.css', [new URL('../web/style.css', import.meta.url), 'text/css; charset=utf-8']],
   ['/domain/graph.mjs', [new URL('../domain/graph.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/domain/view.mjs', [new URL('../domain/view.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/vendor/elk.js', [dependency.resolve('elkjs/lib/elk.bundled.js'), 'text/javascript; charset=utf-8']],
+  ['/vendor/elk-worker.js', [dependency.resolve('elkjs/lib/elk-worker.min.js'), 'text/javascript; charset=utf-8']],
+  ['/vendor/webcola.js', [dependency.resolve('webcola/WebCola/cola.min.js'), 'text/javascript; charset=utf-8']],
 ]);
 
 export async function startServer({ workspaceRoot, port = 4319, preferencesPath }) {
@@ -43,8 +57,12 @@ export async function startServer({ workspaceRoot, port = 4319, preferencesPath 
         if (request.method === 'GET' && url.pathname === '/api/workspace') {
           send(200, await store.read()); return;
         }
+        if (request.method === 'GET' && url.pathname === '/api/agent') {
+          const query = queryFromSearch(url.searchParams);
+          send(200, queryWorkspace(query.command === 'guide' ? null : await store.readForQuery(), query)); return;
+        }
         if (request.method === 'GET' && url.pathname === '/api/preferences') { send(200, await preferences.read()); return; }
-        if (request.method === 'POST' && ['/api/save', '/api/analyses', '/api/views', '/api/preferences'].includes(url.pathname)) {
+        if (request.method === 'POST' && ['/api/save', '/api/mechanics', '/api/views', '/api/preferences'].includes(url.pathname)) {
           if (request.headers.origin !== origin || request.headers['content-type'] !== 'application/json') {
             send(403, { error: 'WRITE_ORIGIN_REQUIRED', message: '写入必须来自同源页面并使用 JSON' }); return;
           }
@@ -57,7 +75,7 @@ export async function startServer({ workspaceRoot, port = 4319, preferencesPath 
           const body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
           if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('请求必须是 JSON 对象');
           if (url.pathname === '/api/preferences') { send(200, await preferences.save(body)); return; }
-          send(200, await (url.pathname === '/api/save' ? store.save(body) : url.pathname === '/api/views' ? store.createView(body) : store.createAnalysis(body))); return;
+          send(200, await (url.pathname === '/api/save' ? store.save(body) : url.pathname === '/api/views' ? store.createView(body) : store.createMechanic(body))); return;
         }
         send(405, { error: 'METHOD_NOT_ALLOWED', message: '此接口不支持该操作' }); return;
       }
