@@ -1,51 +1,51 @@
 # Game-Graph
 
-用概念节点、正负因果和黄色包含连线，分析规则之间的影响。统一节点定义图提供共享概念；独立机制图描述基础规则、关卡、敌人或手牌；多张机制图可以组合浏览。
+用基础或限定概念节点、正向影响、负向影响、随机影响和 `specializes` 结构关系分析规则。限定概念以基础概念和 qualifier 绑定描述；`tags` 仅用于分类和搜索。统一节点定义图提供共享概念；独立机制图描述基础规则、关卡、敌人或手牌；多张机制图可以组合浏览。
 
-**当前版本 0.6.0 可通过本地安装包作为 CLI 使用，启动网页编辑器。** 顶部切换「概念表｜机制图」；侧栏上方是视图，下方是可折叠、筛选的机制目录，两区的「＋」分别新建对应文件。概念表维护共享定义，机制文件引用概念并编辑关系，磁盘后缀仍为 `.mechanic.json`。
+**当前版本 0.7.0 可通过本地安装包作为 CLI 使用，启动网页编辑器。** 顶部切换「概念表｜机制图」；侧栏上方是视图，下方是可折叠、筛选的机制目录，两区的「＋」分别新建对应文件。概念表维护共享定义，机制文件引用概念并编辑关系，磁盘后缀仍为 `.mechanic.json`。
 
-在机制的「引用概念」窗口可以搜索已有概念，或直接新建：名称从搜索词带入，补全含义与增加方向后「创建并引用」。批量使用「加入待选并继续」，可与已有概念一起提交；提交前取消不写文件。同名先提示复用，明确确认后才允许另建。新定义先保存到共享概念表，引用一次加入原机制草稿，机制仍手动保存；撤销引用不删除共享定义。失败保留输入，明确核实磁盘后再继续，不盲目重复创建。
+在机制的「引用概念」窗口可以按名称、英文语义 ID 或自然语言别名搜索已有概念，也可直接新建。持久化概念、机制、视图和规则 ID 使用稳定的小写英文 kebab-case，不再自动生成 UUID 或随机十六进制片段。规则 ID 由有向端点固定为 `<source>-2-<target>`；同一机制内同一有向端点对只允许一条规则，再次连接应编辑原规则。
 
 机制可按名称、ID 或相对路径筛选；目录折叠和筛选仅影响本页列表，不改变画布或视图注册，也不写文件。打开视图后，其下方只列已注册的子机制；Visible 按钮切换显示，视图旁的「＋」从可搜索候选中注册新子机制。全局机制目录仍负责独立打开和新建，不再充当视图成员清单。
 
-选择模式下空白处左键框选，Shift 增选；右键、空格或中键平移。拖动选中节点整体移动，一次撤销恢复全组。双击节点进入连接，再选目标自动建线，沿用本页最后成功创建或修改的连线类型（初始促进），Esc 取消。节点端点自动选择上、下、左、右，反向边错开显示。黄色「＝→」仅沿箭头传递宏观影响，位于路径任意位置均不改变正负号；不计算“禁止”、具体数值或实时效果。所有边箭头均指向受影响者，两方向的关系独立。首次添加包含只升级当前机制草稿为 v2，手动保存才写入；已有 v1 普通编辑不升级。旧 v2 等号按保存的 source → target 解释，不自动反转或复制；从双向版本更新后应核对原有方向。
+选择模式下空白处左键框选，Shift 增选；右键、空格或中键平移。拖动选中节点整体移动，一次撤销恢复全组。双击节点进入连接，再选目标自动建线，沿用本页最后成功创建或修改的关系类型（初始为正向影响），Esc 取消。节点端点自动选择上、下、左、右，反向边错开显示。正向影响和负向影响分别使目标沿增加方向和减少方向变化；随机影响表示方向不确定，不表示概率；`specializes` 表示具体概念指向上位概念并受 DAG 校验，不是影响路径。
 
 工具栏「自动排版」在没有节点选择时重排当前可见的全部节点；选中全部可见节点时显示「自动排版（全部）」并得到与无选择逐值一致的完整布局。部分框选或 Shift 选中节点后变为「重排选中（N）」，只移动选中节点，未选节点坐标严格保持。完整排版优先拉直接近水平或垂直的相连节点，并在对齐会碰撞时保留 ELK 结果。排版不改变相机、不因机制勾选自动触发，并形成一次撤销记录；视图自动保存，机制仍手动保存。折叠摘要须先展开再排版。
 
-点击机制只打开它自身的关系图，规则和单图布局手动保存。打开 `.view.json` 后，可管理已注册子机制的 Visible 状态；注册、显隐、组合布局与折叠自动写回视图，源规则只读。通过「编辑源机制」进入单图，完成后「返回视图」读取最新规则并恢复原组合布局和本页相机。旧内联叠加保留为只读预览，须明确保存为 view v2 或放弃，不会启动即覆盖。
+点击机制只打开它自身的关系图，规则和单图布局手动保存。打开 `.view.json` 后，可管理已注册子机制的 Visible 状态；注册、显隐、组合布局与折叠自动写回视图，源规则只读。通过「编辑源机制」进入单图，完成后「返回视图」读取最新规则并恢复原组合布局和本页相机。旧内联叠加保留为只读预览，须明确保存为 view v3 或放弃，不会启动即覆盖。
 
 ## 安装包与工作区
 
 需要 Node.js 24+。拿到受控分发的本地安装包后：
 
 ```sh
-npm install -g ./game-graph-0.6.0.tgz
-game-graph init ./game-mechanic --name "游戏规则"
-cd game-mechanic/mechanics
-game-graph serve
+npm install -g ./game-graph-0.7.0.tgz
+game-graph web
 ```
 
-`init` 只创建明确指定的新目录，不覆盖已有目录。`serve`、`validate`、`root` 省略 `--workspace` 时向上寻找最近的 `workspace.json`；显式路径优先且必须是根目录。服务启动后固定保存根，不随终端 cwd 改变。不把工具的安装位置当作资料位置，也不依赖 claw-kit 或游戏引擎。
+`init` 在项目内创建固定 `.game-graph`，并把包内 `game-mechanic-search`、`game-mechanic-modeling` 注册到项目 `.agents/skills/`。它不覆盖已有工作区或内容不同的同名 skill；相同版本视为已注册。工作区 ID 默认取项目目录名；目录名不符合英文语义 ID 时必须显式传 `--id`。`web` 可不带项目启动，再从网页打开或初始化项目；`validate`、`catalog`、`root` 省略 `--project` 时向上寻找最近的 `.game-graph/workspace.json`。
 
-服务递归发现 `*.mechanic.json` 和 `*.view.json`，支持中文目录和空目录。侧栏将视图置顶，只在机制区呈现包含匹配机制的真实目录，不显示空目录占位。新文件可指定相对目录；外部新增/移动后点击重新读取。统一定义只读取配置指定的唯一文件，机制按稳定 ID 接合。正式协议为 workspace v4、mechanic/definitions v1、view v2；不读取旧 view v1、旧工作区、旧文件类型或旧字段，也不提供运行时迁移。详见 [CLI 与工作区](docs/CLI与工作区.md)。
+服务只在项目固定 `.game-graph` 中递归发现 `*.mechanic.json` 和 `*.view.json`，支持中文目录和空目录。统一定义只读取配置指定的唯一文件，机制按稳定 ID 接合。正式协议为 workspace v8、mechanic/definitions v4、view v3；旧协议、旧文件类型或旧字段严格失败，不提供运行时兼容。v7 资料仅能用 `game-graph migrate --from 7 --to 8 --project <项目目录>` 预览后显式执行升级。详见 [CLI 与工作区](docs/CLI与工作区.md)。
 
 ## 从源码启动
 
-CLI 同时提供 `agent guide/scopes/search/graph/node/impact`。Agent 先用 guide 理解符号与模型边界，再搜索概念、按方向与距离查询相关机制，最后解释影响；模型未覆盖或需核实实现时再查代码。默认语义 JSON，支持易读中文文本、版本约束、搜索预算及只读在线查询。声明、推导与未知项明确分开。用法见 [Agent 查询接口](docs/Agent查询接口.md)。
+CLI 同时提供只读 `agent guide/scopes/search/graph/node/impact` 与受约束 `agent concept/rule` mutation。Agent 先用 guide 理解符号与模型边界，再搜索概念、按方向与距离查询相关机制；只有用户明确要求建模写入时才使用 mutation。默认语义 JSON，支持易读中文文本、整体/资源版本约束及在线服务。声明、推导与未知项明确分开。用法见 [Agent 查询与受约束写入](docs/Agent查询接口.md)。
+
+每个项目还会在 `agentExportPath` 指定的目录（默认 `game-mechanics`）生成 catalog v5 的 `AGENTS.md`、`README.md`、唯一的 `concepts.md`，以及 `folders/<机制文件夹>/index.md`。文件夹页只汇总直接所属的机制图，并只链接子文件夹；概念仍是全局共享词典，不会随机制图复制成单独文件。它们是排除坐标、端口、连线路径和视图状态的只读 Agent 文档；canonical definitions/mechanics 仍是唯一可编辑真相。文档只投影概念、声明规则与已填写的规则文字，不由程序合成机制流程说明。
 
 需要 Node.js 24 或更高版本。工具没有宿主游戏依赖。
 
 ```sh
 npm ci
 npm run check
-npm run dev -- --workspace ./examples/card-game
+npm run dev -- --project ./examples/card-game
 ```
 
-打开终端打印的完整本地网址。分析其他游戏时，把 `--workspace` 改为该游戏的分析目录。工具不向下搜索或猜测宿主路径，不使用浏览器缓存充当文件保存。
+打开终端打印的本地网址，或不传 `--project` 后在网页选择项目。服务没有 session 或 Origin 授权；任何能访问本机端口并知道项目绝对路径的网页或进程都可能调用写接口，因此它只应在可信本机开发环境运行。
 
 ```sh
-npm run validate -- --workspace /path/to/game-mechanic
-npm run dev -- --workspace /path/to/game-mechanic --port 4319
+npm run validate -- --project /path/to/my-game
+npm run dev -- --project /path/to/my-game --port 4319
 ```
 
 ## 文件与模块
@@ -55,6 +55,7 @@ src/domain/          通用图算法与工作区校验
 src/server/          本地文件读写、版本冲突与 HTTP 服务
 src/web/             文件目录、图层和 SVG 节点编辑器
 schemas/             JSON 文件结构的唯一合同
+skills/              init 注册到项目的 Game-Graph Codex skill 唯一维护源
 examples/card-game/  通用演示，不含宿主项目数据
 tests/               协议、图语义、文件边界与 HTTP 验证
 docs/                产品、架构、协议和后续实施切片
@@ -63,17 +64,23 @@ docs/                产品、架构、协议和后续实施切片
 实际工作区位于工具仓库之外：
 
 ```text
-某个游戏的分析目录/
-├── workspace.json
-├── definitions.graph.json
-└── mechanics/
-    ├── basic-rules.mechanic.json
-    ├── encounter.mechanic.json
-    ├── hand.mechanic.json
-    └── encounter-with-hand.view.json
+某个游戏项目/
+├── .game-graph/
+│   ├── workspace.json
+│   ├── definitions.graph.json
+│   └── mechanics/
+│       ├── basic-rules.mechanic.json
+│       ├── encounter.mechanic.json
+│       └── encounter-with-hand.view.json
+└── game-mechanics/             默认，可由 agentExportPath 改为项目内其他目录
+│   ├── README.md
+│   ├── AGENTS.md
+│   ├── concepts.md
+│   └── folders/
+│       └── <机制文件夹>/index.md
 ```
 
-节点定义图拥有节点 ID、名称、含义、变化方向与默认布局。概念表维护已有定义，引用窗口也可新增共享定义；因果边由各机制图拥有。view v2 用有序 `mechanicRegistrations` 保存子机制注册及 Visible 状态，不复制基础规则或合并结果。工作区配置和定义文件不作为侧栏导航项；历史命名组合保留校验，不自动转为视图文件。
+节点定义图拥有节点 ID、名称、含义、变化方向与默认布局。概念表维护已有定义，引用窗口也可新增共享定义；因果边由各机制图拥有。view v3 用有序 `mechanicRegistrations` 保存子机制注册及 Visible 状态，并用 `structuralPresentation: "line"|"badge"` 选择结构呈现；不复制基础规则或合并结果。工作区配置和定义文件不作为侧栏导航项；历史命名组合保留校验，不自动转为视图文件。
 
 ## 设计入口
 
@@ -84,7 +91,7 @@ docs/                产品、架构、协议和后续实施切片
 - [编辑器使用说明](docs/编辑器使用说明.md)：操作方式、保存归属和错误处理。
 - [CLI 与工作区](docs/CLI与工作区.md)：安装、新建、根定位、目录发现和显式迁移。
 
-正负表示促进或抑制，不表示对玩家有利或不利。路径符号不能代替数值模拟；结构疑点不能自动判定游戏不好玩。
+正向与负向描述目标相对自身变化方向，不表示对玩家有利或不利。随机只表示方向不确定，不表示概率。路径方向不能代替数值模拟；结构疑点不能自动判定游戏不好玩。
 
 ## 仓库接入
 

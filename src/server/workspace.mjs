@@ -2,10 +2,23 @@ import { lstat, realpath, open, readdir, mkdir } from 'node:fs/promises';
 import { resolve, relative, isAbsolute, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { assertDocument, validateWorkspace, ContractError } from '../domain/validate.mjs';
+import { projectContext, projectRootFromWorkspace } from './project-context.mjs';
 
 const MAX_BYTES = 2 * 1024 * 1024;
-export function assertRelativeFile(file) {
-  if (typeof file !== 'string' || file.length > 512 || !file.endsWith('.json') || isAbsolute(file)
+const semanticHash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+
+export function workspaceResourceRevisions(workspace) {
+  const nodes = [...workspace.definitions.nodes].sort((a, b) => a.id.localeCompare(b.id));
+  const mechanics = Object.fromEntries([...workspace.mechanics]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map(mechanic => [mechanic.id, semanticHash({
+      nodeIds: [...mechanic.nodeIds].sort(),
+      edges: [...mechanic.edges].sort((a, b) => a.id.localeCompare(b.id)),
+    })]));
+  return { definitions: semanticHash({ nodes }), mechanics };
+}
+export function assertRelativeFile(file, extensions = ['.json']) {
+  if (typeof file !== 'string' || file.length > 512 || !extensions.some(extension => file.endsWith(extension)) || isAbsolute(file)
     || /[\\:\u0000-\u001f<>"|?*]/.test(file)
     || file.split('/').some(part => !part || part === '.' || part === '..' || /[. ]$/.test(part)
       || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))) {
@@ -18,8 +31,8 @@ function assertInside(root, path) {
     throw new ContractError('UNSAFE_PATH', '文件超出授权工作区：' + path);
   }
 }
-export async function workspacePath(root, file, { allowMissing = false } = {}) {
-  assertRelativeFile(file);
+export async function workspacePath(root, file, { allowMissing = false, extensions = ['.json'] } = {}) {
+  assertRelativeFile(file, extensions);
   let path = root;
   const parts = file.split('/');
   for (const [index, part] of parts.entries()) {
@@ -88,7 +101,7 @@ export async function discover(root) {
   return { mechanicPaths: mechanicPaths.sort(), viewPaths: viewPaths.sort(), directories: directories.sort() };
 }
 // override 只供显式迁移验证候选配置使用，HTTP 不开放此参数。
-export async function readWorkspace(workspaceRoot) {
+export async function readWorkspace(workspaceRoot, { context = null } = {}) {
   if (!workspaceRoot) throw new ContractError('WORKSPACE_REQUIRED', '必须指定或定位工作区目录');
   const root = await realpath(resolve(workspaceRoot));
   const snapshots = new Map(), physicalFiles = new Set();
@@ -99,10 +112,15 @@ export async function readWorkspace(workspaceRoot) {
     physicalFiles.add(identity); snapshots.set(file, raw); return document;
   }
   const manifest = await read('workspace.json');
-  if (manifest.kind === 'workspace' && manifest.schemaVersion !== 4) {
-    throw new ContractError('WORKSPACE_VERSION_UNSUPPORTED', '只支持 Game-Graph 工作区 v4；当前文件为 v' + String(manifest.schemaVersion) + '。');
+  if (manifest.kind === 'workspace' && manifest.schemaVersion !== 10) {
+    throw new ContractError('WORKSPACE_VERSION_UNSUPPORTED', '只支持 Game-Graph 工作区 v10；当前文件为 v' + String(manifest.schemaVersion) + '。');
   }
   assertDocument(manifest, 'workspace', 'workspace.json');
+  context ??= await projectContext(await projectRootFromWorkspace(root), { manifest, createExportRoot: false,
+    allowMissingExport: true });
+  if (context.workspaceRoot !== root && (process.platform !== 'win32' || context.workspaceRoot.toLowerCase() !== root.toLowerCase())) {
+    throw new ContractError('PROJECT_CONTEXT_MISMATCH', '工作区不属于当前项目上下文：' + root);
+  }
   const definitions = await read(manifest.definitions);
   const { mechanicPaths, viewPaths, directories } = await discover(root);
   const mechanics = [], views = [];
@@ -118,5 +136,6 @@ export async function readWorkspace(workspaceRoot) {
   for (const [file, raw] of [...snapshots].sort(([a], [b]) => a.localeCompare(b))) hash.update(JSON.stringify([file, raw]));
   // 空目录变化也会改变文件树版本，避免目录操作基于旧树执行。
   hash.update(JSON.stringify(directories));
-  return { ...workspace, workspaceRoot: root, files, directories, revision: hash.digest('hex') };
+  return { ...workspace, projectRoot: context.projectRoot, workspaceRoot: root, agentExportRoot: context.exportRoot,
+    files, directories, revision: hash.digest('hex'), resourceRevisions: workspaceResourceRevisions(workspace) };
 }

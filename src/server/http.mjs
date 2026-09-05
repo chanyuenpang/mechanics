@@ -1,70 +1,111 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { createWorkspaceStore } from './store.mjs';
+import { createProjectManager } from './project-manager.mjs';
 import { createPreferences } from './preferences.mjs';
-import { queryWorkspace } from '../domain/query.mjs';
+import { browseDirectories, createProjectHistory, createProjectPreflight } from './local-projects.mjs';
 import { queryFromSearch } from './agent.mjs';
+import { queryWorkspace } from '../domain/query.mjs';
+import { createNativeDirectoryPicker } from './native-directory-picker.mjs';
 
 const dependency = createRequire(import.meta.url);
 
 const assets = new Map([
   ['/', [new URL('../web/index.html', import.meta.url), 'text/html; charset=utf-8']],
   ['/app.mjs', [new URL('../web/app.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/icons.mjs', [new URL('../web/icons.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/canvas.mjs', [new URL('../web/canvas.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/route-cache.mjs', [new URL('../web/route-cache.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/layout.mjs', [new URL('../web/layout.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/graph-compute.mjs', [new URL('../web/graph-compute.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/graph-compute-kernel.mjs', [new URL('../web/graph-compute-kernel.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/geometry-settle.mjs', [new URL('../web/geometry-settle.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/graph-compute-worker.js', [new URL('../web/graph-compute-worker.js', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/glossary.mjs', [new URL('../web/glossary.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/concept-docs.mjs', [new URL('../web/concept-docs.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/resource-navigation.mjs', [new URL('../web/resource-navigation.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/view-files.mjs', [new URL('../web/view-files.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/style.css', [new URL('../web/style.css', import.meta.url), 'text/css; charset=utf-8']],
+  ['/icons/eye.svg', [new URL('../web/icons/eye.svg', import.meta.url), 'image/svg+xml']],
+  ['/icons/eye-off.svg', [new URL('../web/icons/eye-off.svg', import.meta.url), 'image/svg+xml']],
   ['/domain/graph.mjs', [new URL('../domain/graph.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/domain/view.mjs', [new URL('../domain/view.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/domain/endpoint-projection.mjs', [new URL('../domain/endpoint-projection.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/domain/identity.mjs', [new URL('../domain/identity.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/vendor/elk.js', [dependency.resolve('elkjs/lib/elk.bundled.js'), 'text/javascript; charset=utf-8']],
   ['/vendor/elk-worker.js', [dependency.resolve('elkjs/lib/elk-worker.min.js'), 'text/javascript; charset=utf-8']],
   ['/vendor/webcola.js', [dependency.resolve('webcola/WebCola/cola.min.js'), 'text/javascript; charset=utf-8']],
 ]);
 
-export async function startServer({ workspaceRoot, port = 4319, preferencesPath }) {
-  const store = await createWorkspaceStore(workspaceRoot);
+export async function startServer({ projectRoot = null, workspaceRoot = null, port = 4319, preferencesPath, projectHistoryPath, directoryPicker = createNativeDirectoryPicker() }) {
+  if (workspaceRoot) throw new Error('startServer 只接受 projectRoot；工作区固定为项目内 .game-graph');
+  const projectHistory = createProjectHistory(projectHistoryPath);
+  const projectPreflight = createProjectPreflight();
+  const projects = createProjectManager({ onActivated: project => projectHistory.record(project) });
+  if (projectRoot) await projects.open({ projectRoot });
   const preferences = createPreferences(preferencesPath);
-  const token = randomBytes(24).toString('base64url');
-  const expectedToken = Buffer.from(`Bearer ${token}`);
   let origin;
   const server = createServer(async (request, response) => {
     const send = (status, data, type = 'application/json; charset=utf-8') => {
       response.writeHead(status, {
         'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
-        'Referrer-Policy': 'no-referrer', 'Cross-Origin-Resource-Policy': 'same-origin',
+        'Referrer-Policy': 'no-referrer', 'Cross-Origin-Resource-Policy': 'cross-origin',
+        'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Allow-Private-Network': 'true',
         'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'",
       });
       response.end(typeof data === 'string' || Buffer.isBuffer(data) ? data : JSON.stringify(data));
     };
     try {
-      if (request.headers.host !== new URL(origin).host || (request.headers.origin && request.headers.origin !== origin)
-        || request.headers['sec-fetch-site'] === 'cross-site') {
-        send(403, { error: 'ORIGIN_REJECTED', message: '拒绝非本地同源访问' }); return;
+      if (request.headers.host !== new URL(origin).host) {
+        send(403, { error: 'HOST_REJECTED', message: '请求 Host 不是当前本机服务' }); return;
       }
       const url = new URL(request.url, origin);
       if (url.pathname.startsWith('/api/')) {
-        const supplied = Buffer.from(request.headers.authorization ?? '');
-        if (supplied.length !== expectedToken.length || !timingSafeEqual(supplied, expectedToken)) {
-          send(401, { error: 'SESSION_REQUIRED', message: '需要启动网址中的本机会话凭据' }); return;
+        if (request.method === 'OPTIONS') { send(204, ''); return; }
+        if (request.method === 'GET' && url.pathname === '/api/project') { send(200, await projects.state()); return; }
+        if (request.method === 'GET' && url.pathname === '/api/projects') { send(200, await projectHistory.read()); return; }
+        if (request.method === 'GET' && url.pathname === '/api/directories') {
+          send(200, await browseDirectories(url.searchParams.get('path'))); return;
         }
         if (request.method === 'GET' && url.pathname === '/api/workspace') {
-          send(200, await store.read()); return;
+          send(200, await projects.read(url.searchParams.get('projectSessionToken') ?? undefined)); return;
+        }
+        if (request.method === 'GET' && url.pathname === '/api/local-ui-state') {
+          send(200, await projects.readLocalUiState(url.searchParams.get('projectSessionToken') ?? undefined)); return;
+        }
+        if (request.method === 'GET' && url.pathname === '/api/project-references') {
+          send(200, await projects.listProjectReferences(url.searchParams.get('projectSessionToken') ?? undefined)); return;
         }
         if (request.method === 'GET' && url.pathname === '/api/agent') {
-          const query = queryFromSearch(url.searchParams);
-          send(200, queryWorkspace(query.command === 'guide' ? null : await store.readForQuery(), query)); return;
+          const agentSearch = new URLSearchParams(url.searchParams); agentSearch.delete('projectRoot'); agentSearch.delete('projectSessionToken');
+          const query = queryFromSearch(agentSearch);
+          const workspace = query.command === 'guide' ? null : await projects.readForAgent({ projectRoot: url.searchParams.get('projectRoot') });
+          const result = queryWorkspace(workspace, query);
+          send(200, workspace ? { ...result, projectGeneration: workspace.projectGeneration } : result); return;
+        }
+        if (request.method === 'GET' && url.pathname === '/api/agent/session') {
+          send(200, await projects.agentEditStatus({ projectSessionToken: url.searchParams.get('projectSessionToken') ?? undefined,
+            projectRoot: url.searchParams.get('projectRoot'), projectGeneration: Number(url.searchParams.get('projectGeneration')), editSessionId: url.searchParams.get('session') })); return;
+        }
+        if (request.method === 'GET' && url.pathname === '/api/agent/mechanic') {
+          send(200, await projects.openAgentMechanic({ projectRoot: url.searchParams.get('projectRoot'),
+            projectGeneration: Number(url.searchParams.get('projectGeneration')), mechanic: url.searchParams.get('mechanic') })); return;
+        }
+        if (request.method === 'GET' && url.pathname === '/api/concept-docs') {
+          const conceptId = url.searchParams.get('conceptId');
+          const file = url.searchParams.get('file');
+          if (conceptId !== null && file !== null) throw new Error('概念与文件夹文档不能同时选择');
+          send(200, await projects.readConceptDocs(file === null ? conceptId : { file }, url.searchParams.get('projectSessionToken') ?? undefined)); return;
+        }
+        if (request.method === 'GET' && url.pathname === '/api/document-export/settings') {
+          send(200, await projects.readDocumentExport(url.searchParams.get('projectSessionToken') ?? undefined)); return;
         }
         if (request.method === 'GET' && url.pathname === '/api/preferences') { send(200, await preferences.read()); return; }
-        if (request.method === 'POST' && ['/api/save', '/api/mechanics', '/api/views', '/api/preferences'].includes(url.pathname)) {
-          if (request.headers.origin !== origin || request.headers['content-type'] !== 'application/json') {
-            send(403, { error: 'WRITE_ORIGIN_REQUIRED', message: '写入必须来自同源页面并使用 JSON' }); return;
+        if (request.method === 'POST' && ['/api/directories/pick', '/api/project/open', '/api/project/select', '/api/project/reference-enter', '/api/project/preflight', '/api/project/settings', '/api/project/export-path', '/api/document-export/settings', '/api/document-export/generate', '/api/projects/pin',
+          '/api/projects/remove', '/api/save', '/api/local-ui-state', '/api/project-references/bind', '/api/project-references/declare', '/api/mechanics', '/api/mechanic-folders', '/api/mechanic-folder-move', '/api/mechanic-folder-delete', '/api/mechanic-move', '/api/mechanic-delete', '/api/views', '/api/preferences', '/api/agent/session', '/api/agent/mutation'].includes(url.pathname)) {
+          if (!(request.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
+            send(415, { error: 'JSON_REQUIRED', message: '写入必须使用 application/json' }); return;
           }
           const chunks = []; let size = 0;
           for await (const chunk of request) {
@@ -74,8 +115,36 @@ export async function startServer({ workspaceRoot, port = 4319, preferencesPath 
           }
           const body = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
           if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('请求必须是 JSON 对象');
+          if (url.pathname === '/api/directories/pick') {
+            if (request.headers.origin !== origin) { send(403, { error: 'ORIGIN_REJECTED', message: '原生文件夹选择器只能由本工具页面打开' }); return; }
+            send(200, await directoryPicker.pick(body)); return;
+          }
           if (url.pathname === '/api/preferences') { send(200, await preferences.save(body)); return; }
-          send(200, await (url.pathname === '/api/save' ? store.save(body) : url.pathname === '/api/views' ? store.createView(body) : store.createMechanic(body))); return;
+          if (url.pathname === '/api/local-ui-state') { send(200, await projects.saveLocalUiState(body)); return; }
+          if (url.pathname === '/api/project-references/bind') { send(200, await projects.bindProjectReference(body)); return; }
+          if (url.pathname === '/api/project-references/declare') { send(200, await projects.declareProjectReference(body)); return; }
+          if (url.pathname === '/api/project/select') { send(200, await projects.select(body.projectSessionToken)); return; }
+          if (url.pathname === '/api/project/reference-enter') { send(200, await projects.enterReference(body)); return; }
+          if (url.pathname === '/api/project/preflight') { send(200, await projectPreflight.inspect(body)); return; }
+          if (url.pathname === '/api/projects/pin') { send(200, await projectHistory.pin(body)); return; }
+          if (url.pathname === '/api/projects/remove') { send(200, await projectHistory.remove(body)); return; }
+          if (url.pathname === '/api/project/open') { await projectPreflight.verify(body); send(200, await projects.open(body)); return; }
+          if (url.pathname === '/api/project/settings') { send(200, await projects.setProjectSettings(body)); return; }
+          if (url.pathname === '/api/project/export-path') { send(200, await projects.setAgentExportPath(body)); return; }
+          if (url.pathname === '/api/document-export/settings') { send(200, await projects.setDocumentExport(body)); return; }
+          if (url.pathname === '/api/document-export/generate') { send(200, await projects.generateDocumentExport(body)); return; }
+          if (url.pathname === '/api/agent/session') {
+            if (body.action === 'open') { send(200, await projects.openAgentEdit(body)); return; }
+            if (body.action === 'close') { send(202, await projects.closeAgentEdit(body)); return; }
+            throw Object.assign(new Error('Agent 编辑会话只支持 open 或 close'), { code: 'AGENT_EDIT_SESSION_INVALID' });
+          }
+          if (url.pathname === '/api/agent/mutation') { send(200, await projects.mutateAgent(body)); return; }
+          if (url.pathname === '/api/mechanic-folders') { send(200, await projects.createMechanicFolder(body)); return; }
+          if (url.pathname === '/api/mechanic-move') { send(200, await projects.moveMechanic(body)); return; }
+          if (url.pathname === '/api/mechanic-folder-move') { send(200, await projects.moveMechanicFolder(body)); return; }
+          if (url.pathname === '/api/mechanic-folder-delete') { send(200, await projects.deleteMechanicFolder(body)); return; }
+          if (url.pathname === '/api/mechanic-delete') { send(200, await projects.deleteMechanic(body)); return; }
+          send(200, await (url.pathname === '/api/save' ? projects.save(body) : url.pathname === '/api/views' ? projects.createView(body) : projects.createMechanic(body))); return;
         }
         send(405, { error: 'METHOD_NOT_ALLOWED', message: '此接口不支持该操作' }); return;
       }
@@ -85,19 +154,23 @@ export async function startServer({ workspaceRoot, port = 4319, preferencesPath 
       send(200, await readFile(asset[0]), asset[1]);
     } catch (error) {
       // 不返回部分工作区，不把失败替换为空数据或内置示例。
-      const status = ['REVISION_CONFLICT', 'FILE_EXISTS', 'DUPLICATE_ID'].includes(error.code) ? 409
-        : ['SAVE_UNCERTAIN', 'CREATE_PARTIAL'].includes(error.code) ? 500 : 422;
-      send(status, { error: error.code ?? 'REQUEST_FAILED', message: error.message });
+      const status = ['REVISION_CONFLICT', 'FILE_EXISTS', 'DUPLICATE_ID', 'WORKSPACE_LOCKED', 'PROJECT_REQUIRED', 'PROJECT_CHANGED',
+        'PROJECT_PREFLIGHT_STALE', 'PROJECT_INTENT_MISMATCH', 'DIRECTORY_PICKER_BUSY'].includes(error.code) ? 409
+        : ['SAVE_UNCERTAIN', 'CREATE_PARTIAL', 'PROJECT_SWITCH_PARTIAL', 'AGENT_EXPORT_FAILED', 'REFERENCE_DECLARATION_PARTIAL'].includes(error.code) ? 500 : 422;
+      const detailKeys = ['canonicalCommitted', 'workspaceId', 'revision', 'resourceRevision', 'resource', 'action', 'id', 'references', 'referenceDeclared', 'reference'];
+      const details = Object.fromEntries(detailKeys.filter(key => Object.hasOwn(error, key)).map(key => [key, error[key]]));
+      send(status, { error: error.code ?? 'REQUEST_FAILED', message: error.message, ...details });
     }
   });
   try { await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, '127.0.0.1', resolve);
-  }); } catch (error) { await store.close(); throw error; }
+  }); } catch (error) { await projects.close(); throw error; }
   origin = `http://127.0.0.1:${server.address().port}`;
   const close = async () => {
+    directoryPicker.close();
     await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-    await store.close();
+    await projects.close();
   };
-  return { server, close, origin, token, url: `${origin}/#session=${token}` };
+  return { server, close, origin, url: `${origin}/` };
 }

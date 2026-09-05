@@ -9,6 +9,7 @@ dist/
 *.tgz
 .game-graph.lock
 *.game-graph.tmp
+.rule-text-backup-*/
 
 # claw-kit
 .claw/*

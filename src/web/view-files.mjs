@@ -1,5 +1,5 @@
-import { compose, collapse, canCollapse } from '../domain/graph.mjs';
-import { composeView, registerMechanic, registeredMechanicIds, setMechanicVisibility, visibleMechanicIds } from '../domain/view.mjs';
+import { compose } from '../domain/graph.mjs';
+import { composeView, moveMechanic, registerMechanic, removeMechanic, setMechanicVisibility, visibleMechanicIds } from '../domain/view.mjs';
 
 const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const fail = message => { throw new Error(message); };
@@ -48,15 +48,20 @@ export function graphPositions(workspace, graph, positions = {}, mechanicId = nu
 
 function materializeView(workspace, snapshot, original, graph) {
   const positions = completeViewPositions(workspace, original, snapshot.positions);
-  return { mechanicRegistrations: snapshot.mechanicRegistrations.map(item => structuredClone(item)), collapsedNodeIds: [...snapshot.collapsedNodeIds], positions };
+  return { mechanicRegistrations: snapshot.mechanicRegistrations.map(item => structuredClone(item)), collapsedNodeIds: [], positions,
+    projectionPositions: structuredClone(snapshot.projectionPositions ?? {}), ...(snapshot.routeCache ? { routeCache: structuredClone(snapshot.routeCache) } : {}),
+    structuralPresentation: snapshot.structuralPresentation };
 }
 
 function updateViewProjection(workspace, snapshot) {
   const original = composeView(workspace, snapshot);
   return {
     mechanicRegistrations: snapshot.mechanicRegistrations.map(item => structuredClone(item)),
-    collapsedNodeIds: [...snapshot.collapsedNodeIds],
+    collapsedNodeIds: [],
     positions: completeViewPositions(workspace, original, snapshot.positions),
+    projectionPositions: structuredClone(snapshot.projectionPositions ?? {}),
+    ...(snapshot.routeCache ? { routeCache: structuredClone(snapshot.routeCache) } : {}),
+    structuralPresentation: snapshot.structuralPresentation,
   };
 }
 
@@ -64,47 +69,39 @@ export const registerViewMechanic = (workspace, snapshot, mechanicId) => updateV
 
 export const changeViewVisibility = (workspace, snapshot, mechanicId, visible) => updateViewProjection(workspace, setMechanicVisibility(snapshot, mechanicId, visible));
 
-export function prepareOpening(workspace, requestedId, { repairFolds = false } = {}) {
+export const removeViewMechanic = (workspace, snapshot, mechanicId) => updateViewProjection(workspace, removeMechanic(snapshot, mechanicId));
+
+export const moveViewMechanic = (workspace, snapshot, mechanicId, targetIndex) => updateViewProjection(workspace, moveMechanic(snapshot, mechanicId, targetIndex));
+
+export function prepareOpening(workspace, requestedId) {
   const remembered = workspace.manifest.lastView;
-  const mechanic = typeof requestedId === 'object' && requestedId?.kind === 'mechanic';
-  const viewId = mechanic ? null : requestedId ?? remembered?.viewId ?? null;
+  const request = typeof requestedId === 'object' && requestedId !== null ? requestedId : null;
+  const mechanic = request?.kind === 'mechanic';
+  const requestedView = request?.kind === 'view';
+  if (request && !mechanic && !requestedView) fail('打开请求必须指定 mechanism 或 view 类型');
+  if (requestedView && (typeof request.id !== 'string' || !request.id)) fail('打开视图请求缺少有效文件 ID');
+  if (mechanic && request.id !== null && (typeof request.id !== 'string' || !request.id)) fail('打开机制请求缺少有效文件 ID');
+  const viewId = mechanic ? null : requestedView ? request.id : requestedId ?? remembered?.viewId ?? null;
   let snapshot = viewId !== null ? workspace.views.find(view => view.id === viewId)
-    : mechanic ? { graphIds: requestedId.id === null ? [] : [requestedId.id], activeLayerId: requestedId.id, collapsedNodeIds: [], positions: {} }
+    : mechanic ? { graphIds: request.id === null ? [] : [request.id], activeLayerId: request.id, collapsedNodeIds: [], positions: {} }
       : remembered ?? { graphIds: workspace.mechanics.slice(0, 1).map(item => item.id), activeLayerId: workspace.mechanics[0]?.id ?? null, collapsedNodeIds: [], positions: {} };
   if (!snapshot) fail('视图文件不存在：' + viewId);
   const graphIds = viewId !== null ? visibleMechanicIds(snapshot) : snapshot.graphIds;
   if (viewId === null && snapshot.activeLayerId !== null && !snapshot.graphIds.includes(snapshot.activeLayerId)) fail('视图的编辑层必须可见');
   const original = viewId !== null ? composeView(workspace, snapshot) : compose(workspace, graphIds);
-  let graph = original;
-  const invalidFolds = [], folded = [];
-  const registeredNodes = new Set(viewId === null ? original.nodes.map(node => node.id)
-    : workspace.mechanics.filter(item => registeredMechanicIds(snapshot).includes(item.id)).flatMap(item => item.nodeIds));
-  const visibleNodes = new Set(original.nodes.map(node => node.id));
-  for (const id of snapshot.collapsedNodeIds) {
-    if (canCollapse(graph, id)) { graph = collapse(graph, id); folded.push(id); }
-    else if (viewId !== null && registeredNodes.has(id) && !visibleNodes.has(id)) folded.push(id);
-    else invalidFolds.push(id);
-  }
-  if (invalidFolds.length && (!repairFolds || viewId === null)) {
-    const error = new Error('来源规则已改变，以下折叠不再成立：' + invalidFolds.join('、'));
-    error.code = viewId === null ? 'INVALID_FOLD' : 'FOLD_REPAIR_REQUIRED'; error.viewId = viewId; throw error;
-  }
-  if (invalidFolds.length) snapshot = { ...snapshot, collapsedNodeIds: folded };
-  const legacy = viewId === null && (snapshot.graphIds.length > 1 || snapshot.collapsedNodeIds.length > 0 || Object.keys(snapshot.positions).length > 0);
+  const graph = original;
+  snapshot = { ...snapshot, collapsedNodeIds: [] };
+  const legacy = viewId === null && (snapshot.graphIds.length > 1 || Object.keys(snapshot.positions).length > 0);
   const activeId = viewId !== null || legacy ? null : snapshot.graphIds[0] ?? null;
-  return { workspace, viewId, legacy, activeId, invalidFolds,
+  return { workspace, viewId, legacy, activeId,
     snapshot: viewId !== null ? materializeView(workspace, snapshot, original, graph)
       : legacy ? { ...structuredClone(snapshot), positions: graphPositions(workspace, original, snapshot.positions, snapshot.activeLayerId) }
         : structuredClone(snapshot), original, graph };
 }
 
-export async function readOpening(api, requestedId, { repairFolds = false } = {}) {
+export async function readOpening(api, requestedId) {
   let workspace = await api('/api/workspace');
-  let candidate = prepareOpening(workspace, requestedId, { repairFolds });
-  if (candidate.invalidFolds.length) {
-    workspace = await api('/api/save', { revision: workspace.revision, ...viewSaveRequest(workspace, candidate.viewId, candidate.snapshot) });
-    candidate = prepareOpening(workspace, requestedId);
-  }
+  let candidate = prepareOpening(workspace, requestedId);
   const lastView = candidate.viewId === null ? candidate.snapshot : { viewId: candidate.viewId };
   if (!candidate.legacy && !equal(workspace.manifest.lastView, lastView)) {
     workspace = await api('/api/save', { revision: workspace.revision, kind: 'workspace', document: { ...workspace.manifest, lastView } });

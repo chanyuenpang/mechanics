@@ -19,11 +19,13 @@ const packArgs = ['pack', '--json', '--ignore-scripts'];
 const [preview] = JSON.parse(command(process.execPath, [npm, ...packArgs, '--dry-run']));
 const names = preview.files.map(file => file.path);
 for (const path of names) {
-  assert.match(path, /^(src\/|schemas\/|docs\/|examples\/|README\.md$|package\.json$)/);
+  assert.match(path, /^(src\/|schemas\/|skills\/|docs\/|examples\/|README\.md$|package\.json$)/);
   assert.ok(!/(?:^|\/)(?:node_modules|\.git|\.claw|design)(?:\/|$)|\.lock$|\.tmp$|\.log$/.test(path), path);
 }
-for (const path of ['src/server/cli.mjs', 'src/web/glossary.mjs', 'src/web/view-files.mjs', 'src/web/graph-compute.mjs',
+assert.ok(!names.includes('examples/card-game/.game-graph/.game-graph.lock'), '打包清单不得包含运行态工作区锁');
+for (const path of ['src/server/cli.mjs', 'src/server/native-directory-picker.mjs', 'src/server/windows-directory-dialog.cs', 'src/web/glossary.mjs', 'src/web/view-files.mjs', 'src/web/graph-compute.mjs',
   'src/web/graph-compute-kernel.mjs', 'src/web/graph-compute-worker.js', 'src/web/geometry-settle.mjs', 'src/web/index.html', 'schemas/protocol.schema.json']) assert.ok(names.includes(path), path);
+for (const path of ['skills/game-mechanic-search/SKILL.md', 'skills/game-mechanic-modeling/SKILL.md']) assert.ok(names.includes(path), path);
 await mkdir(join(root, 'dist'), { recursive: true });
 const [packed] = JSON.parse(command(process.execPath, [npm, ...packArgs, '--pack-destination', join(root, 'dist')]));
 assert.deepEqual(packed.files.map(file => file.path), names);
@@ -47,38 +49,87 @@ try {
   assert.match(await readFile(cli, 'utf8'), /^#!\/usr\/bin\/env node/);
   assert.match(command(process.execPath, [cli, '--help'], temporary), /init/);
   const workspace = join(temporary, '规则资料');
-  command(process.execPath, [cli, 'init', workspace, '--id', 'package-check'], temporary);
-  const manifestBefore = await readFile(join(workspace, 'workspace.json'), 'utf8');
-  const data = JSON.parse(command(process.execPath, [cli, 'validate'], join(workspace, 'mechanics')));
+  const initialized = JSON.parse(command(process.execPath, [cli, 'init', workspace, '--id', 'package-check'], temporary));
+  assert.deepEqual(initialized.projectSkills, ['.agents/skills/game-mechanic-search/SKILL.md', '.agents/skills/game-mechanic-modeling/SKILL.md']);
+  for (const name of ['game-mechanic-search', 'game-mechanic-modeling']) {
+    assert.equal(await readFile(join(workspace, '.agents', 'skills', name, 'SKILL.md'), 'utf8'),
+      await readFile(join(installed, 'skills', name, 'SKILL.md'), 'utf8'));
+  }
+  const manifestBefore = await readFile(join(workspace, '.game-graph', 'workspace.json'), 'utf8');
+  const data = JSON.parse(command(process.execPath, [cli, 'validate'], join(workspace, '.game-graph', 'mechanics')));
   assert.equal(data.workspaceId, 'package-check');
-  const scopes = JSON.parse(command(process.execPath, [cli, 'agent', 'scopes'], join(workspace, 'mechanics')));
+  const scopes = JSON.parse(command(process.execPath, [cli, 'agent', 'scopes'], join(workspace, '.game-graph', 'mechanics')));
   assert.equal(scopes.workspaceId, 'package-check');
-  assert.equal(scopes.queryApiVersion, 2);
+  assert.equal(scopes.queryApiVersion, 8);
+  assert.match(scopes.resourceRevisions.definitions, /^[a-f0-9]{64}$/u);
   const guide = JSON.parse(command(process.execPath, [cli, 'agent', 'guide'], temporary));
-  assert.equal(guide.readingContract.version, 2);
-  const search = JSON.parse(command(process.execPath, [cli, 'agent', 'search', '--query', '未建模概念'], join(workspace, 'mechanics')));
+  assert.equal(guide.queryApiVersion, 8);
+  assert.equal(guide.readingContract.version, 8);
+  const search = JSON.parse(command(process.execPath, [cli, 'agent', 'search', '--query', '未建模概念'], join(workspace, '.game-graph', 'mechanics')));
+  assert.equal(search.queryApiVersion, 8);
+  assert.equal(search.readingContract.version, 8);
   assert.equal(search.output.totalMatches, 0);
+  const created = JSON.parse(command(process.execPath, [cli, 'agent', 'concept', 'create', '--project', workspace,
+    '--id', 'package-focus', '--label', '打包专注', '--description', '隔离安装验收使用的概念。', '--aliases', '[]', '--tags', '[]',
+    '--revision', scopes.resourceRevisions.definitions], temporary));
+  assert.equal(created.canonicalCommitted, true);
+  assert.match(created.resourceRevision, /^[a-f0-9]{64}$/u);
+  const updated = JSON.parse(command(process.execPath, [cli, 'agent', 'concept', 'update', '--project', workspace,
+    '--concept', 'package-focus', '--description', '已通过资源版本串联修改。', '--revision', created.resourceRevision], temporary));
+  assert.notEqual(updated.resourceRevision, created.resourceRevision);
   // 真实运行安装包中的 CLI 和静态页面，启动 cwd 在资料子目录而非源码内。
-  child = spawn(process.execPath, [cli, 'serve', '--port', '0'], { cwd: join(workspace, 'mechanics'), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  child = spawn(process.execPath, [cli, 'web', '--port', '0'], { cwd: join(workspace, '.game-graph', 'mechanics'),
+    env: { ...process.env, APPDATA: join(temporary, 'config'), XDG_CONFIG_HOME: join(temporary, 'config') },
+    windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   const url = await new Promise((accept, reject) => {
     let output = '', errors = '';
     const timeout = setTimeout(() => reject(new Error('安装包 CLI 启动超时：' + errors)), 15000);
     child.once('error', error => { clearTimeout(timeout); reject(error); });
     child.once('exit', code => { clearTimeout(timeout); reject(new Error('安装包服务提前退出 ' + code + '：' + errors)); });
     child.stderr.on('data', chunk => { errors += chunk; });
-    child.stdout.on('data', chunk => { output += chunk; const match = output.match(/http:\/\/127\.0\.0\.1:\d+\/#session=[\w-]+/); if (match) { clearTimeout(timeout); accept(match[0]); } });
+    child.stdout.on('data', chunk => { output += chunk; const match = output.match(/http:\/\/127\.0\.0\.1:\d+\//); if (match) { clearTimeout(timeout); accept(match[0]); } });
   });
-  const origin = new URL(url).origin, token = new URL(url).hash.slice('#session='.length);
+  const origin = new URL(url).origin;
+  assert.deepEqual(await (await fetch(origin + '/api/project')).json(), { status: 'empty', projectGeneration: 0 });
+  const post = (path, body) => fetch(origin + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const preflightResponse = await post('/api/project/preflight', { projectRoot: workspace });
+  assert.equal(preflightResponse.status, 200);
+  const preflight = await preflightResponse.json();
+  const openResponse = await post('/api/project/open', { projectRoot: workspace,
+    selectionToken: preflight.selectionToken, intent: preflight.allowedIntent });
+  assert.equal(openResponse.status, 200);
   for (const asset of ['/', '/app.mjs', '/canvas.mjs', '/glossary.mjs', '/view-files.mjs', '/graph-compute.mjs',
     '/graph-compute-kernel.mjs', '/graph-compute-worker.js', '/geometry-settle.mjs', '/style.css',
+    '/icons/eye.svg', '/icons/eye-off.svg',
     '/vendor/elk.js', '/vendor/elk-worker.js', '/vendor/webcola.js', '/domain/graph.mjs', '/domain/view.mjs']) {
     assert.equal((await fetch(origin + asset)).status, 200, asset);
   }
-  const response = await fetch(origin + '/api/workspace', { headers: { Authorization: 'Bearer ' + token } });
+  const response = await fetch(origin + '/api/workspace');
   assert.equal(response.status, 200);
-  assert.equal((await response.json()).workspaceRoot, await realpath(workspace));
-  assert.equal(await readFile(join(workspace, 'workspace.json'), 'utf8'), manifestBefore);
-  console.log(JSON.stringify({ ok: true, version: preview.version, tarball, files: names.length, integrity: packed.integrity, shim: true, isolatedInstall: true, cliServe: true, staticAssets: true, cwdIndependent: true }, null, 2));
+  const opened = await response.json();
+  assert.equal(opened.projectRoot, await realpath(workspace));
+  assert.equal(opened.workspaceRoot, await realpath(join(workspace, '.game-graph')));
+  assert.equal(await readFile(join(workspace, '.game-graph', 'workspace.json'), 'utf8'), manifestBefore);
+  const online = JSON.parse(command(process.execPath, [cli, 'agent', 'concept', 'update', '--connect', origin,
+    '--project-generation', String(opened.projectGeneration), '--concept', 'package-focus', '--label', '在线打包专注',
+    '--revision', opened.resourceRevisions.definitions], temporary));
+  assert.equal(online.canonicalCommitted, true);
+  const afterOnline = await (await fetch(origin + '/api/workspace')).json();
+  const lockedDefinitions = structuredClone(afterOnline.definitions);
+  lockedDefinitions.nodes.find(node => node.id === 'package-focus').agentLocked = true;
+  const lockResponse = await fetch(origin + '/api/save', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectGeneration: afterOnline.projectGeneration, revision: afterOnline.revision, kind: 'definitions', document: lockedDefinitions }) });
+  assert.equal(lockResponse.status, 200);
+  const afterLock = await (await fetch(origin + '/api/workspace')).json();
+  const lockedMutation = await fetch(origin + '/api/agent/mutation', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectGeneration: afterLock.projectGeneration, revision: afterLock.resourceRevisions.definitions,
+      resource: 'concept', action: 'update', id: 'package-focus', label: '不应写入' }) });
+  assert.equal(lockedMutation.status, 422);
+  assert.equal((await lockedMutation.json()).error, 'CONCEPT_AGENT_LOCKED');
+  console.log(JSON.stringify({ ok: true, version: preview.version, tarball, files: names.length, integrity: packed.integrity,
+    shim: true, isolatedInstall: true, cliWeb: true, emptyProjectStart: true, webProjectOpen: true, staticAssets: true, cwdIndependent: true,
+    queryApiVersion: scopes.queryApiVersion, mutationOffline: true, mutationOnline: true, agentLock: true,
+    bundledSkills: true, initSkillRegistration: true }, null, 2));
 } finally {
   if (child && child.exitCode === null && child.signalCode === null) {
     const exited = new Promise(accept => child.once('exit', accept)); child.kill('SIGTERM'); await exited;

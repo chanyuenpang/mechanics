@@ -18,25 +18,46 @@ export function compose(workspace, selectedIds) {
       steps: [{ graphId: graph.id, edgeId: edge.id, ...structuredClone(edge) }], hiddenNodes: [],
     }))).sort((a, b) => a.id.localeCompare(b.id)),
   };
-  assertContainment(result.edges);
+  assertSpecializes(result.edges);
   return result;
 }
 
-// 等号沿 source → target 单向传递宏观影响，允许显式闭环；自连接不表达两个概念间的关系。
-export function assertContainment(edges) {
-  for (const edge of edges) if (edge.relation === 'contains' && edge.source === edge.target) {
-    const error = new Error(`包含关系不能连接自身：[${edge.id}]`);
-    error.code = 'CONTAINMENT_SELF_LINK'; throw error;
+// specializes 沿“具体概念 → 上位概念”单向保持极性；分类关系必须无环。
+export function assertSpecializes(edges) {
+  const specializes = edges.filter(edge => edge.relation === 'specializes');
+  for (const edge of specializes) if (edge.source === edge.target) {
+    const error = new Error(`specializes 关系不能连接自身：[${edge.id}]`);
+    error.code = 'SPECIALIZES_SELF_LINK'; throw error;
   }
+  const adjacent = new Map();
+  for (const edge of specializes) {
+    if (!adjacent.has(edge.source)) adjacent.set(edge.source, []);
+    adjacent.get(edge.source).push(edge.target);
+  }
+  const visiting = new Set(), visited = new Set();
+  function visit(node) {
+    if (visiting.has(node)) {
+      const error = new Error(`specializes 关系形成分类环：${[...visiting, node].join(' → ')}`);
+      error.code = 'SPECIALIZES_CYCLE'; throw error;
+    }
+    if (visited.has(node)) return;
+    visiting.add(node);
+    for (const target of adjacent.get(node) ?? []) visit(target);
+    visiting.delete(node); visited.add(node);
+  }
+  for (const node of adjacent.keys()) visit(node);
 }
 
-// 所有关系均按保存的箭头方向遍历，不隐式添加反向关系。
+// 路径查询只遍历显式 influence；specializes 仅是结构声明，当前不产生派生规则。
 function traversableEdges(graph) {
-  return graph.edges;
+  return graph.edges.filter(edge => edge.relation === 'influence');
 }
 
 export function multiplySigns(signs) {
-  if (signs.length === 0 || signs.some(sign => sign !== 1 && sign !== -1)) throw new Error('路径必须包含有效的正负关系');
+  if (signs.length === 0 || signs.some(sign => sign !== 1 && sign !== -1 && sign !== 'random')) {
+    throw new Error('路径必须包含有效的正向、负向或随机影响');
+  }
+  if (signs.includes('random')) return 'random';
   return signs.reduce((sign, next) => sign * next, 1);
 }
 
@@ -56,7 +77,7 @@ function hasPath(graph, from, to) {
 export function canCollapse(graph, nodeId) {
   const incoming = graph.edges.filter(edge => edge.target === nodeId);
   const outgoing = graph.edges.filter(edge => edge.source === nodeId);
-  if ([...incoming, ...outgoing].some(edge => edge.relation === 'contains')) return false;
+  if ([...incoming, ...outgoing].some(edge => edge.relation === 'specializes')) return false;
   if (incoming.length !== 1 || outgoing.length !== 1) return false;
   // 不能把环中的节点缩成一条似乎独立成立的影响路径。
   return !hasPath(graph, outgoing[0].target, incoming[0].source);
@@ -75,8 +96,8 @@ export function collapse(graph, nodeId) {
       {
         id: `fold:${steps.map(step => `${step.graphId}/${step.edgeId}`).join('|')}`,
         source: first.source, target: last.target, relation: 'influence', sign: first.sign * last.sign,
-        condition: steps.map(step => step.condition).filter(Boolean).join('；'),
-        note: '折叠路径摘要，不是新增的原始规则',
+        ruleText: steps.map(step => step.ruleText).filter(text => text?.trim()).join('；'),
+        derived: true,
         steps: structuredClone(steps), hiddenNodes: [...first.hiddenNodes, nodeId, ...last.hiddenNodes],
       },
     ],
@@ -84,7 +105,7 @@ export function collapse(graph, nodeId) {
 }
 
 export function tracePaths(graph, source, target, { maxPaths = 50, maxDepth = 16, maxExpansions = 10000 } = {}) {
-  assertContainment(graph.edges);
+  assertSpecializes(graph.edges);
   if (!Number.isInteger(maxPaths) || maxPaths < 1 || !Number.isInteger(maxDepth) || maxDepth < 1) throw new Error('路径数量和深度上限必须是正整数');
   const ids = new Set(graph.nodes.map(node => node.id));
   if (!ids.has(source) || !ids.has(target)) throw new Error('查询端点不在当前组合中');
@@ -104,10 +125,17 @@ export function tracePaths(graph, source, target, { maxPaths = 50, maxDepth = 16
     expandedStates++;
     if (node === target && edges.length) {
       if (paths.length >= maxPaths) { truncated = true; return; }
-      const influences = edges.filter(edge => edge.relation !== 'contains');
-      paths.push({ kind: influences.length ? 'influence' : 'containment',
-        ...(influences.length ? { sign: multiplySigns(influences.map(edge => edge.sign)) } : {}),
-        steps: edges.flatMap(edge => structuredClone(edge.steps)) });
+      paths.push({ kind: 'influence', sign: multiplySigns(edges.map(edge => edge.sign)),
+        // 继承边必须把 provenance 带到路径步骤；普通声明边不附加派生字段。
+        steps: edges.flatMap(edge => edge.steps.map(step => ({ ...structuredClone(step),
+          ...(edge.derived === true && edge.origin ? {
+            derived: true,
+            origin: structuredClone(edge.origin),
+            specializationPath: structuredClone(edge.specializationPath),
+            substitutedEndpoint: edge.substitutedEndpoint,
+            inheritancePolicy: structuredClone(edge.inheritancePolicy),
+          } : {}),
+        }))) });
       return;
     }
     const nextEdges = (adjacent.get(node) ?? []).filter(edge => !seen.has(edge.target));
@@ -125,10 +153,13 @@ export function tracePaths(graph, source, target, { maxPaths = 50, maxDepth = 16
 export function summarizePaths(result) {
   const positive = result.paths.filter(path => path.sign === 1).length;
   const negative = result.paths.filter(path => path.sign === -1).length;
-  const neutral = result.paths.length - positive - negative;
-  const kind = positive && negative ? 'mixed' : positive ? 'positive' : negative ? 'negative' : neutral ? 'neutral_only' : 'not_found';
-  const conclusion = { mixed: '促进与抑制路径并存', positive: '存在促进影响', negative: '存在抑制影响', neutral_only: '仅找到等号关联', not_found: '未找到影响路径' }[kind];
-  return { kind, conclusion, positive, negative, neutral, complete: !result.truncated };
+  const random = result.paths.filter(path => path.sign === 'random').length;
+  const categories = [positive, negative, random].filter(Boolean).length;
+  const kind = categories > 1 ? 'mixed' : positive ? 'positive_only' : negative ? 'negative_only'
+    : random ? 'random_only' : 'not_found';
+  const conclusion = { mixed: '存在多种影响方向', positive_only: '仅找到正向影响路径', negative_only: '仅找到负向影响路径',
+    random_only: '仅找到随机影响路径', not_found: '未找到影响路径' }[kind];
+  return { kind, conclusion, positive, negative, random, complete: !result.truncated };
 }
 
 // 沿原始关系查找下游，折叠不改变可追踪范围，循环不重复包含起点。
@@ -152,7 +183,7 @@ export function diagnose(graph) {
     const incoming = graph.edges.filter(edge => edge.target === node.id);
     const outgoing = graph.edges.filter(edge => edge.source === node.id);
     if (!incoming.length && !outgoing.length) findings.push({ kind: 'isolated', nodeIds: [node.id], message: '当前选图中未连接；可能尚未建模，不等于无价值。' });
-    else if (incoming.some(edge => edge.relation !== 'contains') && !outgoing.some(edge => edge.relation !== 'contains')) findings.push({ kind: 'sink', nodeIds: [node.id], message: '当前模型中的显式作用终点；可能是合理终局或消耗出口。' });
+    else if (incoming.some(edge => edge.relation === 'influence') && !outgoing.some(edge => edge.relation === 'influence')) findings.push({ kind: 'sink', nodeIds: [node.id], message: '当前模型中的显式作用终点；可能是合理终局或消耗出口。' });
     const signature = [...incoming.map(edge => `in:${edge.source}:${edge.relation}:${edge.sign ?? ''}`), ...outgoing.map(edge => `out:${edge.target}:${edge.relation}:${edge.sign ?? ''}`)].sort().join('|');
     if (signature) patterns.set(signature, [...(patterns.get(signature) ?? []), node.id]);
   }

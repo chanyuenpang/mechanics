@@ -5,18 +5,21 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { readWorkspace } from '../src/server/workspace.mjs';
+import { publishCatalog } from '../src/server/catalog.mjs';
 import { createWorkspaceStore } from '../src/server/store.mjs';
 import { startServer } from '../src/server/http.mjs';
 import { validateWorkspace } from '../src/domain/validate.mjs';
+import { copyExampleFixture } from './example-fixture.mjs';
 
 const example = fileURLToPath(new URL('../examples/card-game/', import.meta.url));
 async function fixture(t) {
-  const root = await mkdtemp(join(tmpdir(), 'rule-views-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  await cp(example, root, { recursive: true });
+  const projectRoot = await mkdtemp(join(tmpdir(), 'rule-views-'));
+  t.after(() => rm(projectRoot, { recursive: true, force: true }));
+  await copyExampleFixture(projectRoot);
+  const root = join(projectRoot, '.game-graph');
   return root;
 }
-const view = (id = 'hand') => ({ schemaVersion: 2, kind: 'view', workspaceId: 'sample-card-game', id, name: '规则叠加', mechanicRegistrations: [{ mechanicId: 'basic-rules', visible: true }, { mechanicId: 'hand', visible: true }], collapsedNodeIds: [], positions: {} });
+const view = (id = 'hand', structuralPresentation = 'line') => ({ schemaVersion: 3, kind: 'view', workspaceId: 'sample-card-game', id, name: '规则叠加', mechanicRegistrations: [{ mechanicId: 'basic-rules', visible: true }, { mechanicId: 'hand', visible: true }], collapsedNodeIds: [], positions: {}, structuralPresentation });
 const json = async (root, path) => JSON.parse(await readFile(join(root, path), 'utf8'));
 
 test('真实视图混排发现、按类型区分同 ID，保存只改视图且最近记录仅存引用', async t => {
@@ -42,6 +45,26 @@ test('真实视图混排发现、按类型区分同 ID，保存只改视图且�
   } finally { await store.close(); }
 });
 
+test('view v3 强制结构展示值，保存重开保持 badge 且不改变语义源文件', async t => {
+  const root = await fixture(t), store = await createWorkspaceStore(root);
+  try {
+    let data = await store.read();
+    const definitionsBefore = await readFile(join(root, 'definitions.graph.json'), 'utf8');
+    const mechanicsBefore = await Promise.all(data.files.filter(item => item.kind === 'mechanic')
+      .map(item => readFile(join(root, item.path), 'utf8')));
+    const { structuralPresentation: _missing, ...missing } = view('missing');
+    await assert.rejects(store.createView({ revision: data.revision, document: missing, file: 'missing.view.json' }), { code: 'INVALID_DOCUMENT' });
+    await assert.rejects(store.createView({ revision: data.revision, document: view('invalid', 'table'), file: 'invalid.view.json' }), { code: 'INVALID_DOCUMENT' });
+    data = await store.createView({ revision: data.revision, document: view('badge-view', 'badge'), file: 'badge.view.json' });
+    assert.equal(data.views.find(item => item.id === 'badge-view').structuralPresentation, 'badge');
+    const reopened = await store.read();
+    assert.equal(reopened.views.find(item => item.id === 'badge-view').structuralPresentation, 'badge');
+    assert.equal(await readFile(join(root, 'definitions.graph.json'), 'utf8'), definitionsBefore);
+    assert.deepEqual(await Promise.all(reopened.files.filter(item => item.kind === 'mechanic')
+      .map(item => readFile(join(root, item.path), 'utf8'))), mechanicsBefore);
+  } finally { await store.close(); }
+});
+
 test('视图和机制移动仍按 ID 恢复，外部视图字节修改触发整体版本冲突', async t => {
   const root = await fixture(t), store = await createWorkspaceStore(root);
   try {
@@ -51,6 +74,8 @@ test('视图和机制移动仍按 ID 恢复，外部视图字节修改触发整�
     await mkdir(join(root, '移动'));
     await rename(join(root, 'main.view.json'), join(root, '移动/视图.view.json'));
     await rename(join(root, 'mechanics/hand.mechanic.json'), join(root, '移动/手牌.mechanic.json'));
+    const canonical = await readWorkspace(root, { verifyGeneratedCatalog: false });
+    await publishCatalog(canonical.agentExportRoot, canonical);
     const moved = await store.read(); assert.deepEqual(moved.manifest.lastView, { viewId: 'hand' });
     assert.notEqual(moved.revision, data.revision);
     await writeFile(join(root, '移动/视图.view.json'), JSON.stringify({ ...view(), name: '外部更名' }));
@@ -92,13 +117,13 @@ test('视图创建拒绝同名覆盖、越界、隐藏目录及 junction', async
   } finally { await store.close(); }
 });
 
-test('视图 HTTP 路由使用同源会话门禁，创建及保存真实回读并拒绝旧 revision', async t => {
-  const root = await fixture(t), server = await startServer({ workspaceRoot: root, port: 0 });
+test('视图 HTTP 路由无需 session 且允许跨源，创建及保存真实回读并拒绝旧 revision', async t => {
+  const root = await fixture(t), server = await startServer({ projectRoot: join(root, '..'), port: 0,
+    projectHistoryPath: join(root, '..', '.test-projects.json') });
   try {
     const initial = await readWorkspace(root);
-    const post = (path, body, headers = {}) => fetch(server.origin + path, { method: 'POST', headers: { Authorization: 'Bearer ' + server.token, Origin: server.origin, 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
-    assert.equal((await post('/api/views', {}, { Authorization: 'Bearer wrong' })).status, 401);
-    assert.equal((await post('/api/views', {}, { Origin: 'http://other.invalid' })).status, 403);
+    const post = (path, body, headers = {}) => fetch(server.origin + path, { method: 'POST', headers: { Origin: 'https://other.example', 'Content-Type': 'application/json', ...headers }, body: JSON.stringify({ projectGeneration: 1, ...body }) });
+    assert.equal((await post('/api/views', {}, { 'Content-Type': 'text/plain' })).status, 415);
     const created = await post('/api/views', { revision: initial.revision, document: view(), file: 'http.view.json' });
     assert.equal(created.status, 200);
     const data = await created.json(); assert.equal(data.views.length, 1);

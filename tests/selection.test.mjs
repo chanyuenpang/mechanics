@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import cola from 'webcola';
-import { GraphCanvas, assignEdgePorts, distributedOffsets, nodesInBox, movePositions, edgeGeometry, incrementalEdgeGeometry, normalizeRouteLanes, rerouteMovedNodes, routeGraphEdges, routeGraphScore, routeGraphScoreAfterChanges, routeGraphSpacingCuts, snapPositions } from '../src/web/canvas.mjs';
+import { GraphCanvas, ROUTING_QUALITY, assignEdgePorts, distributedOffsets, nodesInBox, movePositions, edgeGeometry, incrementalEdgeGeometry, normalizeRouteLanes, rerouteMovedNodes, routeGraphEdges, routeGraphScore, routeGraphScoreAfterChanges, routeGraphScoreAfterPairChanges, routeGraphSpacingCuts, snapPositions } from '../src/web/canvas.mjs';
+
+const hardConflicts = score => [score[ROUTING_QUALITY.hardInvalid], score[ROUTING_QUALITY.collinearOverlap],
+  score[ROUTING_QUALITY.crossings]];
 
 function sharedOrthogonalLength(a, b) {
   const segments = points => points.slice(1).map((point, index) => ({ a: points[index], b: point,
@@ -28,14 +31,19 @@ test('空白双击只打开一次，节点点击不串联；框选和取消不�
   canvas.down(event(500, 100)); canvas.up(event(600, 100)); click(); assert.equal(opened, 1);
 });
 
-test('10px吸附作用于松手后的每个节点坐标，缩放不改单位，取消不提交', () => {
-  assert.deepEqual(snapPositions({ a: { x: 15, y: -15 }, b: { x: 100003, y: -100003 } }), { a: { x: 20, y: -10 }, b: { x: 100000, y: -100000 } });
+test('20px吸附作用于松手后的每个节点坐标，缩放不改单位，取消不提交', () => {
+  assert.deepEqual(snapPositions({ a: { x: 11, y: -11 }, b: { x: 100003, y: -100003 } }), { a: { x: 20, y: -20 }, b: { x: 100000, y: -100000 } });
   const { canvas, event, writes } = harness();
   canvas.positions.a = { x: 2, y: 3 }; canvas.callbacks.snapEnabled = () => true;
   canvas.down(event(20, 20, { node: 'a' })); canvas.up(event(27, 29));
-  assert.deepEqual(writes, [{ a: { x: 10, y: 10 } }]);
+  assert.deepEqual(writes, [{ a: { x: 0, y: 20 } }]);
   canvas.down(event(20, 20, { node: 'a' })); canvas.move(event(39, 39)); canvas.cancel();
   assert.equal(writes.length, 1);
+});
+
+test('端点外侧的 U 型折返优先于普通交叉被淘汰', () => {
+  assert.ok(ROUTING_QUALITY.endpointExcursions < ROUTING_QUALITY.crossings,
+    '端口离开节点后反向折回时，不能为了少一次普通交叉保留 U 型路线');
 });
 
 test('适应画布将可见节点包围框中心对齐画框中心', () => {
@@ -137,6 +145,22 @@ test('节点位置改变后重新计算路线，障碍移开时恢复直接连�
   assert.deepEqual(clear.points, [{ x: 166, y: 31 }, { x: 500, y: 31 }]);
 });
 
+test('初始端口逃逸通道被相邻节点封住时联合换面生成可行路径', () => {
+  const graph = {
+    nodes: ['draw', 'hand', 'discard', 'repel'].map(id => ({ id })),
+    edges: [{ id: 'draw-hand', source: 'draw', target: 'hand', sign: 1 }],
+  };
+  const positions = {
+    draw: { x: -350, y: -70 }, hand: { x: -320, y: 260 },
+    discard: { x: -320, y: 50 }, repel: { x: -350, y: 160 },
+  };
+  const routes = routeGraphEdges(graph, positions, cola);
+  assert.equal(routes.size, 1);
+  assert.deepEqual(routeGraphScore(graph, positions, routes).slice(0, 2), [0, 0]);
+  assert.ok(routes.get('draw-hand').points.every((point, index, points) => index === 0
+    || point.x === points[index - 1].x || point.y === points[index - 1].y));
+});
+
 test('单节点落地只重算关联端口影响域，远端路线保持原缓存', () => {
   const ids = ['a', 'b', 'c', 'd', 'e'];
   const graph = {
@@ -149,7 +173,7 @@ test('单节点落地只重算关联端口影响域，远端路线保持原缓�
   assert.equal(result.full, false);
   assert.deepEqual(result.edgeIds, ['ab', 'bc']);
   assert.equal(result.routes.get('cd'), cached.get('cd'));
-  assert.deepEqual(routeGraphScore(graph, positions, result.routes).slice(0, 3), [0, 0, 0]);
+  assert.deepEqual(hardConflicts(routeGraphScore(graph, positions, result.routes)), [0, 0, 0]);
 });
 
 test('移动节点挡住固定路线时，影响域纳入被挡边并保持零穿越', () => {
@@ -165,6 +189,37 @@ test('移动节点挡住固定路线时，影响域纳入被挡边并保持零�
   assert.equal(result.full, false);
   assert.ok(result.edgeIds.includes('cd'));
   assert.equal(routeGraphScore(graph, positions, result.routes)[0], 0);
+});
+
+test('局部拖动合并缓存后只在几何可行的相邻面执行相对拥挤均衡', () => {
+  const graph = {
+    nodes: [{ id: 'moved' }, { id: 'hub' }, ...Array.from({ length: 5 }, (_, index) => ({ id: `target-${index}` }))],
+    edges: [{ id: 'moved-hub', source: 'moved', target: 'hub', sign: 1 },
+      ...Array.from({ length: 5 }, (_, index) => ({ id: `hub-${index}`, source: 'hub', target: `target-${index}`, sign: 1 }))],
+  };
+  const previous = { moved: { x: 0, y: 0 }, hub: { x: 400, y: 0 },
+    ...Object.fromEntries(Array.from({ length: 5 }, (_, index) => [`target-${index}`, { x: 900, y: (index - 2) * 120 }])) };
+  const cached = routeGraphEdges(graph, previous, cola);
+  const positions = { ...previous, moved: { x: 800, y: 360 } };
+  const result = rerouteMovedNodes(graph, positions, cached, ['moved'], cola);
+  const loads = Object.fromEntries(['right', 'bottom', 'left', 'top'].map(side => [side, 0]));
+  const endpoints = [];
+  for (const route of result.routes.values()) for (const endpoint of [route.sourcePort, route.targetPort]) {
+    if (endpoint.nodeId === 'hub') { loads[endpoint.side]++; endpoints.push(endpoint); }
+  }
+  const sides = ['right', 'bottom', 'left', 'top'];
+  const vectors = { top: { x: 0, y: -1 }, right: { x: 1, y: 0 }, bottom: { x: 0, y: 1 }, left: { x: -1, y: 0 } };
+  assert.equal(result.full, false);
+  for (let index = 0; index < sides.length; index++) {
+    const side = sides[index], next = sides[(index + 1) % sides.length];
+    const [crowded, sparse] = loads[side] >= loads[next] ? [side, next] : [next, side];
+    if (loads[crowded] - loads[sparse] <= 2) continue;
+    assert.equal(endpoints.some(endpoint => {
+      if (endpoint.side !== crowded) return false;
+      const other = positions[endpoint.otherId], hub = positions.hub, vector = vectors[sparse];
+      return (other.x - hub.x) * vector.x + (other.y - hub.y) * vector.y >= 0;
+    }), false, `${crowded}:${sparse} 超差仅允许发生在稀疏面位于所有关系反方向时`);
+  }
 });
 
 test('高连接度节点按相对面负载分流到合理侧，每侧不超过七级端口', () => {
@@ -187,6 +242,69 @@ test('高连接度节点按相对面负载分流到合理侧，每侧不超过�
     const lanes = sameSide.map(port => side === 'right' ? port.anchor.x : port.anchor.y);
     assert.equal(new Set(lanes).size, lanes.length, '同侧端口必须使用独立的节点外逃逸通道');
   }
+});
+
+test('近共线的水平与竖直相对端口在30px内统一松弛为直线', () => {
+  const horizontalGraph = {
+    nodes: [{ id: 'left' }, { id: 'right' }],
+    edges: [{ id: 'horizontal', source: 'left', target: 'right', sign: 1 }],
+  };
+  const horizontal = routeGraphEdges(horizontalGraph, { left: { x: 0, y: 0 }, right: { x: 300, y: 20 } }, cola)
+    .get('horizontal');
+  assert.equal(horizontal.sourcePort.side, 'right');
+  assert.equal(horizontal.targetPort.side, 'left');
+  assert.equal(horizontal.sourcePort.port.y, horizontal.targetPort.port.y);
+  assert.equal(horizontal.points.length, 2);
+
+  const verticalGraph = {
+    nodes: [{ id: 'top' }, { id: 'bottom' }],
+    edges: [{ id: 'vertical', source: 'top', target: 'bottom', sign: 1 }],
+  };
+  const vertical = routeGraphEdges(verticalGraph, { top: { x: 0, y: 0 }, bottom: { x: 20, y: 200 } }, cola)
+    .get('vertical');
+  assert.equal(vertical.sourcePort.side, 'bottom');
+  assert.equal(vertical.targetPort.side, 'top');
+  assert.equal(vertical.sourcePort.port.x, vertical.targetPort.port.x);
+  assert.equal(vertical.points.length, 2);
+});
+
+test('超过四面二十八个端口时显式报告容量不足', () => {
+  const nodes = [{ id: 'hub' }], edges = [], positions = { hub: { x: 0, y: 0 } };
+  for (let index = 0; index < 29; index++) {
+    const id = `node-${index}`;
+    nodes.push({ id }); positions[id] = { x: 400 + index * 10, y: index * 20 };
+    edges.push({ id: `edge-${index}`, source: 'hub', target: id, sign: 1 });
+  }
+  assert.throws(() => assignEdgePorts({ nodes, edges }, positions),
+    /节点端口容量不足：hub 需要 29 个端口，四面最多 28 个/);
+});
+
+test('统一求解器不受输入边顺序影响', () => {
+  const nodes = ['a', 'b', 'c', 'd'].map(id => ({ id }));
+  const edges = [
+    { id: 'a-d', source: 'a', target: 'd', sign: 1 },
+    { id: 'b-c', source: 'b', target: 'c', sign: -1 },
+    { id: 'a-c', source: 'a', target: 'c', sign: 1 },
+  ];
+  const positions = { a: { x: 0, y: 0 }, b: { x: 0, y: 220 }, c: { x: 420, y: 0 }, d: { x: 420, y: 220 } };
+  const signature = graph => [...routeGraphEdges(graph, positions, cola)]
+    .map(([id, route]) => [id, route.sourcePort.side, route.targetPort.side, route.points])
+    .sort((left, right) => left[0].localeCompare(right[0]));
+  assert.deepEqual(signature({ nodes, edges }), signature({ nodes: [...nodes].reverse(), edges: [...edges].reverse() }));
+});
+
+test('十五条平行关系形成超过九十六个边对时仍完整消除共线重叠', () => {
+  const graph = {
+    nodes: [{ id: 'source' }, { id: 'target' }],
+    edges: Array.from({ length: 15 }, (_, index) => ({
+      id: `edge-${String(index).padStart(2, '0')}`, source: 'source', target: 'target', sign: 1,
+    })),
+  };
+  const positions = { source: { x: 0, y: 0 }, target: { x: 600, y: 0 } };
+  const routes = routeGraphEdges(graph, positions, null);
+  assert.equal(routes.size, 15);
+  assert.equal(15 * 14 / 2, 105);
+  assert.deepEqual(routeGraphScore(graph, positions, routes).slice(0, 2), [0, 0]);
 });
 
 test('同面第二个端口保留中点并启用右四分位', () => {
@@ -227,10 +345,13 @@ test('资源式五关系在零冲突路由前将可行面的相对负载差限�
   const counts = ['top', 'right', 'bottom', 'left'].map(side => sides.filter(value => value === side).length).sort((a, b) => a - b);
   assert.equal(counts.reduce((total, count) => total + count, 0), graph.edges.length);
   assert.ok(counts.at(-1) - counts.at(-2) <= 2);
-  assert.deepEqual(routeGraphScore(graph, positions, routes).slice(0, 3), [0, 0, 0]);
+  assert.deepEqual(hardConflicts(routeGraphScore(graph, positions, routes)), [0, 0, 0]);
+  const spirit = routes.get('spirit-resource');
+  assert.equal(spirit.sourcePort.side, 'right'); assert.equal(spirit.targetPort.side, 'left');
+  assert.equal(spirit.points.length, 2, '同排灵力到资源应直接连接，不能为端口均衡制造交叉绕行');
 });
 
-test('车道等距后处理不会覆盖端口交换阶段的零交叉结果', () => {
+test('车道单侧分轨保留端口交换阶段的零交叉结果', () => {
   const graph = {
     nodes: [],
     edges: ['upper', 'lower', 'vertical'].map(id => ({ id, source: id + '-source', target: id + '-target' })),
@@ -240,10 +361,12 @@ test('车道等距后处理不会覆盖端口交换阶段的零交叉结果', ()
     ['lower', [{ x: 0, y: 10 }, { x: 0, y: 20 }, { x: 100, y: 20 }, { x: 100, y: 10 }]],
     ['vertical', [{ x: 50, y: 25 }, { x: 50, y: 40 }]],
   ]);
-  assert.equal(routeGraphScore(graph, {}, routes)[2], 0);
+  assert.equal(routeGraphScore(graph, {}, routes)[ROUTING_QUALITY.crossings], 0);
   const normalized = normalizeRouteLanes(graph, {}, routes);
-  assert.deepEqual(normalized, routes);
-  assert.equal(routeGraphScore(graph, {}, normalized)[2], 0);
+  assert.equal(normalized.get('upper')[1].y, -28);
+  assert.deepEqual(normalized.get('lower'), routes.get('lower'));
+  assert.deepEqual(normalized.get('vertical'), routes.get('vertical'));
+  assert.equal(routeGraphScore(graph, {}, normalized)[ROUTING_QUALITY.crossings], 0);
 });
 
 test('无冲突时单拐点严格优先于更靠近中心的双拐点', () => {
@@ -252,10 +375,10 @@ test('无冲突时单拐点严格优先于更靠近中心的双拐点', () => {
   const route = routeGraphEdges(graph, positions, cola).get('edge');
   assert.equal(route.points.length, 3);
   assert.equal(route.sourcePort.side, 'right'); assert.equal(route.targetPort.side, 'top');
-  assert.deepEqual(routeGraphScore(graph, positions, new Map([['edge', route]])).slice(0, 7), [0, 0, 0, 1, 1, 0, 0]);
+  assert.deepEqual(routeGraphScore(graph, positions, new Map([['edge', route]])).slice(0, 9), [0, 0, 0, 0, 0, 1, 1, 0, 0]);
 });
 
-test('端点包围是低于交叉的强观感惩罚，不会把必要绕行判成无解', () => {
+test('端点包围是独立观感惩罚，不会把必要绕行判成无解', () => {
   const graph = { nodes: [{ id: 'turn' }, { id: 'resource' }],
     edges: [{ id: 'turn-resource', source: 'turn', target: 'resource', sign: 1 }] };
   const positions = { turn: { x: 0, y: 0 }, resource: { x: 500, y: 500 } };
@@ -263,11 +386,14 @@ test('端点包围是低于交叉的强观感惩罚，不会把必要绕行判�
     { x: 83, y: 0 }, { x: 83, y: -24 }, { x: -24, y: -24 }, { x: -24, y: 531 }, { x: 500, y: 531 },
   ]] ]);
   const clean = new Map([['turn-resource', [
-    { x: 0, y: 31 }, { x: -24, y: 31 }, { x: -24, y: 531 }, { x: 500, y: 531 },
+    { x: 83, y: 62 }, { x: 83, y: 531 }, { x: 500, y: 531 },
   ]] ]);
   assert.equal(routeGraphScore(graph, positions, wrapped)[0], 0);
   assert.equal(routeGraphScore(graph, positions, clean)[0], 0);
-  assert.ok(routeGraphScore(graph, positions, wrapped)[3] > routeGraphScore(graph, positions, clean)[3]);
+  assert.equal(routeGraphScore(graph, positions, wrapped)[ROUTING_QUALITY.endpointExcursions], 1);
+  assert.equal(routeGraphScore(graph, positions, clean)[ROUTING_QUALITY.endpointExcursions], 0);
+  assert.deepEqual(routeGraphScoreAfterChanges(graph, positions, wrapped, clean),
+    routeGraphScore(graph, positions, clean), '端点包围替换的增量评分必须与完整评分一致');
 });
 
 test('错位长边在中间节点不占通道时不增加多余拐点', () => {
@@ -296,9 +422,30 @@ test('减少拐点严格优先于消除次要的拐点邻近', () => {
   const detour = routeGraphScore(graph, {}, new Map([
     ['main', [{ x: 0, y: 0 }, { x: 25, y: 0 }, { x: 25, y: 50 }, { x: 50, y: 50 }]], ['guide', guide],
   ]));
-  assert.deepEqual(single.slice(0, 3), detour.slice(0, 3));
-  assert.ok(single[3] < detour[3], '单拐点主线应减少全图总拐点');
-  assert.ok(single[5] > detour[5], '用例必须覆盖旧评分会偏好的较低拐点拥挤');
+  assert.deepEqual(hardConflicts(single), hardConflicts(detour));
+  assert.ok(single[ROUTING_QUALITY.totalBends] < detour[ROUTING_QUALITY.totalBends], '单拐点主线应减少全图总拐点');
+  assert.ok(single[ROUTING_QUALITY.bendCrowding] > detour[ROUTING_QUALITY.bendCrowding], '用例必须覆盖旧评分会偏好的较低拐点拥挤');
+});
+
+test('显著更短的局部阶梯优先于少一个拐点的全图外围通道', () => {
+  const graph = { nodes: [], edges: [{ id: 'edge', source: 'a', target: 'b' }] };
+  const outer = [{ x: 0, y: 0 }, { x: -450, y: 0 }, { x: -450, y: 300 }, { x: 300, y: 300 }, { x: 300, y: 200 }];
+  const local = [{ x: 0, y: 0 }, { x: -80, y: 0 }, { x: -80, y: 120 }, { x: 220, y: 120 }, { x: 220, y: 200 }, { x: 300, y: 200 }];
+  const outerScore = routeGraphScore(graph, {}, new Map([['edge', outer]]));
+  const localScore = routeGraphScore(graph, {}, new Map([['edge', local]]));
+  assert.ok(localScore[ROUTING_QUALITY.detour] < outerScore[ROUTING_QUALITY.detour]);
+  assert.ok(localScore[ROUTING_QUALITY.totalBends] > outerScore[ROUTING_QUALITY.totalBends]);
+});
+
+test('外围候选只包围实际阻挡节点，不受远处无关节点坐标污染', () => {
+  const edge = { id: 'edge', source: 'source', target: 'target', sign: 1 };
+  const nodes = ['source', 'blocker', 'target'].map(id => ({ id }));
+  const positions = { source: { x: 0, y: 0 }, blocker: { x: 300, y: 0 }, target: { x: 600, y: 0 } };
+  const local = routeGraphEdges({ nodes, edges: [edge] }, positions, cola).get(edge.id);
+  const remote = routeGraphEdges({ nodes: [...nodes, { id: 'irrelevant' }], edges: [edge] },
+    { ...positions, irrelevant: { x: -5000, y: -5000 } }, cola).get(edge.id);
+  assert.deepEqual(remote.points, local.points);
+  assert.ok(local.points.every(point => point.x > -200 && point.y > -200), '外围轨道不得采用无关节点的全图极值');
 });
 
 test('相距 8px 的长平行通道仍属于可读性拥挤', () => {
@@ -313,41 +460,65 @@ test('相距 8px 的长平行通道仍属于可读性拥挤', () => {
     ['upper', [{ x: 0, y: -50 }, { x: 0, y: 0 }, { x: 200, y: 0 }, { x: 200, y: 50 }]],
     ['lower', [{ x: 0, y: -42 }, { x: 0, y: 8 }, { x: 200, y: 8 }, { x: 200, y: 58 }]],
   ]);
-  assert.ok(routeGraphScore(graph, {}, routes)[6] > 0, '8px 平行通道不能与宽松通道获得相同评分');
+  assert.ok(routeGraphScore(graph, {}, routes)[ROUTING_QUALITY.nearParallel] > 0, '8px 平行通道不能与宽松通道获得相同评分');
   assert.deepEqual(routeGraphSpacingCuts(routes), [{ axis: 'y', coordinate: 4, deficit: 40, overlap: 200 }]);
 });
 
 test('直接连接端口的首末段允许按端口宽度保持低间距', () => {
   const routes = new Map([
     ['upper', { points: [{ x: 0, y: -100 }, { x: 0, y: 0 }, { x: 300, y: 0 }],
-      targetPort: { nodeId: 'hand', side: 'left' } }],
+      targetPort: { nodeId: 'hand', side: 'left', port: { x: 300, y: 0 }, anchor: { x: 264, y: 0 } } }],
     ['lower', { points: [{ x: 0, y: -90 }, { x: 0, y: 10 }, { x: 300, y: 10 }],
-      targetPort: { nodeId: 'hand', side: 'left' } }],
+      targetPort: { nodeId: 'hand', side: 'left', port: { x: 300, y: 10 }, anchor: { x: 264, y: 10 } } }],
   ]);
   assert.deepEqual(routeGraphSpacingCuts(routes), []);
 });
 
-test('同一端口面的紧邻折返段属于端口汇入区', () => {
+test('未直接包含节点端口的紧邻折返段仍属于中段通道', () => {
   const routes = new Map([
     ['upper', { points: [{ x: 0, y: 0 }, { x: 200, y: 0 }, { x: 200, y: 100 }, { x: 300, y: 100 }],
-      targetPort: { nodeId: 'discard', side: 'left' } }],
+      targetPort: { nodeId: 'discard', side: 'left', port: { x: 300, y: 100 }, anchor: { x: 264, y: 100 } } }],
     ['lower', { points: [{ x: 400, y: 10 }, { x: 208, y: 10 }, { x: 208, y: 110 }, { x: 300, y: 110 }],
-      targetPort: { nodeId: 'discard', side: 'left' } }],
+      targetPort: { nodeId: 'discard', side: 'left', port: { x: 300, y: 110 }, anchor: { x: 264, y: 110 } } }],
+  ]);
+  assert.deepEqual(routeGraphSpacingCuts(routes), [{ axis: 'x', coordinate: 204, deficit: 40, overlap: 90 }]);
+});
+
+test('不同节点的长端点段也服从端口槽位间距', () => {
+  const horizontal = new Map([
+    ['upper', { points: [{ x: 0, y: 0 }, { x: 240, y: 0 }],
+      targetPort: { nodeId: 'a', side: 'left', port: { x: 240, y: 0 }, anchor: { x: 204, y: 0 } } }],
+    ['lower', { points: [{ x: 0, y: 12 }, { x: 240, y: 12 }],
+      targetPort: { nodeId: 'b', side: 'left', port: { x: 240, y: 12 }, anchor: { x: 204, y: 12 } } }],
+  ]);
+  const vertical = new Map([
+    ['left', { points: [{ x: 0, y: 0 }, { x: 0, y: 240 }],
+      targetPort: { nodeId: 'c', side: 'top', port: { x: 0, y: 240 }, anchor: { x: 0, y: 204 } } }],
+    ['right', { points: [{ x: 12, y: 0 }, { x: 12, y: 240 }],
+      targetPort: { nodeId: 'd', side: 'top', port: { x: 12, y: 240 }, anchor: { x: 12, y: 204 } } }],
+  ]);
+  assert.deepEqual(routeGraphSpacingCuts(horizontal), []);
+  assert.deepEqual(routeGraphSpacingCuts(vertical), []);
+});
+
+test('节点净空区内的短端点接入段使用端口间距，不触发整图切分', () => {
+  const routes = new Map([
+    ['play-void', { points: [{ x: 0, y: 15.5 }, { x: 80, y: 15.5 }],
+      sourcePort: { nodeId: 'play', side: 'right', port: { x: 0, y: 15.5 }, anchor: { x: 36, y: 15.5 } } }],
+    ['play-damage', { points: [{ x: 0, y: 0 }, { x: 80, y: 0 }],
+      targetPort: { nodeId: 'damage', side: 'left', port: { x: 80, y: 0 }, anchor: { x: 44, y: 0 } } }],
   ]);
   assert.deepEqual(routeGraphSpacingCuts(routes), []);
 });
 
-test('不同节点的长端点段在水平与竖直方向都执行48px间距切分', () => {
-  const horizontal = new Map([
-    ['upper', { points: [{ x: 0, y: 0 }, { x: 240, y: 0 }], targetPort: { nodeId: 'a', side: 'left' } }],
-    ['lower', { points: [{ x: 0, y: 12 }, { x: 240, y: 12 }], targetPort: { nodeId: 'b', side: 'left' } }],
+test('三段路线远离端口的中段重叠仍执行48px切分', () => {
+  const routes = new Map([
+    ['upper', { points: [{ x: 0, y: -200 }, { x: 0, y: 0 }, { x: 80, y: 0 }, { x: 80, y: 100 }],
+      sourcePort: { nodeId: 'a', side: 'bottom', port: { x: 0, y: -200 }, anchor: { x: 0, y: -164 } } }],
+    ['lower', { points: [{ x: 0, y: -188 }, { x: 0, y: 12 }, { x: 80, y: 12 }, { x: 80, y: 112 }],
+      sourcePort: { nodeId: 'b', side: 'bottom', port: { x: 0, y: -188 }, anchor: { x: 0, y: -152 } } }],
   ]);
-  const vertical = new Map([
-    ['left', { points: [{ x: 0, y: 0 }, { x: 0, y: 240 }], targetPort: { nodeId: 'c', side: 'top' } }],
-    ['right', { points: [{ x: 12, y: 0 }, { x: 12, y: 240 }], targetPort: { nodeId: 'd', side: 'top' } }],
-  ]);
-  assert.deepEqual(routeGraphSpacingCuts(horizontal), [{ axis: 'y', coordinate: 6, deficit: 36, overlap: 240 }]);
-  assert.deepEqual(routeGraphSpacingCuts(vertical), [{ axis: 'x', coordinate: 6, deficit: 36, overlap: 240 }]);
+  assert.deepEqual(routeGraphSpacingCuts(routes), [{ axis: 'y', coordinate: 6, deficit: 36, overlap: 80 }]);
 });
 
 test('单边与双边增量评分和完整审计严格一致', () => {
@@ -375,6 +546,8 @@ test('单边与双边增量评分和完整审计严格一致', () => {
     for (const [id, points] of replacements) expectedRoutes.set(id, points);
     assert.deepEqual(routeGraphScoreAfterChanges(graph, {}, routes, replacements),
       routeGraphScore(graph, {}, expectedRoutes));
+    if (replacements.size === 2) assert.deepEqual(routeGraphScoreAfterPairChanges(graph, {}, routes, replacements),
+      routeGraphScore(graph, {}, expectedRoutes), '双边笛卡尔积优化公式必须与完整评分一致');
   }
 });
 
@@ -391,11 +564,11 @@ test('后撤步式三分支通过端口与路径联合选择消除可避免交�
     play: { x: 230, y: 420 }, repel: { x: 230, y: 200 } };
   const routes = routeGraphEdges(graph, positions, cola);
   const score = routeGraphScore(graph, positions, routes);
-  assert.deepEqual(score.slice(0, 3), [0, 0, 0]);
-  assert.deepEqual(score.slice(5, 7), [0, 0]);
+  assert.deepEqual(hardConflicts(score), [0, 0, 0]);
+  assert.deepEqual([score[ROUTING_QUALITY.bendCrowding], score[ROUTING_QUALITY.nearParallel]], [0, 0]);
 });
 
-test('抽牌手牌密集小图优先无交叉路径，单个 WebCola 候选失败不拖垮整图', () => {
+test('抽牌手牌密集小图拒绝端点包围，单个 WebCola 候选失败不拖垮整图', () => {
   const graph = {
     nodes: ['draw', 'discard', 'hand', 'play'].map(id => ({ id })),
     edges: [
@@ -410,9 +583,32 @@ test('抽牌手牌密集小图优先无交叉路径，单个 WebCola 候选失�
   const brokenCola = { Rectangle: class {}, GridRouter: class { constructor() { throw new Error('undefined id'); } } };
   const routes = routeGraphEdges(graph, positions, brokenCola);
   const score = routeGraphScore(graph, positions, routes);
-  assert.deepEqual(score.slice(0, 3), [0, 0, 0]);
-  assert.deepEqual(score.slice(5, 7), [0, 0]);
+  assert.deepEqual([score[ROUTING_QUALITY.hardInvalid], score[ROUTING_QUALITY.collinearOverlap]], [0, 0]);
+  assert.equal(score[ROUTING_QUALITY.endpointExcursions], 0, '存在近端入口时不得绕过手牌节点外侧再折返');
+  assert.ok(score[ROUTING_QUALITY.crossings] <= 1, '四个端点交替分布时只保留拓扑上不可兼得的一次交叉');
   assert.ok(routes.get('draw-hand').points.length <= 5);
+});
+
+test('局部拖动手牌节点后不会恢复包围目标节点的 U 型折返', () => {
+  const graph = {
+    nodes: ['draw', 'discard', 'hand', 'play'].map(id => ({ id })),
+    edges: [
+      { id: 'draw-discard', source: 'draw', target: 'discard', sign: 1 },
+      { id: 'draw-hand', source: 'draw', target: 'hand', sign: 1 },
+      { id: 'play-hand', source: 'play', target: 'hand', sign: -1 },
+      { id: 'play-discard', source: 'play', target: 'discard', sign: 1 },
+    ],
+  };
+  const previous = { draw: { x: 230, y: 30 }, discard: { x: 520, y: 30 },
+    hand: { x: 520, y: 240 }, play: { x: 230, y: 420 } };
+  const cached = routeGraphEdges(graph, previous, cola);
+  const positions = { ...previous, hand: { x: 460, y: 210 } };
+  const result = rerouteMovedNodes(graph, positions, cached, ['hand'], cola);
+  const score = routeGraphScore(graph, positions, result.routes);
+  assert.equal(result.full, false);
+  assert.equal(score[ROUTING_QUALITY.endpointExcursions], 0);
+  assert.deepEqual([score[ROUTING_QUALITY.hardInvalid], score[ROUTING_QUALITY.collinearOverlap]], [0, 0]);
+  assert.ok(score[ROUTING_QUALITY.crossings] <= 1);
 });
 
 test('同排节点的投影端口直接对齐，不产生几像素短台阶', () => {
@@ -469,8 +665,7 @@ test('跨越多个中间节点的长边使用图外通道', () => {
     'middle-b': { x: 600, y: 200 }, target: { x: 1000, y: 400 },
   };
   const route = routeGraphEdges(graph, positions, cola).get('long');
-  assert.equal(route.sourcePort.side, 'top'); assert.equal(route.targetPort.side, 'top');
-  assert.ok(route.points.some(point => point.y < 0));
+  assert.ok(route.points.some(point => point.y < 0 || point.y > 62), '真实阻断时应由统一候选选择图外走廊');
 });
 
 test('端口不会因拥塞分配到目标反方向，最后一段垂直进入节点', () => {
@@ -482,6 +677,30 @@ test('端口不会因拥塞分配到目标反方向，最后一段垂直进入�
   const before = route.points.at(-2), end = route.points.at(-1);
   if (route.targetPort.side === 'left' || route.targetPort.side === 'right') assert.equal(before.y, end.y);
   else assert.equal(before.x, end.x);
+});
+
+test('局部移动不会把原本2比2的上右端口迁移到目标反方向', () => {
+  const graph = {
+    nodes: ['play', 'a', 'b', 'c', 'd'].map(id => ({ id })),
+    edges: ['a', 'b', 'c', 'd'].map(id => ({ id: 'play-' + id, source: 'play', target: id, sign: 1 })),
+  };
+  const previous = {
+    play: { x: 300, y: 300 }, a: { x: 500, y: 0 }, b: { x: 700, y: 80 },
+    c: { x: 650, y: 180 }, d: { x: 800, y: 240 },
+  };
+  const cached = routeGraphEdges(graph, previous, cola);
+  const before = [...cached.values()].map(route => route.sourcePort.side);
+  assert.deepEqual(Object.fromEntries(['top', 'right'].map(side => [side, before.filter(value => value === side).length])),
+    { top: 2, right: 2 });
+  const positions = { ...previous, play: { x: 320, y: 320 } };
+  const settled = rerouteMovedNodes(graph, positions, cached, ['play'], cola).routes;
+  const vectors = { top: { x: 0, y: -1 }, right: { x: 1, y: 0 }, bottom: { x: 0, y: 1 }, left: { x: -1, y: 0 } };
+  for (const edge of graph.edges) {
+    const endpoint = settled.get(edge.id).sourcePort, target = positions[edge.target], source = positions.play;
+    const vector = vectors[endpoint.side];
+    assert.ok((target.x - source.x) * vector.x + (target.y - source.y) * vector.y >= 0,
+      `${edge.id} 不能在局部重算后迁到目标反方向的 ${endpoint.side} 面`);
+  }
 });
 
 test('节点拖动沿用已稳定端口，只平移关联端并生成有限正交路径', () => {
@@ -499,6 +718,21 @@ test('节点拖动沿用已稳定端口，只平移关联端并生成有限正�
     const a = geometry.points[index - 1], b = geometry.points[index];
     assert.ok(a.x === b.x || a.y === b.y, '拖动预览仍须保持正交');
   }
+});
+
+test('拖动预览在共线锚点被折叠时仍保留至少30px首末接入段', () => {
+  const edge = { id: 'a-b', source: 'a', target: 'b', sign: 1 };
+  const previous = { a: { x: 0, y: 0 }, b: { x: 300, y: 49 } };
+  const positions = { ...previous, a: { x: 1, y: 0 } };
+  const cached = {
+    sourcePort: { side: 'bottom', nodeId: 'a', otherId: 'b', port: { x: 83, y: 62 }, anchor: { x: 83, y: 98 }, slot: 0 },
+    targetPort: { side: 'left', nodeId: 'b', otherId: 'a', port: { x: 300, y: 80 }, anchor: { x: 264, y: 80 }, slot: 0 },
+    points: [{ x: 83, y: 62 }, { x: 83, y: 98 }, { x: 264, y: 98 }, { x: 264, y: 80 }, { x: 300, y: 80 }],
+  };
+  const points = incrementalEdgeGeometry(edge, positions, previous, cached).points;
+  const length = (a, b) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+  assert.ok(length(points[0], points[1]) >= 30);
+  assert.ok(length(points.at(-2), points.at(-1)) >= 30);
 });
 
 test('增量绘制只更新移动节点及其关联边，其他节点和边保持原路径', () => {
@@ -537,6 +771,9 @@ test('同节点双击只启动一次连接；拖动和取消清理候选，失�
   click(); assert.deepEqual(started, []); click(); assert.deepEqual(started, ['a']);
   const links = []; canvas.callbacks.link = (...args) => { links.push(args); return false; };
   canvas.pick('b'); assert.deepEqual(links, [['a', 'b', -1]]); assert.equal(canvas.linkSource, 'a');
+  let cancelled = 0; canvas.callbacks.cancelLink = () => cancelled++;
+  canvas.pick('a'); assert.equal(cancelled, 1); assert.equal(canvas.linkSource, null); assert.deepEqual(links, [['a', 'b', -1]]);
+  canvas.linkSource = 'a';
   canvas.callbacks.link = () => true; canvas.pick('b'); assert.equal(canvas.linkSource, null);
   canvas.mode = 'select'; click(); canvas.cancel(); click(); assert.deepEqual(started, ['a']);
   canvas.down(event(20, 20, { node: 'a' })); canvas.up(event(40, 20, { node: 'a' }));
@@ -619,6 +856,22 @@ test('自动排版预置的同步平移路线直接用于下一次绘制', () =>
   canvas.update(graph, positions, null, null, false);
   assert.equal(canvas.routed, routes);
   assert.deepEqual(draws, [{ reroute: false }]);
+});
+test('打开阶段立即返回，后台路由固定已保存的节点坐标', async () => {
+  const { canvas } = harness(); let requests = 0;
+  const graph = { nodes: [{ id: 'a' }, { id: 'b' }], edges: [{ id: 'a-b', source: 'a', target: 'b', sign: 1 }] };
+  const positions = { a: { x: 0, y: 0 }, b: { x: 300, y: 0 } };
+  canvas.callbacks.computeGraph = request => {
+    requests++;
+    assert.equal(request.payload.fixedPositions, true);
+    return Promise.resolve({ positions, routes: [['a-b', { points: [{ x: 166, y: 31 }, { x: 300, y: 31 }] }]] });
+  };
+  canvas.callbacks.commitGeometry = () => true;
+  const opening = canvas.update(graph, positions, null, null, false, { deferRouting: true });
+  assert.equal(requests, 0, '打开不等待后台路由');
+  assert.equal(canvas.hideUnroutedEdges, true, '未命中缓存时不绘制会跳动的临时连线');
+  await opening; await Promise.resolve(); await canvas.routingPromise;
+  assert.equal(requests, 1);
 });
 test('终态坐标与连线原子提交后只消费预置帧，不递归请求 Worker', async () => {
   const { canvas } = harness(); let requests = 0, commits = 0;

@@ -3,40 +3,68 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>规则图 · Game-Graph</title>
+  <title>游戏玩法图</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <div id="startup-help" role="status">请通过 CLI 启动编辑器，再打开终端打印的完整 http://127.0.0.1 网址。直接双击 index.html 无法加载模块或读写工作区。<code>game-graph serve --workspace &lt;资料目录&gt;</code></div>
+  <svg class="icon-sprite" aria-hidden="true"><defs>
+    <symbol id="icon-project" viewBox="0 0 24 24"><path d="M3 6.5h7l2 2h9v10H3z"/><path d="M3 6.5V4h7l2 2.5"/></symbol><symbol id="icon-pin" viewBox="0 0 24 24"><path d="m9 3 6 6-2 2 3 4-1.5 1.5-4-3-2 2-6-6zM12 16l-5 5"/></symbol>
+    <symbol id="icon-view" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 9v11"/></symbol><symbol id="icon-mechanic" viewBox="0 0 24 24"><circle cx="7" cy="7" r="2.5"/><circle cx="17" cy="7" r="2.5"/><circle cx="12" cy="17" r="2.5"/><path d="m9 8.5 2 6M15 8.5l-2 6M9.5 7h5"/></symbol>
+    <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol><symbol id="icon-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol><symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="icon-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M9 7l1-3h4l1 3M6 7l1 13h10l1-13"/></symbol>
+    <symbol id="icon-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol><symbol id="icon-chevron-up" viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></symbol><symbol id="icon-chevron-right" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14-4L4 9"/><path d="M4 4v5h5M4 13a8 8 0 0 0 14 4l2-2"/><path d="M20 20v-5h-5"/></symbol><symbol id="icon-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.6 2.6-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5v.2h-3.7v-.2a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1-2.6-2.6.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H4v-3.7h.2a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1L8 4.7l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5V3.4h3.7v.2a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1 2.6 2.6-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.2V14h-.2a1.7 1.7 0 0 0-1.5 1Z"/></symbol>
+    <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="5.5"/><path d="m15 15 4.5 4.5"/></symbol><symbol id="icon-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol><symbol id="icon-zoom-in" viewBox="0 0 24 24"><circle cx="10" cy="10" r="5"/><path d="m14 14 5 5M10 7v6M7 10h6"/></symbol><symbol id="icon-zoom-out" viewBox="0 0 24 24"><circle cx="10" cy="10" r="5"/><path d="m14 14 5 5M7 10h6"/></symbol><symbol id="icon-fit" viewBox="0 0 24 24"><path d="M8 4H4v4M16 4h4v4M8 20H4v-4M20 16v4h-4M4 8l5-5M20 8l-5-5M4 16l5 5M20 16l-5 5"/></symbol>
+    <symbol id="icon-diagnostics" viewBox="0 0 24 24"><path d="M12 3 3.5 19h17z"/><path d="M12 9v4M12 16h.01"/></symbol><symbol id="icon-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h2"/></symbol><symbol id="icon-arrow-up" viewBox="0 0 24 24"><path d="m12 19V5M6 11l6-6 6 6"/></symbol><symbol id="icon-arrow-down" viewBox="0 0 24 24"><path d="m12 5v14M6 13l6 6 6-6"/></symbol>
+    <symbol id="icon-undo" viewBox="0 0 24 24"><path d="M9 8 5 12l4 4"/><path d="M5 12h9a5 5 0 0 1 5 5"/></symbol><symbol id="icon-redo" viewBox="0 0 24 24"><path d="m15 8 4 4-4 4"/><path d="M19 12h-9a5 5 0 0 0-5 5"/></symbol>
+  </defs></svg>
+  <div id="startup-help" role="status" hidden></div>
   <aside id="sidebar">
-    <div class="brand"><span class="brand-mark">⌘</span><strong>规则图</strong><button id="reload" class="icon-button" title="重新读取磁盘文件" aria-label="重新读取磁盘文件">↻</button></div>
-    <div class="workspace-heading"><span id="workspace-name">正在读取工作区…</span></div>
-    <nav id="files" aria-label="工作区文件目录">
-      <section class="file-section" aria-label="视图列表">
-        <div class="section-heading"><span>视图 <span id="view-file-count" class="file-count"></span></span><button id="new-view" class="icon-button" title="新建空白视图" aria-label="新建视图">＋</button></div>
-        <div id="view-files"></div>
-      </section>
-      <section class="file-section" aria-label="机制列表">
-        <div class="section-heading"><button id="toggle-mechanics" class="section-toggle" aria-expanded="true" aria-controls="mechanic-body"><span id="mechanic-chevron">⌄</span> 机制 <span id="mechanic-file-count" class="file-count"></span></button><button id="new-graph" class="icon-button" title="新建独立机制" aria-label="新建机制">＋</button></div>
-        <div id="mechanic-body">
-          <div class="mechanic-filter"><input id="mechanic-filter" type="search" placeholder="筛选机制…" aria-label="筛选机制" autocomplete="off"></div>
-          <div id="mechanic-files"></div>
-          <div id="mechanic-empty" class="sidebar-empty" hidden><span id="mechanic-empty-text"></span><button id="clear-filter" class="quiet" hidden>清除筛选</button></div>
-        </div>
-      </section>
+    <header class="sidebar-header">
+      <div class="brand"><svg class="brand-mark" viewBox="0 0 28 28" aria-hidden="true"><path d="M6 4v20M22 4v20M4 8h20M4 20h20"/><circle cx="6" cy="8" r="3"/><circle cx="22" cy="8" r="3"/><circle cx="6" cy="20" r="3"/><circle cx="22" cy="20" r="3"/></svg><span><strong>游戏玩法图</strong></span></div>
+    </header>
+    <section class="project-context" aria-label="当前项目">
+      <button id="open-project" class="project-switcher" title="打开或切换项目">
+        <span class="project-symbol"><svg class="ui-icon" aria-hidden="true"><use href="#icon-project"/></svg></span>
+        <span class="project-copy"><small>当前项目</small><strong id="workspace-name">尚未打开项目</strong><span id="workspace-path">选择一个项目开始</span></span>
+        <span class="project-chevron"><svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-down"/></svg></span>
+      </button>
+      <button id="reload" class="icon-button project-action" title="重新读取当前项目" aria-label="重新读取当前项目"><svg class="ui-icon" aria-hidden="true"><use href="#icon-refresh"/></svg></button>
+      <button id="agent-export-settings" class="icon-button project-settings" title="项目设置" aria-label="项目设置"><svg class="ui-icon" aria-hidden="true"><use href="#icon-settings"/></svg></button>
+    </section>
+    <section class="reference-projects" aria-label="关联项目">
+      <div class="reference-heading"><strong>关联项目</strong><span><button id="toggle-references" class="icon-button" title="折叠关联项目" aria-label="折叠关联项目"><svg class="ui-icon" aria-hidden="true"><use href="#icon-chevron-up"/></svg></button><button id="references" class="icon-button" title="添加或管理关联项目" aria-label="添加关联项目"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"/></svg></button></span></div>
+      <nav id="project-tabs" class="project-tabs" aria-label="关联项目列表"></nav>
+    </section>
+    <nav id="resource-tabs" class="resource-tabs" role="tablist" aria-label="资源类型">
+      <button id="views-tab" role="tab" aria-selected="true" aria-controls="resource-panel">视图 <span id="view-file-count"></span></button>
+      <button id="mechanics-tab" role="tab" aria-selected="false" aria-controls="resource-panel">机制库 <span id="mechanic-file-count"></span></button>
+      <button id="recent-tab" role="tab" aria-selected="false" aria-controls="resource-panel">最近打开 <span id="recent-file-count"></span></button>
     </nav>
+    <section id="resource-panel" role="tabpanel" aria-live="polite">
+      <div class="resource-toolbar">
+        <div><strong id="resource-title">视图</strong></div>
+        <button id="resource-create-folder" class="quiet" title="新建机制文件夹" aria-label="新建机制文件夹" hidden>新建文件夹</button>
+        <button id="resource-create" class="icon-button" title="新建机制" aria-label="新建机制"><svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"/></svg></button>
+      </div>
+      <label class="resource-search"><svg class="ui-icon" aria-hidden="true"><use href="#icon-search"/></svg><input id="resource-search" type="search" placeholder="搜索名称、ID 或路径" aria-label="搜索视图" autocomplete="off"><kbd>Ctrl P</kbd></label>
+      <div id="resource-content" tabindex="-1"></div>
+    </section>
+    <button id="new-graph" hidden>新建机制</button>
   </aside>
+  <button id="sidebar-scrim" class="sidebar-scrim" aria-label="关闭文件侧栏"></button>
   <main id="main">
     <header class="topbar">
-      <button id="toggle-sidebar" class="icon-button" title="切换文件侧栏" aria-label="切换文件侧栏">☰</button>
-      <div id="main-views" class="view-switch" role="group" aria-label="工作视图"><button id="table-view">概念表</button><button id="graph-view">机制图</button></div>
-      <div class="breadcrumb"><span id="file-kind">工作区</span><span class="slash">/</span><strong id="file-name">加载中</strong><span id="dirty-dot" hidden>●</span></div>
-      <div class="header-actions"><button id="snap-grid" aria-pressed="false" disabled title="本机全局选项：拖动结束后吸附到 10px 画布坐标">吸附</button><span id="save-state">本地文件</span><button id="export" class="quiet" title="导出当前文件或未保存草稿">导出 JSON</button><button id="save" class="primary" disabled>保存 <kbd>Ctrl S</kbd></button></div>
+      <button id="toggle-sidebar" class="icon-button" title="切换文件侧栏" aria-label="切换文件侧栏"><svg class="ui-icon" aria-hidden="true"><use href="#icon-menu"/></svg></button>
+        <div id="main-views" class="view-switch" role="group" aria-label="工作视图"><button id="table-view">概念表</button><button id="graph-view">机制图</button><button id="docs-view">文档</button></div>
+      <div id="breadcrumb" class="breadcrumb"><span id="file-kind">工作区</span><span class="slash">/</span><strong id="file-name">加载中</strong><span id="dirty-dot" hidden>●</span></div>
+      <div class="header-actions"><span id="save-state">本地文件</span><button id="delete-mechanic" class="quiet danger" hidden>删除机制图</button><button id="save" class="primary" disabled>保存 <kbd>Ctrl S</kbd></button><button id="new-view">新建视图</button></div>
     </header>
-    <div class="viewbar"><strong id="view-name">机制 · 单文件编辑</strong><span id="view-state" role="status">正在读取…</span><button id="export-view" class="quiet" hidden>导出视图草稿</button><button id="return-view" class="quiet" hidden>返回视图</button><button id="save-view">存为视图…</button></div>
-    <div id="legacy-notice" role="status" hidden>已保留旧叠加记录。请保存为视图，或<button id="discard-legacy" class="quiet">放弃旧叠加</button>后打开机制。</div>
-    <div id="error" role="alert" hidden><span id="error-text"></span><button id="reload-error" hidden>重新读取</button><button id="dismiss-error" class="icon-button" aria-label="关闭错误提示">×</button></div>
+    <div class="viewbar"><nav id="editor-tabs" class="editor-tabs" aria-label="已打开资源"></nav></div>
+    <div id="legacy-notice" role="status" hidden>已保留旧叠加记录。请点击顶部“新建视图”完成迁移，或<button id="discard-legacy" class="quiet">放弃旧叠加</button>后打开机制。</div>
+    <div id="error" role="alert" hidden><span id="error-text"></span><button id="reload-error" hidden>重新读取</button><button id="dismiss-error" class="icon-button" aria-label="关闭错误提示"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"/></svg></button></div>
     <section id="glossary" aria-label="节点定义表格" hidden></section>
+    <section id="concept-docs" aria-label="导出的概念文档" hidden></section>
     <section id="stage" aria-label="节点画布区域">
       <svg id="canvas" aria-label="规则节点画布" tabindex="0"></svg>
       <div id="opening-overlay" class="loading-overlay" role="status" aria-live="polite">
@@ -45,25 +73,22 @@
       <div id="compute-status" class="compute-status floating" role="status" aria-live="polite" hidden>
         <span class="loading-spinner small" aria-hidden="true"></span><span id="compute-message">正在后台重绘连线…</span>
       </div>
-      <div id="empty" hidden><span class="empty-symbol">＋</span><h2 id="empty-title">开始一张机制图</h2><p id="empty-hint">添加概念节点，将抽象规则连接起来。</p><button id="empty-add">概念节点</button></div>
-      <div id="canvas-context"><span id="scope-chip"></span><span id="overlay-count"></span></div>
+      <div id="canvas-tooltip" role="tooltip" hidden></div>
+      <div id="empty" hidden><span class="empty-symbol"><svg class="ui-icon" aria-hidden="true"><use href="#icon-mechanic"/></svg></span><h2 id="empty-title">开始一张机制图</h2><p id="empty-hint">添加概念节点，将抽象规则连接起来。</p><button id="empty-add">概念节点</button></div>
+      <div id="canvas-context" hidden><button id="copy-file-path" type="button" title="点击复制文件路径"><svg class="ui-icon" aria-hidden="true"><use href="#icon-copy"/></svg><span id="canvas-file-name"></span></button><span id="copy-file-path-feedback" role="status" aria-live="polite" hidden>已复制路径</span></div>
       <div id="toolbar" class="floating" role="toolbar" aria-label="画布工具">
-        <button id="select-tool" class="tool active" title="选择与拖拽 V" aria-label="选择工具">↖</button>
-        <span class="divider"></span><button id="add-node" class="tool text-tool">＋ <span>概念节点</span></button>
-        <span class="divider"></span><button id="positive-tool" class="tool positive" title="先点源节点，再点目标节点" aria-label="促进连线">＋→</button>
-        <button id="negative-tool" class="tool negative" title="先点源节点，再点目标节点" aria-label="抑制连线">−→</button>
-        <button id="contains-tool" class="tool contains" title="先点影响源，再点受影响节点；＝单向传递影响，不改变正负号" aria-label="包含连线">＝→</button>
-        <span class="divider"></span><button id="auto-layout" class="tool text-tool" title="没有选择时重排全部；选择节点后只重排选中节点">⌁ <span>自动排版</span></button>
-        <span class="divider"></span><button id="undo" class="tool" title="撤销 Ctrl Z" aria-label="撤销" disabled>↶</button><button id="redo" class="tool" title="重做 Ctrl Shift Z" aria-label="重做" disabled>↷</button>
+        <button id="add-node" class="tool icon-tool" title="添加概念节点" aria-label="添加概念节点"><svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M12 8v8M8 12h8"></path></svg><span class="visually-hidden">添加概念节点</span></button>
+        <span class="divider"></span><div id="relation-tools" class="relation-tools" role="radiogroup" aria-label="默认连线类型"><button id="positive-tool" class="tool positive is-selected" role="radio" aria-checked="true" title="源增加会使目标增加" aria-label="正向影响连线">＋→</button><button id="negative-tool" class="tool negative" role="radio" aria-checked="false" title="源增加会使目标减少" aria-label="负向影响连线">−→</button><button id="random-tool" class="tool random" role="radio" aria-checked="false" title="源增加可能使目标增加或减少，不表示概率" aria-label="随机影响连线">？→</button><button id="specializes-tool" class="tool specializes" role="radio" aria-checked="false" title="具体概念指向上位概念，表示特化 / 是某种；不写影响符号" aria-label="特化 / 是某种连线">is-a→</button></div>
+        <span class="divider"></span><button id="auto-layout" class="tool icon-tool" title="没有选择时重排全部；选择节点后只重排选中节点" aria-label="自动排版全部节点"><svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="2.5" y="3.5" width="7" height="5" rx="1"></rect><rect x="14.5" y="3.5" width="7" height="5" rx="1"></rect><rect x="8.5" y="15.5" width="7" height="5" rx="1"></rect><path d="M6 8.5v3h12v-3M12 11.5v4"></path></svg><span class="visually-hidden">自动排版全部节点</span></button><button id="toggle-information-bar" class="tool icon-tool" title="关闭悬浮说明" aria-label="关闭悬浮说明" aria-pressed="true"><svg class="tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 3.5h9l3 3V20.5H6z"></path><path d="M15 3.5v3h3M9 11h6M9 15h6"></path></svg><span class="visually-hidden">关闭悬浮说明</span></button>
+        <span class="divider"></span><button id="undo" class="tool icon-tool" title="撤销 Ctrl Z" aria-label="撤销" disabled><svg class="tool-icon" aria-hidden="true"><use href="#icon-undo"/></svg></button><button id="redo" class="tool icon-tool" title="重做 Ctrl Shift Z" aria-label="重做" disabled><svg class="tool-icon" aria-hidden="true"><use href="#icon-redo"/></svg></button>
       </div>
       <div id="tool-hint" aria-live="polite">左键框选 · 右键平移 · Shift 增选 · 拖动选中节点</div>
-      <div class="bottom-left"><button id="diagnostics" class="floating small-button">◉ 结构提示</button><button id="unfold" class="floating small-button" hidden>展开节点</button><span id="counts"></span></div>
-      <div class="zoom floating"><button id="zoom-out" class="icon-button" aria-label="缩小">−</button><span id="zoom">100%</span><button id="zoom-in" class="icon-button" aria-label="放大">＋</button><span class="divider"></span><button id="fit" class="icon-button" title="适应画布 F" aria-label="适应画布">⛶</button></div>
-      <div id="legend"><span class="positive">＋ 促进</span><span class="negative">− 抑制</span><span class="contains">＝ 包含</span><span>关系详情可查看源机制</span></div>
+      <div class="bottom-left"><button id="diagnostics" class="floating small-button"><svg class="ui-icon" aria-hidden="true"><use href="#icon-diagnostics"/></svg>结构提示</button><span id="counts"></span></div>
+      <div class="zoom floating"><button id="zoom-out" class="icon-button" aria-label="缩小"><svg class="ui-icon" aria-hidden="true"><use href="#icon-zoom-out"/></svg></button><span id="zoom">100%</span><button id="zoom-in" class="icon-button" aria-label="放大"><svg class="ui-icon" aria-hidden="true"><use href="#icon-zoom-in"/></svg></button><span class="divider"></span><button id="fit" class="icon-button" title="适应画布 F" aria-label="适应画布"><svg class="ui-icon" aria-hidden="true"><use href="#icon-fit"/></svg></button></div>
     </section>
-    <aside id="inspector" class="floating" hidden><div class="panel-header"><strong id="inspector-title">属性</strong><button id="close-inspector" class="icon-button" aria-label="关闭属性">×</button></div><div id="properties"></div></aside>
+    <aside id="inspector" class="floating" hidden><div class="panel-header"><strong id="inspector-title">属性</strong><div class="inspector-actions"><button id="toggle-inspector" class="icon-button" aria-label="最小化详情" aria-pressed="false" title="最小化详情"><svg class="panel-toggle-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path id="inspector-toggle-path" d="M9 5.5 15.5 12 9 18.5"></path></svg></button><button id="close-inspector" class="icon-button" aria-label="关闭属性"><svg class="panel-close-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m7 7 10 10M17 7 7 17"></path></svg></button></div></div><div id="properties"></div></aside>
   </main>
-  <dialog id="dialog"><form id="dialog-form"><div class="panel-header"><h2 id="dialog-title"></h2><button id="close-dialog" class="icon-button" type="button" aria-label="关闭对话框">×</button></div><div id="dialog-content"></div><div id="dialog-error" role="alert" hidden></div><div class="dialog-actions"><button id="cancel-dialog" type="button">取消</button><button id="confirm-dialog" type="submit" class="primary">确定</button></div></form></dialog>
+  <dialog id="dialog"><form id="dialog-form"><div class="panel-header"><h2 id="dialog-title"></h2><button id="close-dialog" class="icon-button" type="button" aria-label="关闭对话框"><svg class="ui-icon" aria-hidden="true"><use href="#icon-close"/></svg></button></div><div id="dialog-content"></div><div id="dialog-error" role="alert" hidden></div><div class="dialog-actions"><button id="cancel-dialog" type="button">取消</button><button id="confirm-dialog" type="submit" class="primary">确定</button></div></form></dialog>
   <script src="/vendor/elk.js"></script>
   <script src="/vendor/webcola.js"></script>
   <script type="module" src="/app.mjs"></script>

@@ -18,7 +18,8 @@ export async function computeGraphTask(request, { ELK = globalThis.ELK, cola = g
   const movedIds = request.payload.movedIds ?? [];
   const routed = movedIds.length && cached.size
     ? rerouteMovedNodes(graph, positions, cached, movedIds, cola)
-    : { routes: routeGraphEdges(graph, positions, cola), edgeIds: graph.edges.map(edge => edge.id), full: true };
-  const result = settleGraphGeometry({ graph, positions, routes: routed.routes, cola });
+    : { routes: routeGraphEdges(graph, positions, cola, new Map(), { allowProvisional: true }), edgeIds: graph.edges.map(edge => edge.id), full: true };
+  const result = settleGraphGeometry({ graph, positions, routes: routed.routes, cola,
+    allowPositionShift: !request.payload.fixedPositions });
   return { positions: result.positions, routes: [...result.routes], edgeIds: routed.edgeIds, full: routed.full };
 }

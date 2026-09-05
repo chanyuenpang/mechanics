@@ -4,62 +4,134 @@ import { realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import metadata from '../../package.json' with { type: 'json' };
 import { readWorkspace } from './workspace.mjs';
-import { findWorkspace, initWorkspace } from './workspace-commands.mjs';
+import { migrateWorkspace } from './store.mjs';
+import { findProject, initProject } from './workspace-commands.mjs';
 import { startServer } from './http.mjs';
-import { runAgent } from './agent.mjs';
+import { runAgent, runAgentEditSession, runAgentMechanicTarget, runAgentMutation, runRecipeMigration } from './agent.mjs';
+import { publishCatalog } from './catalog.mjs';
+import { acquireWorkspaceLock } from './files.mjs';
+import { repairProjectionPositions } from './projection-position-repair.mjs';
+import { projectContext } from './project-context.mjs';
+import { listProjectReferences } from './project-references.mjs';
 
 const usage = `Game-Graph ${metadata.version} · 本地 JSON 工作区
 
-game-graph init <新目录> [--name <名称>] [--id <稳定ID>]
-game-graph serve [--workspace <目录>] [--port 4319]
-game-graph validate [--workspace <目录>]
-game-graph root [--workspace <目录>]
+game-graph init <项目目录> [--name <名称>] [--id <稳定ID>]
+game-graph web [--project <项目目录>] [--port 4319]
+game-graph validate [--project <项目目录>]
+game-graph migrate --from 7 --to 8 | --from 8 --to 9 | --from 9 --to 10 | --from 9 --to 9（悬空节点修复） --project <项目目录> [--revision <预览版本>] [--execute]（默认仅预览）
+game-graph repair projection-positions --project <项目目录> [--revision <预览版本>] [--execute]（只删除已无规则引用的限定投影坐标）
+game-graph catalog [--project <项目目录>]（重建 game-mechanics Agent 机制文档）
+game-graph root [--project <项目目录>]
+game-graph references list --project <源项目目录>（列出源项目声明的参考项目及本机定位状态）
 game-graph agent guide [--format text]（无需工作区，先读语义约定）
-game-graph agent scopes [--workspace <目录>]
+game-graph agent scopes [--project <项目目录>] [--connect http://127.0.0.1:<端口>]
 game-graph agent search --query <关键词> [--mechanic <ID> | --view <ID>] [--limit 30]
 game-graph agent graph --mechanic <ID> | --view <ID>
 game-graph agent node --mechanic <ID> --id <概念ID> [--direction both] [--hops 1]
 game-graph agent impact --mechanic <ID> --from <ID> --to <ID>
-  agent 通用：--workspace <目录> 或 --connect http://127.0.0.1:<端口>
-  在线凭据：GAME_GRAPH_SESSION_TOKEN 环境变量；不会自动连接或回退到磁盘。
-  --format json|text --revision <版本>；图：--max-nodes 500 --max-edges 2000
+game-graph agent session open --project <项目目录> --mechanic <ID> [--previous-session <自己的旧会话ID>] --project-generation <当前代次> --connect http://127.0.0.1:<端口>
+game-graph agent session close --project <项目目录> --mechanic <ID> --session <open返回的会话ID> --project-generation <当前代次> --connect http://127.0.0.1:<端口>
+game-graph agent session status --project <项目目录> --session <会话ID> --project-generation <当前代次> --connect http://127.0.0.1:<端口>
+game-graph agent mechanic open --project <项目目录> --mechanic <ID> --project-generation <当前代次> --connect http://127.0.0.1:<端口>
+game-graph agent mechanic-folder create --name <单段目录名> [--parent <已有相对目录>] --workspace-revision <工作区版本>
+game-graph agent mechanic-folder delete --folder <相对目录> --workspace-revision <工作区版本>
+game-graph agent mechanic create --id <稳定ID> --name <名称> --scope <范围> [--folder <已有相对目录>] --workspace-revision <工作区版本>
+game-graph agent mechanic update|delete --mechanic <ID> [--name <名称>] [--scope <范围>] [--remove-isolated-concepts <JSON字符串数组>] --revision <机制资源版本>
+game-graph agent mechanic arrange --mechanic <ID> --revision <机制资源版本>
+game-graph agent recipe-migration preview --project <项目目录> --manifest <项目内 docs/ 相对路径>
+game-graph agent recipe-migration execute --project <项目目录> --manifest <项目内 docs/ 相对路径> --revision <preview返回的工作区版本>
+game-graph agent recipe-migration recover --project <项目目录> --manifest <项目内 docs/ 相对路径>（仅 workspace.json 丢失后的受限恢复）
+game-graph agent view delete --view <ID> --workspace-revision <工作区版本>
+game-graph agent concept create --id <概念ID> --label <名称> --description <定义> --revision <资源版本>
+game-graph agent concept update|delete --concept <概念ID> --revision <资源版本>
+game-graph agent rule add|update|delete --mechanic <ID> --source <概念ID> --target <概念ID> [--source-qualifiers <JSON数组>] [--target-qualifiers <JSON数组>] [--text <规则>] --revision <资源版本>
+  agent 通用：--project <项目目录> 或 --connect http://127.0.0.1:<端口>
+  --format json|text；图：--max-nodes 500 --max-edges 2000
   影响：--max-paths 50 --max-depth 16 --max-expansions 10000 --evidence-limit 10
+  Agent 的 --project 只定位后台项目上下文，不切换网页当前标签。mechanic open 只解析目标：缺失时返回 create-required，不产生编辑会话；session open 仅会在提供 --previous-session 时异步关闭该旧会话；session close 会异步自动整理并回读，返回 jobId 后无需等待。新建机制文件夹和空机制图是容器准备操作，不需要 session；其余在线写入必须提供 session open 返回的 --session
+  mechanic update/arrange、concept/rule mutation 的 --revision 必须取 scopes.resourceRevisions；容器创建的 --workspace-revision 必须取 scopes.revision；在线写入还须 --project-generation
+  当前关系：influence 需 sign 与 inheritance；端点限定词只属于 influence 规则；specializes 为无 sign/inheritance/限定词的具体概念 → 上位概念 DAG
+  Agent 只能创建受约束的机制文件夹/空白机制图，原子更新或安全删除机制、删除非当前视图，或调用与网页同算法的整图自动排版，或写概念与规则白名单字段；不能写入任意坐标、Agent 锁、视图结构、文件路径或原始机制元数据
 game-graph --help | --version
 
-serve / validate / root 省略 --workspace 时，从当前目录向上寻找最近的 workspace.json。
-显式目录优先；一次服务固定一个根，文件始终保存到该根内。
-init 不覆盖已有目录；不读取旧版工作区或旧文件类型。
+web 省略 --project 时以空项目状态启动，由网页打开项目。
+validate / catalog / root 省略 --project 时，从当前目录向上寻找最近的 .game-graph。
+init 不覆盖已有 .game-graph 或不同内容的同名 skill，并注册包内 Game-Graph skills 到项目 .agents/skills。
+只读取项目内固定工作区和 v10 文件。
 需要 Node.js 24+。不上传分析资料，也不自动公开发布。`;
 
 try {
   const { positionals, values } = parseArgs({ options: {
-    workspace: { type: 'string' }, port: { type: 'string' }, name: { type: 'string' }, id: { type: 'string' },
+    project: { type: 'string' }, port: { type: 'string' }, name: { type: 'string' }, id: { type: 'string' }, from: { type: 'string' }, to: { type: 'string' }, execute: { type: 'boolean' },
     help: { type: 'boolean', short: 'h' }, version: { type: 'boolean', short: 'v' },
-    ...Object.fromEntries(['connect', 'format', 'mechanic', 'view', 'revision', 'direction', 'hops', 'query', 'limit', 'from', 'to', 'max-paths', 'max-depth', 'max-expansions', 'max-nodes', 'max-edges', 'evidence-limit'].map(key => [key, { type: 'string' }])),
+    ...Object.fromEntries(['connect', 'format', 'mechanic', 'view', 'revision', 'direction', 'hops', 'query', 'limit', 'from', 'to', 'max-paths', 'max-depth', 'max-expansions', 'max-nodes', 'max-edges', 'evidence-limit',
+      'label', 'description', 'aliases', 'tags', 'concept', 'source', 'target', 'source-qualifiers', 'target-qualifiers', 'relation', 'sign', 'text', 'inheritance', 'project-generation', 'session', 'previous-session', 'include-inherited', 'workspace-revision', 'parent', 'scope', 'folder', 'remove-isolated-concepts', 'manifest', 'library', 'entry', 'workspace-id'].map(key => [key, { type: 'string' }])),
   }, allowPositionals: true });
   const [command, target] = positionals;
   if (values.help || (!command && !Object.keys(values).length)) console.log(usage);
   else if (values.version && !command && Object.keys(values).length === 1) console.log(metadata.version);
   else if (command === 'agent') {
-    if (positionals.length !== 2) throw new Error('agent 需要且只接受一个子命令');
-    console.log(await runAgent(target, values));
+    if (target === 'session') {
+      if (positionals.length !== 3) throw Object.assign(new Error('session 需要动作子命令'), { code: 'AGENT_EDIT_SESSION_INVALID' });
+      console.log(await runAgentEditSession(positionals[2], values));
+    } else if (target === 'recipe-migration') {
+      if (positionals.length !== 3) throw Object.assign(new Error('recipe-migration 需要动作子命令'), { code: 'AGENT_MUTATION_INVALID' });
+      console.log(await runRecipeMigration(positionals[2], values));
+    } else if (target === 'mechanic' && positionals[2] === 'open') {
+      if (positionals.length !== 3) throw Object.assign(new Error('mechanic open 只接受一个动作子命令'), { code: 'AGENT_MECHANIC_TARGET_INVALID' });
+      console.log(await runAgentMechanicTarget(positionals[2], values));
+    } else if (['mechanic-folder', 'mechanic', 'view', 'concept', 'rule'].includes(target)) {
+      if (positionals.length !== 3) throw Object.assign(new Error('Agent 写入需要资源与动作两级子命令'), { code: 'AGENT_MUTATION_INVALID' });
+      console.log(await runAgentMutation(target, positionals[2], values));
+    } else {
+      if (positionals.length !== 2) throw new Error('agent 查询需要且只接受一个子命令');
+      console.log(await runAgent(target, values));
+    }
+  }
+  else if (command === 'references') {
+    if (target !== 'list' || positionals.length !== 2 || !values.project) throw new Error('references 仅支持 list --project <源项目目录>');
+    console.log(JSON.stringify(await listProjectReferences(await realpath(resolve(values.project))), null, 2));
   }
   else {
-    const allowed = { init: ['name', 'id'], serve: ['workspace', 'port'], validate: ['workspace'], root: ['workspace'] };
-    if (!allowed[command] || positionals.length !== (command === 'init' ? 2 : 1)) throw new Error('命令或参数数量无效，请运行 --help。');
+    const allowed = { init: ['name', 'id'], web: ['project', 'port'], validate: ['project'], migrate: ['project', 'from', 'to', 'revision', 'execute'], repair: ['project', 'revision', 'execute'], catalog: ['project'], root: ['project'] };
+    if (!allowed[command] || positionals.length !== (command === 'init' || command === 'repair' ? 2 : 1)) throw new Error('命令或参数数量无效，请运行 --help。');
     for (const option of Object.keys(values)) if (!allowed[command].includes(option)) throw new Error(command + ' 不支持 --' + option);
-    if (command === 'init') console.log(JSON.stringify(await initWorkspace(target, { name: values.name, id: values.id }), null, 2));
+    if (command === 'init') console.log(JSON.stringify(await initProject(target, { name: values.name, id: values.id }), null, 2));
     else {
-      if (values.workspace === '') throw new Error('--workspace 不能为空');
-      const root = values.workspace !== undefined ? await realpath(resolve(values.workspace)) : await findWorkspace();
-      const data = await readWorkspace(root);
-      if (command === 'root') console.log(root);
-      else if (command === 'validate') console.log(JSON.stringify({ ok: true, root, workspaceId: data.manifest.id, nodes: data.definitions.nodes.length, mechanics: data.mechanics.length, views: data.views.length, revision: data.revision }, null, 2));
-      else {
+      if (values.project === '') throw new Error('--project 不能为空');
+      const projectRoot = values.project !== undefined ? await realpath(resolve(values.project))
+        : command === 'web' ? null : await findProject();
+      const context = projectRoot ? ['migrate', 'repair'].includes(command) ? { projectRoot, workspaceRoot: resolve(projectRoot, '.game-graph') }
+        : await projectContext(projectRoot, { createExportRoot: command === 'catalog' }) : null;
+      if (command === 'repair') {
+        if (target !== 'projection-positions') throw Object.assign(new Error('repair 仅支持 projection-positions'), { code: 'REPAIR_UNSUPPORTED' });
+        console.log(JSON.stringify(await repairProjectionPositions(context.workspaceRoot, { revision: values.revision, execute: values.execute === true }), null, 2));
+      } else if (command === 'migrate') {
+        const from = Number(values.from), to = Number(values.to);
+        if (!((from === 7 && to === 8) || (from === 8 && to ===9) || (from === 9 && to === 10) || (from === 9 && to === 9))) throw Object.assign(new Error('migrate 仅支持 --from 7 --to 8、--from 8 --to 9、--from 9 --to 10 或 --from 9 --to 9'), { code: 'MIGRATION_VERSION_UNSUPPORTED' });
+        console.log(JSON.stringify(await migrateWorkspace(context.workspaceRoot, { from, to, revision: values.revision, execute: values.execute === true }), null, 2));
+      } else if (command === 'catalog') {
+        const release = await acquireWorkspaceLock(context.workspaceRoot);
+        try {
+          const data = await readWorkspace(context.workspaceRoot, { context });
+          const catalog = await publishCatalog(context.exportRoot, data);
+          await readWorkspace(context.workspaceRoot, { context });
+          console.log(JSON.stringify({ ok: true, projectRoot, workspaceRoot: context.workspaceRoot,
+            agentExportRoot: context.exportRoot, workspaceId: data.manifest.id, concepts: catalog.dossiers.size,
+            semanticRevision: catalog.semanticRevision }, null, 2));
+        } finally { await release(); }
+      } else {
+        const data = context ? await readWorkspace(context.workspaceRoot, { context }) : null;
+        if (command === 'root') console.log(projectRoot);
+        else if (command === 'validate') console.log(JSON.stringify({ ok: true, projectRoot, workspaceRoot: context.workspaceRoot,
+          agentExportRoot: context.exportRoot, workspaceId: data.manifest.id, nodes: data.definitions.nodes.length,
+          mechanics: data.mechanics.length, views: data.views.length, revision: data.revision }, null, 2));
+        else {
           const rawPort = values.port ?? '4319', port = Number(rawPort);
           if (!/^\d+$/.test(rawPort) || !Number.isInteger(port) || port > 65535) throw new Error('端口必须是 0–65535 的整数');
-          const { close, url } = await startServer({ workspaceRoot: root, port });
-          console.log(`Game-Graph · ${data.manifest.name}\n${url}\n保存目标：${root}\n关闭服务后释放工作区写入锁。`);
+          const { close, url } = await startServer({ projectRoot, port });
+          console.log(`Game-Graph · 本地项目工具\n${url}\n${projectRoot ? `已打开项目：${projectRoot}` : '尚未打开项目，请在网页中选择项目。'}`);
           let stopping = false;
           const shutdown = () => {
             if (stopping) return;
@@ -67,11 +139,16 @@ try {
             close().then(() => process.exit(0), error => { console.error(error); process.exit(1); });
           };
           process.once('SIGINT', shutdown); process.once('SIGTERM', shutdown);
+        }
       }
     }
   }
 } catch (error) {
-  if (process.argv[2] === 'agent') console.error(JSON.stringify({ error: error.code ?? 'COMMAND_FAILED', message: error.message }));
+  if (process.argv[2] === 'agent') {
+    const code = error.code ?? 'COMMAND_FAILED';
+    const details = Object.fromEntries(Object.entries(error).filter(([key]) => !['code', 'error'].includes(key)));
+    console.error(JSON.stringify({ error: code, message: error.message, ...details }));
+  }
   else console.error(`${error.code ?? 'COMMAND_FAILED'}：${error.message}`);
   process.exitCode = 1;
 }

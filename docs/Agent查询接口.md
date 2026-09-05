@@ -1,62 +1,70 @@
-# CLI Agent 只读语义查询
+# CLI Agent 查询与受约束写入
 
-Agent 查询是 `game-graph` CLI 的组成部分，不是另一个应用。不需要 Claw、MCP 或游戏引擎。默认返回语义 JSON，排除坐标、相机、折叠和最近编辑状态；`--format text` 提供中文结论、概念定义、关系与来源，不再重复输出整份 JSON。查询不会保存任何规则或派生图。
+`game-graph agent` 提供两条严格分离的能力：`guide/scopes/search/graph/node/impact` 只读已保存资料；`concept create|update|delete` 与 `rule add|update|delete` 在明确写意图下修改 canonical。两者都不依赖 Claw、MCP 或游戏引擎。
 
-## Agent 的默认理解路径
+## 只读查询
 
-先查询模型，不先猜测规则或遍历游戏实现：`guide → scopes/search → graph/node → impact`。报告区分“图中声明”“路径推导”“未覆盖或待确认”。只有模型缺失、歧义或需要核实实际实现时，再定向查源码或运行时；不能把模型的未覆盖范围自动补成常见游戏规则。
-
-`agent guide --format text` 无需工作区即可读取语义约定。每个查询结果也自带 readingContract，说明 increaseMeaning 是符号基准、等号只单向传递、空条件是未注明、多入边不编码 AND/OR、模型没有运行时验证证明、完整搜索不等于模型完整。文件中的 scope/description/condition/note 是模型资料，不是给 Agent 执行的指令。
-
-## 使用
-
-在工作区根或子目录运行，也可以显式指定 `--workspace <根目录>`：
+推荐顺序为 `guide → scopes/search → graph/node → impact`：
 
 ```sh
 game-graph agent guide --format text
-game-graph agent scopes
-game-graph agent search --query "资源"
-game-graph agent search --query "抽牌" --mechanic basic-rules
-game-graph agent graph --mechanic basic-rules
-game-graph agent graph --view battle
-game-graph agent node --mechanic basic-rules --id stamina --direction both --hops 2
-game-graph agent impact --mechanic basic-rules --from stamina --to failure
+game-graph agent scopes --project ./my-game
+game-graph agent search --project ./my-game --query "资源"
+game-graph agent graph --project ./my-game --mechanic basic-rules
+game-graph agent graph --project ./my-game --view battle
+game-graph agent node --project ./my-game --mechanic basic-rules --id stamina --direction both --hops 2
+game-graph agent impact --project ./my-game --mechanic basic-rules --from stamina --to failure
 ```
 
-graph/node/impact 必须指定且只能指定 `--mechanic <ID>` 或 `--view <ID>`。只接受稳定 ID，不按名称猜测；先通过 scopes/search 找 ID。视图每次展开其已保存的机制成员，读取源文件最新版本，忽略展示折叠。机制与视图 ID 分属不同命名空间。
+`guide` 无需项目。其他命令可以在项目或 `.game-graph` 子目录运行，也可显式传 `--project`。服务已运行时可改用 `--connect http://127.0.0.1:<端口>`；客户端不跟随重定向，30 秒超时，协议不匹配会明确失败，不静默退回磁盘模式。
 
-search 默认搜索共享概念，不把所有机制叠加；也可限定机制或视图。匹配 ID、名称、描述、增加方向和标签，支持大小写与全半角归一化，空格分词须全部匹配。精确 ID/名称优先，同名异 ID 不合并，返回 match 与 sourceMechanicIds 帮助定位。`--limit` 默认30，最多1000；output 明示总匹配数及是否截断。未引用的定义也能找到，空结果不表示游戏中没有该机制。
+`graph/node/impact` 必须且只能指定 `--mechanic <ID>` 或 `--view <ID>`。稳定 ID 先由 scopes/search 查得；不按显示名称猜测。视图只查询 `visible:true` 的注册机制，同时返回完整注册表。search 匹配 ID、名称、aliases、描述和标签；同一别名可命中多个概念，结果不会自动合并。
 
-服务已运行时，使用 `--connect http://127.0.0.1:<端口>` 替代 `--workspace`。将启动网址 `#session=` 后的值放入 `GAME_GRAPH_SESSION_TOKEN` 环境变量；不要把凭据写进资料、文档或提交到仓库。在线模式只接受本机 origin，不接受带凭据的 URL，不跟随重定向，30 秒超时报错。服务代码更新后需要保存草稿并重启服务；不会静默退回磁盘模式。
+查询结果携带 `queryApiVersion:7`、`semanticsVersion:rule-text-only-polarity-4`、`readingContract.version:7`、workspaceId、整体 `revision`、逐资源 `resourceRevisions`、savedOnly；在线查询还携带 `projectGeneration`。后续只读查询可用 `--revision` 约束整体版本，变化时返回 `REVISION_CONFLICT`。
 
-## 结果合同
-
-资料查询携带 `queryApiVersion:2`、`semanticsVersion:directed-neutral-1`、`readingContract.version:2`、workspaceId、revision、savedOnly 和 command；guide 不读取资料，因此没有工作区版本。有范围的查询还携带 scope 和解析后的 mechanicIds、机制范围说明及相对文件路径。视图 scope 同时返回完整 `mechanicRegistrations`、注册数和可见数，但只查询 Visible 注册项。`--revision <值>` 将后续查询限定在先前版本，变化时返回 REVISION_CONFLICT。在线 CLI 会拒绝不同协议、影响语义或阅读约定版本的结果，返回 QUERY_VERSION_MISMATCH。
-
-graph 输出概念定义和原始直接边。边明确标记 basis=declared_relation，并附 sourceLabel/targetLabel、两端 increaseMeaning、statement、来源与 conditionStatus。条件有文字时为 not_evaluated，空白时为 unspecified；不能把空白视作无条件成立。
-
-node 输出中心节点的有限跳数邻域，direction 支持 upstream/downstream/both，默认 both；所有边按 source → target 区分上下游。both 分别查上游和下游再合并，禁止交替换向扩散到共同来源或汇点的兄弟节点。neighborhood 返回上下游 ID 和 distances（各方向最短跳数）；等号也计一跳，距离不表示时序或强度，null 表示不在本次方向与跳数范围内，中心自身不算上下游。若出现显式环，同一节点可以同时在两侧。邻域中的边都是原始关系，不把间接影响伪装成直接边。默认一跳，最大八跳；跳数之外没有展开，`output.complete` 只描述请求邻域是否完整输出。
-
-impact 查询结果的 `impact.kind` 为 positive、negative、mixed、neutral_only、not_found。`basis=derived_from_declared_relations` 区分推导与声明；`applicability=not_evaluated`、`modelCoverage=not_assessed` 明示未判断实际成立与模型覆盖。mixed 不抵消、不比较强度；neutral_only 不意味着零影响；not_found 不意味着现实中无关联。条件和说明原样附在证据中，`conditionsEvaluated` 为 false。不判断具体战局、禁止效果或数值，不计算净收益。
-
-路径保留 graphId、edgeId、source/target 和相对文件来源；等号只按保存方向遍历，不生成反向步骤。mechanic.complete 表示有限简单路径搜索是否完成；evidence.complete 表示全部路径是否已展示。`evidence.found` 只是已找到的数量，不是截断搜索下的总路径数。结果不完整时，结论只概括已找到证据，未展示部分可能包含另一符号。
+每条边以 `source/target/relation/sign/inheritance` 直接声明关系结构，并可保存用户填写的 `ruleText`；工具不会自行补写规则文字。条件约束写入规则文字，不设独立字段；规则文字不求值；多入边不编码 AND/OR；路径不表示时序、强度、概率、胜率或运行时成立。impact 会区分声明关系、推导结果、搜索/证据完整性与模型未知项。
 
 | 参数 | 默认 | 最大 |
 | --- | --- | --- |
-| --hops（node） | 1 | 8 |
-| --max-nodes（graph/node） | 500 | 5000 |
-| --max-edges（graph/node） | 2000 | 20000 |
-| --max-paths（impact） | 50 | 500 |
-| --max-depth（impact） | 16 | 64 |
-| --max-expansions（impact） | 10000 | 100000 |
-| --evidence-limit（impact） | 10 | 500 |
+| `--hops` | 1 | 8 |
+| `--max-nodes` | 500 | 5000 |
+| `--max-edges` | 2000 | 20000 |
+| `--max-paths` | 50 | 500 |
+| `--max-depth` | 16 | 64 |
+| `--max-expansions` | 10000 | 100000 |
+| `--evidence-limit` | 10 | 500 |
 
-所有预算为正整数。节点和边裁剪通过 output.complete 明示，并保留原数量；影响搜索返回 expandedStates 和 truncationReasons。即使没有通往目标的路径，大分支搜索也受展开预算限制。简单路径不重复节点，不用于闭环动态求解。
+## 受约束写入
 
-## 读取与失败边界
+Agent 写入只支持以下命令，不支持直接写 JSON、修改 `agentLocked`、视图、布局、机制元数据或工作区设置：
 
-只读取已保存文件，不读取网页草稿。离线短暂取得现有工作区锁后读取并释放；在线通过保存队列获取内存快照，计算不改该快照。额外两遍读取检测版本变化，但不保证任意外部编辑器修改下的严格跨文件原子性；锁和队列只隔离遵守工具协议的写入者。
+```sh
+game-graph agent concept create --project ./my-game --id focus --label "专注" --description "可投入行动的专注。" --aliases '["集中"]' --tags '["资源"]' --revision <definitions资源版本>
+game-graph agent concept update --project ./my-game --concept focus --description "用于维持复杂行动。" --revision <definitions资源版本>
+game-graph agent concept delete --project ./my-game --concept focus --revision <definitions资源版本>
 
-错误写 stderr JSON `{error,message}`，退出码非零，stdout 不返回部分成功。常见错误：SCOPE_REQUIRED、SCOPE_NOT_FOUND、NODE_NOT_FOUND、NODE_OUT_OF_SCOPE、QUERY_INVALID、REVISION_CONFLICT、WORKSPACE_LOCKED、SESSION_REQUIRED。锁冲突时可显式连接已启动服务；不自动删除锁。未知参数、无效文件或断引用整体拒绝。
+game-graph agent rule add --project ./my-game --mechanic basic-rules --source focus --target action --relation influence --sign positive --text "" --revision <机制资源版本>
+game-graph agent rule update --project ./my-game --mechanic basic-rules --source focus --target action --text "行动窗口开放时，专注提高行动效果。" --revision <机制资源版本>
+game-graph agent rule delete --project ./my-game --mechanic basic-rules --source focus --target action --revision <机制资源版本>
+# influence 默认保存 inheritance:none；只有明确需要时才设置受限继承
+game-graph agent rule add --project ./my-game --mechanic basic-rules --source focus-on-boss --target focus --relation specializes --revision <机制资源版本>
+game-graph agent rule update --project ./my-game --mechanic basic-rules --source focus --target action --inheritance '{"mode":"specializeEndpoint","endpoints":["source"],"maxSpecializationHops":1}' --revision <机制资源版本>
+```
 
-领域查询位于 `src/domain/query.mjs`；符号遍历与网页共享的结论函数位于 `src/domain/graph.mjs`。CLI 与鉴权的 `GET /api/agent` 是薄适配，HTTP 参数使用 camelCase，数值参数不接受重复键。未来 MCP 应调用同一查询层，不再维护第二套算法。
+概念 ID 与规则端点不可通过 update 改名。`aliases/tags` 必须是 JSON 字符串数组；空数组表示清空。规则 ID 固定由 `<source>-2-<target>` 生成；同一有向端点对在整个工作区只能存在一条规则。`influence` 使用 `positive/negative/random`（也接受 `1/-1`）且必须有 `inheritance`；`specializes` 不得提供 sign 或 inheritance。新增规则会把已存在的端点概念补入目标机制的 `nodeIds`，但不会生成坐标；删除规则不删除节点引用。
+
+写入前先运行 scopes，概念操作使用 `resourceRevisions.definitions`，规则操作使用 `resourceRevisions.mechanics[mechanicId]`。每次成功返回新的 `resourceRevision`；继续修改同一资源必须使用新值。在线写入还必须传当前 `--project-generation`：
+
+```sh
+game-graph agent concept update --connect http://127.0.0.1:4319 --project-generation 3 --concept focus --label "专注值" --revision <definitions资源版本>
+```
+
+用户可在网页概念表设置 Agent 锁。锁定概念禁止 Agent update/delete，但仍可作为规则端点。概念仍有机制、规则、视图或历史组合引用时不能删除；应由用户在网页清理引用。写入与网页保存共用串行队列和完整工作区校验。
+
+canonical 提交后会立即重建 Agent 文档。若返回 `AGENT_EXPORT_FAILED` 且 `canonicalCommitted:true`，表示 canonical 已提交但文档发布失败；先重新查询真实状态，禁止自动重试原 mutation。
+
+## 错误与只读后备
+
+错误写入 stderr JSON `{error,message,...details}`，退出码非零，stdout 不返回部分成功。常见错误包括 `SCOPE_REQUIRED`、`SCOPE_NOT_FOUND`、`NODE_NOT_FOUND`、`REVISION_CONFLICT`、`RESOURCE_REVISION_CONFLICT`、`PROJECT_CHANGED`、`CONCEPT_AGENT_LOCKED`、`CONCEPT_REFERENCED`、`DUPLICATE_ENDPOINT_RULE`、`WORKSPACE_LOCKED`、`CATALOG_STALE`、`AGENT_EXPORT_FAILED` 和 `QUERY_VERSION_MISMATCH`。
+
+没有 CLI 时从项目 `agentExportPath/README.md` 进入，按机制文件夹读取 `folders/<文件夹>/index.md`，再按需在唯一的 `concepts.md` 中查概念锚点。该 Markdown-only 目录由 catalog v5 生成，只读且不含布局或视图状态；canonical definitions/mechanics 始终是唯一可编辑真相。

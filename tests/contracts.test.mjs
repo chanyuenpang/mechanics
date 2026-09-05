@@ -9,9 +9,10 @@ import { readWorkspace } from '../src/server/workspace.mjs';
 import { startServer } from '../src/server/http.mjs';
 import { validateWorkspace } from '../src/domain/validate.mjs';
 import { compose, collapse, canCollapse, tracePaths, diagnose } from '../src/domain/graph.mjs';
+import { copyExampleFixture } from './example-fixture.mjs';
 
 const example = fileURLToPath(new URL('../examples/card-game/', import.meta.url));
-const source = await readWorkspace(example);
+const source = await readWorkspace(join(example, '.game-graph'));
 const selected = ['basic-rules', 'encounter', 'hand'];
 
 test('叠加按稳定 ID 接合，保留来源且不修改输入', () => {
@@ -26,31 +27,32 @@ test('叠加按稳定 ID 接合，保留来源且不修改输入', () => {
   assert.equal(compose(source, ['basic-rules']).nodes.some(node => node.id === 'evade'), false);
 });
 
-test('同名不同 ID 不合并；跨图异号关系不抵消', () => {
+test('同名不同 ID 不合并；不同来源规则各自保留', () => {
   const draft = structuredClone(source);
-  draft.definitions.nodes.push({ id: 'enemy-two', label: '近战敌人', description: '第二名敌人', increaseMeaning: '行动增加' });
+  draft.definitions.nodes.push({ id: 'enemy-two', label: '近战敌人', description: '第二名敌人', agentLocked: false });
   const encounter = draft.mechanics.find(graph => graph.id === 'encounter');
   encounter.nodeIds.push('enemy-two');
-  encounter.edges.push({ id: 'opposite', source: 'enemy', target: 'melee', relation: 'influence', sign: -1, condition: '另一个假设条件', note: '' });
+  draft.mechanics.push({ ...structuredClone(encounter), id: 'opposite-rule',
+    edges: [{ id: 'enemy-two-2-melee', source: 'enemy-two', target: 'melee', relation: 'influence', sign: -1, inheritance: { mode: 'none' }, ruleText: '另一个假设条件' }] });
   validateWorkspace(draft);
-  const graph = compose(draft, selected);
+  const graph = compose(draft, [...selected, 'opposite-rule']);
   assert.equal(graph.nodes.filter(node => node.label === '近战敌人').length, 2);
-  assert.deepEqual(graph.edges.filter(edge => edge.source === 'enemy' && edge.target === 'melee').map(edge => edge.sign).sort(), [-1, 1]);
+  assert.deepEqual(graph.edges.filter(edge => edge.target === 'melee' && ['enemy', 'enemy-two'].includes(edge.source)).map(edge => edge.sign).sort(), [-1, 1]);
 });
 
-test('单路径符号解释保留条件；折叠只生成摘要且可由源图展开', () => {
+test('单路径符号解释保留规则文字；折叠只生成摘要且可由源图展开', () => {
   const graph = compose(source, selected);
   const before = JSON.stringify(graph);
   const result = tracePaths(graph, 'evade', 'failure');
   assert.equal(result.paths.length, 1);
   assert.equal(result.paths[0].sign, -1);
   assert.equal(result.paths[0].steps.length, 5);
-  assert.match(result.paths[0].steps[0].condition, /体力/);
+  assert.match(result.paths[0].steps[0].ruleText, /体力/);
   assert.equal(canCollapse(graph, 'repel'), true);
   const folded = collapse(graph, 'repel');
   const summary = folded.edges.find(edge => edge.hiddenNodes.includes('repel'));
   assert.equal(summary.sign, -1);
-  assert.deepEqual(summary.steps.map(edge => edge.edgeId), ['evade-repel', 'repel-melee']);
+  assert.deepEqual(summary.steps.map(edge => edge.edgeId), ['evade-2-repel', 'repel-2-melee']);
   assert.equal(JSON.stringify(graph), before);
   assert.deepEqual(compose(source, selected), graph);
   assert.equal(canCollapse(graph, 'evade'), false);
@@ -74,15 +76,22 @@ test('终点只有疑点提示，未纳入当前机制的全局定义不被误�
 });
 
 test('结构和引用错误明确拒绝，不修补原始数据', () => {
+  const withRuleText = structuredClone(source);
+  withRuleText.mechanics[0].edges[0].ruleText = '回合开始时获得一张牌。';
+  validateWorkspace(withRuleText);
   for (const change of [
     data => { data.definitions.nodes.push(structuredClone(data.definitions.nodes[0])); },
     data => { data.mechanics[0].edges[0].target = 'missing'; },
-    data => { data.mechanics[0].schemaVersion = 2; },
+    data => { data.mechanics[0].schemaVersion = 1; },
     data => { data.mechanics[0].edges[0].sign = 0; },
     data => { data.mechanics[0].workspaceId = 'other-game'; },
     data => { data.definitions.nodes = data.definitions.nodes.filter(node => node.id !== 'melee'); },
     data => { data.manifest.compositions[0].graphIds.push('unknown'); },
     data => { data.mechanics[0].positions.missing = { x: 0, y: 0 }; },
+    data => { delete data.definitions.nodes[0].agentLocked; },
+    data => { data.definitions.nodes[0].agentLocked = 'false'; },
+    data => { data.mechanics[0].edges[0].note = '旧字段'; },
+    data => { data.definitions.nodes[0].increaseMeaning = '旧字段'; },
   ]) {
     const draft = structuredClone(source); change(draft);
     const before = JSON.stringify(draft);
@@ -91,9 +100,66 @@ test('结构和引用错误明确拒绝，不修补原始数据', () => {
   }
 });
 
+
+test('限定概念要求基础节点与规范化 qualifiers 全局唯一', () => {
+  const valid = structuredClone(source);
+  valid.definitions.nodes.push({ id: 'melee-fire', label: '火焰近战', description: '限定概念', agentLocked: false, baseConceptId: 'melee', qualifiers: [
+    { key: 'damage-type', value: { kind: 'literal', value: 'fire' } },
+    { key: 'source-concept', value: { kind: 'concept', conceptId: 'enemy' } },
+  ] });
+  validateWorkspace(valid);
+  for (const [change, code] of [
+    [data => { data.definitions.nodes.at(-1).baseConceptId = 'missing'; }, 'QUALIFIED_BASE_INVALID'],
+    [data => { data.definitions.nodes.at(-1).baseConceptId = 'melee-fire'; }, 'QUALIFIED_BASE_INVALID'],
+    [data => { data.definitions.nodes.push({ id: 'nested-base', label: '嵌套', description: '限定', agentLocked: false, baseConceptId: 'melee', qualifiers: [{ key: 'tier', value: { kind: 'literal', value: 1 } }] }); data.definitions.nodes.at(-2).baseConceptId = 'nested-base'; }, 'QUALIFIED_BASE_INVALID'],
+    [data => { data.definitions.nodes.at(-1).qualifiers[1].value.conceptId = 'missing'; }, 'QUALIFIER_CONCEPT_NOT_FOUND'],
+    [data => { data.definitions.nodes.at(-1).qualifiers.push({ key: 'damage-type', value: { kind: 'literal', value: 'ice' } }); }, 'QUALIFIER_KEY_DUPLICATE'],
+    [data => { data.definitions.nodes.push({ ...structuredClone(data.definitions.nodes.at(-1)), id: 'melee-fire-copy', qualifiers: [...structuredClone(data.definitions.nodes.at(-1).qualifiers)].reverse() }); }, 'QUALIFIED_CONCEPT_DUPLICATE'],
+  ]) {
+    const invalid = structuredClone(valid); change(invalid);
+    assert.throws(() => validateWorkspace(invalid), { code });
+  }
+});
+
+test('持久化领域 ID 拒绝随机片段，别名不遮蔽稳定 ID且歧义别名允许一对多', () => {
+  const random = structuredClone(source);
+  random.definitions.nodes[0].id = 'node-deadbeef';
+  assert.throws(() => validateWorkspace(random), { code: 'INVALID_SEMANTIC_ID' });
+
+  const shadow = structuredClone(source);
+  shadow.definitions.nodes[0].aliases = [shadow.definitions.nodes[1].id];
+  assert.throws(() => validateWorkspace(shadow), { code: 'ALIAS_SHADOWS_ID' });
+
+  const ambiguous = structuredClone(source);
+  ambiguous.definitions.nodes[0].aliases = ['共同叫法'];
+  ambiguous.definitions.nodes[1].aliases = ['共同叫法'];
+  validateWorkspace(ambiguous);
+
+  const duplicate = structuredClone(source);
+  duplicate.definitions.nodes[0].aliases = ['Health', ' health '];
+  assert.throws(() => validateWorkspace(duplicate), { code: 'DUPLICATE_ALIAS' });
+});
+
+test('全工作区的同一有向端点对只允许一条规则', () => {
+  const duplicate = structuredClone(source);
+  const edge = duplicate.mechanics[0].edges[0];
+  duplicate.mechanics[0].edges.push({ ...edge, id: edge.id + '-duplicate', relation: 'influence', sign: -1 });
+  assert.throws(() => validateWorkspace(duplicate), { code: 'DUPLICATE_ENDPOINT_RULE' });
+  const crossMechanic = structuredClone(source);
+  crossMechanic.mechanics[1].nodeIds.push(...[edge.source, edge.target].filter(id => !crossMechanic.mechanics[1].nodeIds.includes(id)));
+  crossMechanic.mechanics[1].edges.push(structuredClone(edge));
+  assert.throws(() => validateWorkspace(crossMechanic), { code: 'DUPLICATE_ENDPOINT_RULE' });
+});
+
+test('规则 ID 必须由 source 与 target 稳定确定', () => {
+  const invalid = structuredClone(source);
+  invalid.mechanics[0].edges[0].id = 'unrelated-rule-name';
+  assert.throws(() => validateWorkspace(invalid), { code: 'RULE_ID_MISMATCH' });
+});
+
 test('视图可保存暂时隐藏的定义节点坐标，但仍拒绝未知节点', () => {
   const draft = structuredClone(source);
-  draft.views = [{ schemaVersion: 2, kind: 'view', workspaceId: draft.manifest.id, id: 'layout-memory', name: '布局记忆', mechanicRegistrations: [], collapsedNodeIds: [], positions: { melee: { x: 10, y: 20 } } }];
+  draft.views = [{ schemaVersion: 3, kind: 'view', workspaceId: draft.manifest.id, id: 'layout-memory', name: '布局记忆', mechanicRegistrations: [], collapsedNodeIds: [], positions: { melee: { x: 10, y: 20 } }, structuralPresentation: 'line' }];
   validateWorkspace(draft);
   draft.views[0].positions.missing = { x: 0, y: 0 };
   assert.throws(() => validateWorkspace(draft), /missing/);
@@ -101,9 +167,9 @@ test('视图可保存暂时隐藏的定义节点坐标，但仍拒绝未知节�
 
 test('工具可处理无任何卡牌概念的另一游戏工作区', () => {
   const data = {
-    manifest: { schemaVersion: 4, kind: 'workspace', id: 'platform-game', name: '跳跃游戏', definitions: 'definitions.graph.json', compositions: [] },
-    definitions: { schemaVersion: 1, kind: 'definitions', workspaceId: 'platform-game', nodes: ['jump', 'fall'].map(id => ({ id, label: id, description: '测试概念', increaseMeaning: '发生增加' })), positions: {} },
-    mechanics: [{ schemaVersion: 1, kind: 'mechanic', workspaceId: 'platform-game', id: 'jump-rule', name: '跳跃规则', scope: '假设模型', nodeIds: ['jump', 'fall'], edges: [{ id: 'avoid', source: 'jump', target: 'fall', relation: 'influence', sign: -1, condition: '及时起跳', note: '' }], positions: {} }],
+    manifest: { schemaVersion: 8, kind: 'workspace', id: 'platform-game', name: '跳跃游戏', definitions: 'definitions.graph.json', agentExportPath: 'game-mechanics', compositions: [] },
+    definitions: { schemaVersion: 4, kind: 'definitions', workspaceId: 'platform-game', nodes: ['jump', 'fall'].map(id => ({ id, label: id, description: '测试概念', agentLocked: false })), positions: {} },
+    mechanics: [{ schemaVersion: 4, kind: 'mechanic', workspaceId: 'platform-game', id: 'jump-rule', name: '跳跃规则', scope: '假设模型', nodeIds: ['jump', 'fall'], edges: [{ id: 'jump-2-fall', source: 'jump', target: 'fall', relation: 'influence', sign: -1, inheritance: { mode: 'none' }, ruleText: '及时起跳' }], positions: {} }],
   };
   validateWorkspace(data);
   assert.equal(tracePaths(compose(data, ['jump-rule']), 'jump', 'fall').paths[0].sign, -1);
@@ -113,8 +179,8 @@ async function temporary(t) {
   const root = await mkdtemp(join(tmpdir(), 'game-graph-test-'));
   let close = async () => {};
   t.after(async () => { await close(); await rm(root, { recursive: true, force: true }); });
-  await cp(example, join(root, 'workspace'), { recursive: true });
-  return { root, directory: join(root, 'workspace'), setClose: callback => { close = callback; } };
+  await copyExampleFixture(join(root, 'workspace'));
+  return { root, projectRoot: join(root, 'workspace'), directory: join(root, 'workspace', '.game-graph'), setClose: callback => { close = callback; } };
 }
 
 test('读取真实文件且版本戳反映外部修改，其他后缀的 JSON 不当作规则文件', async t => {
@@ -126,7 +192,7 @@ test('读取真实文件且版本戳反映外部修改，其他后缀的 JSON �
   const definitions = JSON.parse(await readFile(file, 'utf8'));
   definitions.nodes[0].label = '新的显示名称';
   await writeFile(file, JSON.stringify(definitions));
-  const second = await readWorkspace(directory);
+  const second = await readWorkspace(directory, { verifyGeneratedCatalog: false });
   assert.notEqual(second.revision, first.revision);
   assert.equal(second.mechanics[0].edges[0].source, 'turn-start');
 });
@@ -154,27 +220,26 @@ test('拒绝工作区内指向其他目录的符号链接或 Windows junction', 
   await assert.rejects(readWorkspace(directory), /符号链接|junction/);
 });
 
-test('HTTP 真实读取、同源与会话门禁，拒绝未支持操作', async t => {
-  const { directory, setClose } = await temporary(t);
-  const { close, origin, token } = await startServer({ workspaceRoot: directory, port: 0 });
+test('HTTP 真实读取无需 session、允许跨源并拒绝未支持操作', async t => {
+  const { projectRoot, directory, setClose } = await temporary(t);
+  const { close, origin } = await startServer({ projectRoot, port: 0, projectHistoryPath: join(projectRoot, '.test-projects.json') });
   setClose(close);
-  const authorized = { Authorization: `Bearer ${token}` };
   const page = await fetch(origin); assert.equal(page.status, 200); assert.match(await page.text(), /规则节点画布/);
-  assert.equal((await fetch(`${origin}/api/workspace`)).status, 401);
-  assert.equal((await fetch(`${origin}/api/workspace`, { headers: { ...authorized, Origin: 'https://other.example' } })).status, 403);
+  assert.equal((await fetch(`${origin}/api/workspace`)).status, 200);
+  assert.equal((await fetch(`${origin}/api/workspace`, { headers: { Origin: 'https://other.example' } })).status, 200);
   // fetch 会重写 Host；用原生 HTTP 客户端真实发送伪造 Host。
   const wrongHost = await new Promise((resolve, reject) => {
-    const request = httpRequest(`${origin}/api/workspace`, { headers: { ...authorized, Host: 'other.example' } }, response => {
+    const request = httpRequest(`${origin}/api/workspace`, { headers: { Host: 'other.example' } }, response => {
       response.resume(); response.on('end', () => resolve(response.statusCode));
     });
     request.on('error', reject); request.end();
   });
   assert.equal(wrongHost, 403);
-  assert.equal((await fetch(`${origin}/api/workspace`, { method: 'POST', headers: authorized })).status, 405);
+  assert.equal((await fetch(`${origin}/api/workspace`, { method: 'POST' })).status, 405);
   assert.equal((await fetch(`${origin}/.git/config`)).status, 404);
-  const response = await fetch(`${origin}/api/workspace`, { headers: authorized });
+  const response = await fetch(`${origin}/api/workspace`);
   assert.equal(response.status, 200); assert.equal((await response.json()).manifest.id, source.manifest.id);
   await writeFile(join(directory, 'definitions.graph.json'), '{bad');
-  const broken = await fetch(`${origin}/api/workspace`, { headers: authorized });
+  const broken = await fetch(`${origin}/api/workspace`);
   assert.equal(broken.status, 422); assert.equal((await broken.json()).error, 'INVALID_JSON');
 });

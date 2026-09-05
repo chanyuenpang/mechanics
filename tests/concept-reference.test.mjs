@@ -4,16 +4,20 @@ import { mkdtemp, cp, readFile, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createWorkspaceStore } from '../src/server/store.mjs';
+import { readWorkspace } from '../src/server/workspace.mjs';
 import { matchingConcepts, sameNamedConcepts, prepareReference, ReferenceCommit, prepareConceptUpdate } from '../src/web/glossary.mjs';
 import { graphPositions } from '../src/web/view-files.mjs';
+import { copyExampleFixture } from './example-fixture.mjs';
 import { compose, downstreamNodes } from '../src/domain/graph.mjs';
 
-const node = (id = 'aaa-new', label = '新概念') => ({ id, label, description: '新概念的定义', increaseMeaning: '新概念更容易发生' });
+const node = (id = 'aaa-new', label = '新概念') => ({
+  id, label, description: '新概念的定义', agentLocked: false,
+});
 
 test('追踪候选仅包含当前图的直接与间接下游；环、自身、上游和无关联节点不会混入', () => {
   const graph = { nodes: ['up', 'a', 'b', 'c', 'other'].map(id => ({ id })), edges: [
-    { source: 'up', target: 'a' }, { source: 'a', target: 'b' },
-    { source: 'b', target: 'c', relation: 'contains' }, { source: 'c', target: 'a' },
+    { source: 'up', target: 'a' }, { source: 'a', target: 'b', relation: 'influence', sign: 1, inheritance: { mode: 'none' } },
+    { source: 'b', target: 'c', relation: 'influence', sign: 1, inheritance: { mode: 'none' } }, { source: 'c', target: 'a', relation: 'influence', sign: 1, inheritance: { mode: 'none' } },
   ] };
   assert.deepEqual(downstreamNodes(graph, 'a').map(item => item.id), ['b', 'c']);
   assert.deepEqual(downstreamNodes(graph, 'other'), []);
@@ -23,9 +27,14 @@ test('修改概念只保存指定定义文案，稳定ID、布局、其余定义
   const { root, workspace, store } = await fixture(t), original = structuredClone(workspace.definitions);
   const target = original.nodes[0], files = ['workspace.json', ...workspace.files.filter(item => item.kind === 'mechanic').map(item => item.path)];
   const before = await Promise.all(files.map(file => readFile(join(root, file), 'utf8')));
-  const next = prepareConceptUpdate(original, target.id, { id: 'cannot-change', label: '修改后名称', description: '修改后含义', increaseMeaning: '修改后方向' });
+  const next = prepareConceptUpdate(original, target.id, {
+    id: 'cannot-change', label: '修改后名称', description: '修改后含义',
+    aliases: '修改别名', tags: '战斗, 核心', agentLocked: true,
+  });
   assert.deepEqual(workspace.definitions, original);
   assert.equal(next.nodes[0].id, target.id); assert.deepEqual(next.positions, original.positions);
+  assert.equal(next.nodes[0].agentLocked, true);
+  assert.deepEqual(next.nodes[0].tags, ['战斗', '核心']);
   assert.deepEqual(next.nodes.slice(1), original.nodes.slice(1));
   await store.save({ revision: workspace.revision, kind: 'definitions', document: next });
   assert.equal((await store.read()).definitions.nodes[0].label, '修改后名称');
@@ -33,10 +42,11 @@ test('修改概念只保存指定定义文案，稳定ID、布局、其余定义
   assert.throws(() => prepareConceptUpdate(original, target.id, { ...target, label: ' ' }), /名称必填/);
 });
 async function fixture(t) {
-  const root = await mkdtemp(join(tmpdir(), 'rule-reference-'));
-  await cp(new URL('../examples/card-game/', import.meta.url), root, { recursive: true });
+  const projectRoot = await mkdtemp(join(tmpdir(), 'rule-reference-'));
+  await copyExampleFixture(projectRoot);
+  const root = join(projectRoot, '.game-graph');
   const store = await createWorkspaceStore(root);
-  t.after(async () => { await store.close(); await rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await store.close(); await rm(projectRoot, { recursive: true, force: true }); });
   const workspace = await store.read(), draft = structuredClone(workspace.mechanics[0]); draft.scope = '已有未保存机制草稿';
   const positions = graphPositions(workspace, compose(workspace, [draft.id]), {}, draft.id);
   const prepare = (candidates = [node()]) => prepareReference({ workspace, draft, selected: candidates.map(item => item.id), candidates, positions, center: { x: 400, y: 300 } });
@@ -56,19 +66,34 @@ test('创建并引用只保存共享定义；机制草稿保留，所有候选�
   assert.deepEqual(await Promise.all(paths.map(path => readFile(join(root, path), 'utf8'))), before);
   await assert.rejects(commit.run(() => { saves++; }, () => true)); assert.equal(saves, 1);
 });
-test('仅引用已有概念不写定义；同名不同 ID 可并存，名称/含义/ID 检索不过滤已引用项', async t => {
+test('仅引用已有概念不写定义；同名不同 ID 可并存，名称/含义/标签/ID 检索不过滤已引用项', async t => {
   const { workspace, draft, positions } = await fixture(t);
   const existing = workspace.definitions.nodes.find(item => !draft.nodeIds.includes(item.id));
   const plan = prepareReference({ workspace, draft, selected: [existing.id, existing.id], candidates: [], positions, center: { x: 0, y: 0 } });
   await new ReferenceCommit(plan).run(() => assert.fail('不应写定义'), next => { assert.equal(next.nodeIds.filter(id => id === existing.id).length, 1); return true; });
-  const a = node('name-a', '概念'), b = node('name-b', ' 概念 ');
+  const a = { ...node('name-a', '概念'), tags: ['资源'] }, b = node('name-b', ' 概念 ');
   assert.equal(sameNamedConcepts([a, b], '概念').length, 2);
   assert.deepEqual(matchingConcepts([a, b], 'name-a 定义'), [a]);
+  assert.deepEqual(matchingConcepts([a, b], '资源'), [a]);
   assert.ok(matchingConcepts(workspace.definitions.nodes, draft.nodeIds[0]).some(item => item.id === draft.nodeIds[0]));
+});
+
+test('网页概念搜索与编辑保留自然语言别名', async t => {
+  const { workspace } = await fixture(t), id = workspace.definitions.nodes[0].id;
+  const original = workspace.definitions.nodes.find(node => node.id === id);
+  const next = prepareConceptUpdate(workspace.definitions, id, {
+    label: original.label, description: original.description, agentLocked: original.agentLocked,
+    aliases: '抽卡, draw card\n摸牌',
+    tags: '战斗, 资源',
+  });
+  assert.deepEqual(next.nodes.find(node => node.id === id).aliases, ['抽卡', 'draw card', '摸牌']);
+  assert.deepEqual(next.nodes.find(node => node.id === id).tags, ['战斗', '资源']);
+  assert.ok(matchingConcepts(next.nodes, 'DRAW CARD').some(node => node.id === id));
 });
 test('缺必填项、重复 ID、未知引用在保存前拒绝', async t => {
   const { workspace, draft, positions, prepare } = await fixture(t);
-  assert.throws(() => prepare([{ ...node(), increaseMeaning: ' ' }]), /增加方向必填/);
+  assert.throws(() => prepare([{ ...node(), description: ' ' }]), /概念含义必填/);
+  assert.throws(() => prepare([{ ...node(), agentLocked: undefined }]), /必须明确 agentLocked/);
   assert.throws(() => prepare([node(workspace.definitions.nodes[0].id)]), /ID 已存在/);
   assert.throws(() => prepareReference({ workspace, draft, selected: ['missing'], candidates: [], positions, center: { x: 0, y: 0 } }));
 });
@@ -105,7 +130,7 @@ test('核实时发现源机制变动或候选 ID 被改写会明确拒绝，不�
   assert.throws(() => commit.reconcile(changed), /当前机制已改变/);
   const definitions = structuredClone(workspace.definitions); definitions.nodes.push(node('aaa-new', '不同内容'));
   await writeFile(join(root, workspace.manifest.definitions), JSON.stringify(definitions));
-  const latest = await store.read();
+  const latest = await readWorkspace(root, { verifyGeneratedCatalog: false });
   assert.throws(() => commit.reconcile(latest), /不完整或不一致/);
   assert.equal(commit.blocked, true);
 });

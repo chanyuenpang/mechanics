@@ -1,100 +1,786 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "urn:game-graph:protocol:4",
-  "title": "Game-Graph 工作区 v4、机制与定义 v1、视图 v2",
+  "$id": "urn:game-graph:protocol:10",
+  "title": "Game-Graph 工作区 v10、机制 v6、定义 v5、视图 v3",
   "oneOf": [
-    { "$ref": "#/definitions/workspace" },
-    { "$ref": "#/definitions/definitionGraph" },
-    { "$ref": "#/definitions/mechanic" },
-    { "$ref": "#/definitions/view" }
+    {
+      "$ref": "#/definitions/workspace"
+    },
+    {
+      "$ref": "#/definitions/definitionGraph"
+    },
+    {
+      "$ref": "#/definitions/mechanic"
+    },
+    {
+      "$ref": "#/definitions/view"
+    }
   ],
   "definitions": {
-    "id": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{0,95}$" },
-    "text": { "type": "string", "minLength": 1, "maxLength": 8000 },
-    "ids": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/definitions/id" } },
-    "relativePath": { "type": "string", "minLength": 6, "maxLength": 512, "pattern": "^[^\\\\:\\u0000-\\u001f<>\"|?*]+\\.json$" },
-    "position": {
-      "type": "object", "additionalProperties": false, "required": ["x", "y"],
-      "properties": { "x": { "type": "number", "minimum": -100000, "maximum": 100000 }, "y": { "type": "number", "minimum": -100000, "maximum": 100000 } }
+    "id": {
+      "type": "string",
+      "maxLength": 96,
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
     },
-    "positions": { "type": "object", "propertyNames": { "$ref": "#/definitions/id" }, "additionalProperties": { "$ref": "#/definitions/position" } },
-    "composition": {
-      "type": "object", "additionalProperties": false, "required": ["id", "name", "graphIds", "collapsedNodeIds", "positions"],
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8000
+    },
+    "ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/definitions/id"
+      }
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 6,
+      "maxLength": 512,
+      "pattern": "^[^:\u0000-\u001f<>\"|?*]+\\.json$"
+    },
+    "relativeDirectory": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[^:\u0000-\u001f<>\"|?*]+$"
+    },
+    "position": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "x",
+        "y"
+      ],
       "properties": {
-        "id": { "$ref": "#/definitions/id" }, "name": { "$ref": "#/definitions/text" },
-        "graphIds": { "$ref": "#/definitions/ids" }, "collapsedNodeIds": { "$ref": "#/definitions/ids" }, "positions": { "$ref": "#/definitions/positions" }
+        "x": {
+          "type": "number",
+          "minimum": -100000,
+          "maximum": 100000
+        },
+        "y": {
+          "type": "number",
+          "minimum": -100000,
+          "maximum": 100000
+        }
+      }
+    },
+    "positions": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/definitions/id"
+      },
+      "additionalProperties": {
+        "$ref": "#/definitions/position"
+      }
+    },
+    "routePath": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "$ref": "#/definitions/position"
+      }
+    },
+    "routeCache": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "geometryKey",
+        "paths"
+      ],
+      "properties": {
+        "geometryKey": {
+          "type": "string",
+          "maxLength": 1048576
+        },
+        "paths": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/routePath"
+          }
+        }
+      }
+    },
+    "composition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "name",
+        "graphIds",
+        "collapsedNodeIds",
+        "positions"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/id"
+        },
+        "name": {
+          "$ref": "#/definitions/text"
+        },
+        "graphIds": {
+          "$ref": "#/definitions/ids"
+        },
+        "collapsedNodeIds": {
+          "$ref": "#/definitions/ids"
+        },
+        "positions": {
+          "$ref": "#/definitions/positions"
+        },
+        "routeCache": {
+          "$ref": "#/definitions/routeCache"
+        }
       }
     },
     "inlineView": {
-      "type": "object", "additionalProperties": false, "required": ["graphIds", "activeLayerId", "collapsedNodeIds", "positions"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "graphIds",
+        "activeLayerId",
+        "collapsedNodeIds",
+        "positions"
+      ],
       "properties": {
-        "graphIds": { "$ref": "#/definitions/ids" },
-        "activeLayerId": { "anyOf": [{ "$ref": "#/definitions/id" }, { "type": "null" }] },
-        "collapsedNodeIds": { "$ref": "#/definitions/ids" }, "positions": { "$ref": "#/definitions/positions" }
-      }
-    },
-    "workspace": {
-      "type": "object", "additionalProperties": false, "required": ["schemaVersion", "kind", "id", "name", "definitions", "compositions"],
-      "properties": {
-        "schemaVersion": { "const": 4 }, "kind": { "const": "workspace" },
-        "id": { "$ref": "#/definitions/id" }, "name": { "$ref": "#/definitions/text" },
-        "definitions": { "$ref": "#/definitions/relativePath" },
-        "compositions": { "type": "array", "items": { "$ref": "#/definitions/composition" } },
-        "lastView": { "oneOf": [{ "$ref": "#/definitions/inlineView" }, { "$ref": "#/definitions/viewReference" }] }
+        "graphIds": {
+          "$ref": "#/definitions/ids"
+        },
+        "activeLayerId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "collapsedNodeIds": {
+          "$ref": "#/definitions/ids"
+        },
+        "positions": {
+          "$ref": "#/definitions/positions"
+        },
+        "routeCache": {
+          "$ref": "#/definitions/routeCache"
+        }
       }
     },
     "viewReference": {
-      "type": "object", "additionalProperties": false, "required": ["viewId"],
-      "properties": { "viewId": { "$ref": "#/definitions/id" } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "viewId"
+      ],
+      "properties": {
+        "viewId": {
+          "$ref": "#/definitions/id"
+        }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "kind",
+        "id",
+        "name",
+        "definitions",
+        "agentExportPath",
+        "compositions"
+      ],
+      "properties": {
+        "schemaVersion": {
+          "enum": [
+            8,
+            9,
+            10
+          ]
+        },
+        "kind": {
+          "const": "workspace"
+        },
+        "id": {
+          "$ref": "#/definitions/id"
+        },
+        "name": {
+          "$ref": "#/definitions/text"
+        },
+        "definitions": {
+          "$ref": "#/definitions/relativePath"
+        },
+        "agentExportPath": {
+          "$ref": "#/definitions/relativeDirectory"
+        },
+        "exportSelections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/exportSelection"
+          }
+        },
+        "compositions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/composition"
+          }
+        },
+        "lastView": {
+          "oneOf": [
+            {
+              "$ref": "#/definitions/inlineView"
+            },
+            {
+              "$ref": "#/definitions/viewReference"
+            }
+          ]
+        }
+      }
+    },
+    "exportSelection": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "folder"],
+          "properties": {
+            "kind": { "const": "folder" },
+            "folder": { "$ref": "#/definitions/relativeDirectory" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "mechanicId"],
+          "properties": {
+            "kind": { "const": "mechanic" },
+            "mechanicId": { "$ref": "#/definitions/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "viewId"],
+          "properties": {
+            "kind": { "const": "view" },
+            "viewId": { "$ref": "#/definitions/id" }
+          }
+        }
+      ]
     },
     "view": {
-      "type": "object", "additionalProperties": false,
-      "required": ["schemaVersion", "kind", "workspaceId", "id", "name", "mechanicRegistrations", "collapsedNodeIds", "positions"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "kind",
+        "workspaceId",
+        "id",
+        "name",
+        "mechanicRegistrations",
+        "collapsedNodeIds",
+        "positions",
+        "structuralPresentation"
+      ],
       "properties": {
-        "schemaVersion": { "const": 2 }, "kind": { "const": "view" }, "workspaceId": { "$ref": "#/definitions/id" },
-        "id": { "$ref": "#/definitions/id" }, "name": { "$ref": "#/definitions/text" },
+        "schemaVersion": {
+          "const": 3
+        },
+        "kind": {
+          "const": "view"
+        },
+        "workspaceId": {
+          "$ref": "#/definitions/id"
+        },
+        "id": {
+          "$ref": "#/definitions/id"
+        },
+        "name": {
+          "$ref": "#/definitions/text"
+        },
         "mechanicRegistrations": {
           "type": "array",
           "items": {
-            "type": "object", "additionalProperties": false, "required": ["mechanicId", "visible"],
-            "properties": { "mechanicId": { "$ref": "#/definitions/id" }, "visible": { "type": "boolean" } }
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mechanicId",
+              "visible"
+            ],
+            "properties": {
+              "mechanicId": {
+                "$ref": "#/definitions/id"
+              },
+              "visible": {
+                "type": "boolean"
+              }
+            }
           }
         },
-        "collapsedNodeIds": { "$ref": "#/definitions/ids" }, "positions": { "$ref": "#/definitions/positions" }
+        "collapsedNodeIds": {
+          "$ref": "#/definitions/ids"
+        },
+        "positions": {
+          "$ref": "#/definitions/positions"
+        },
+        "structuralPresentation": {
+          "enum": [
+            "line",
+            "badge"
+          ]
+        },
+        "projectionPositions": {
+          "$ref": "#/definitions/projectionPositions"
+        },
+        "routeCache": {
+          "$ref": "#/definitions/routeCache"
+        }
+      }
+    },
+    "qualifierValue": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "conceptId"
+          ],
+          "properties": {
+            "kind": {
+              "const": "concept"
+            },
+            "conceptId": {
+              "$ref": "#/definitions/id"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "value"
+          ],
+          "properties": {
+            "kind": {
+              "const": "literal"
+            },
+            "value": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "qualifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "value"
+      ],
+      "properties": {
+        "key": {
+          "$ref": "#/definitions/id"
+        },
+        "value": {
+          "$ref": "#/definitions/qualifierValue"
+        }
+      }
+    },
+    "nodeFields": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/id"
+        },
+        "label": {
+          "$ref": "#/definitions/text"
+        },
+        "description": {
+          "$ref": "#/definitions/text"
+        },
+        "agentLocked": {
+          "type": "boolean"
+        },
+        "tags": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/definitions/text"
+          }
+        },
+        "aliases": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "baseConceptId": {
+          "$ref": "#/definitions/id"
+        },
+        "qualifiers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/qualifier"
+          }
+        }
       }
     },
     "node": {
-      "type": "object", "additionalProperties": false, "required": ["id", "label", "description", "increaseMeaning"],
+      "$ref": "#/definitions/baseNode"
+    },
+    "baseNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label",
+        "description",
+        "agentLocked"
+      ],
       "properties": {
-        "id": { "$ref": "#/definitions/id" }, "label": { "$ref": "#/definitions/text" },
-        "description": { "$ref": "#/definitions/text" }, "increaseMeaning": { "$ref": "#/definitions/text" },
-        "tags": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/definitions/text" } }
+        "id": {
+          "$ref": "#/definitions/id"
+        },
+        "label": {
+          "$ref": "#/definitions/text"
+        },
+        "description": {
+          "$ref": "#/definitions/text"
+        },
+        "agentLocked": {
+          "type": "boolean"
+        },
+        "tags": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/definitions/text"
+          }
+        },
+        "aliases": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        }
+      }
+    },
+    "qualifiedNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label",
+        "description",
+        "agentLocked",
+        "baseConceptId",
+        "qualifiers"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/id"
+        },
+        "label": {
+          "$ref": "#/definitions/text"
+        },
+        "description": {
+          "$ref": "#/definitions/text"
+        },
+        "agentLocked": {
+          "type": "boolean"
+        },
+        "tags": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/definitions/text"
+          }
+        },
+        "aliases": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "baseConceptId": {
+          "$ref": "#/definitions/id"
+        },
+        "qualifiers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/qualifier"
+          }
+        }
       }
     },
     "definitionGraph": {
-      "type": "object", "additionalProperties": false, "required": ["schemaVersion", "kind", "workspaceId", "nodes", "positions"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "kind",
+        "workspaceId",
+        "nodes",
+        "positions"
+      ],
       "properties": {
-        "schemaVersion": { "const": 1 }, "kind": { "const": "definitions" }, "workspaceId": { "$ref": "#/definitions/id" },
-        "nodes": { "type": "array", "items": { "$ref": "#/definitions/node" } }, "positions": { "$ref": "#/definitions/positions" }
+        "schemaVersion": {
+          "enum": [
+            4,
+            5
+          ]
+        },
+        "kind": {
+          "const": "definitions"
+        },
+        "workspaceId": {
+          "$ref": "#/definitions/id"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/node"
+          }
+        },
+    "positions": {
+          "$ref": "#/definitions/positions"
+        }
       }
     },
+    "projectionPositions": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/position"
+      }
+    },
+    "inheritance": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "const": "none"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode",
+            "endpoints",
+            "maxSpecializationHops"
+          ],
+          "properties": {
+            "mode": {
+              "const": "specializeEndpoint"
+            },
+            "endpoints": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "source",
+                  "target"
+                ]
+              }
+            },
+            "maxSpecializationHops": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8
+            }
+          }
+        }
+      ]
+    },
     "edge": {
-      "type": "object", "additionalProperties": false, "required": ["id", "source", "target", "relation", "condition", "note"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "source",
+        "target",
+        "relation"
+      ],
       "properties": {
-        "id": { "$ref": "#/definitions/id" }, "source": { "$ref": "#/definitions/id" }, "target": { "$ref": "#/definitions/id" },
-        "relation": { "enum": ["influence", "contains"] }, "sign": { "enum": [1, -1] },
-        "condition": { "type": "string", "maxLength": 8000 }, "note": { "type": "string", "maxLength": 8000 }
+        "id": {
+          "$ref": "#/definitions/id"
+        },
+        "source": {
+          "$ref": "#/definitions/id"
+        },
+        "target": {
+          "$ref": "#/definitions/id"
+        },
+        "sourceQualifiers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/qualifier"
+          }
+        },
+        "targetQualifiers": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/qualifier"
+          }
+        },
+        "relation": {
+          "enum": [
+            "influence",
+            "specializes"
+          ]
+        },
+        "sign": {
+          "enum": [
+            1,
+            -1,
+            "random"
+          ]
+        },
+        "inheritance": {
+          "$ref": "#/definitions/inheritance"
+        },
+        "ruleText": {
+          "type": "string",
+          "maxLength": 8000
+        }
       },
-      "if": { "properties": { "relation": { "const": "influence" } } },
-      "then": { "properties": { "sign": {} }, "required": ["sign"] }, "else": { "properties": { "sign": false } }
+      "oneOf": [
+        {
+          "properties": {
+            "relation": {
+              "const": "influence"
+            }
+          },
+          "required": [
+            "sign",
+            "inheritance"
+          ]
+        },
+        {
+          "properties": {
+            "relation": {
+              "const": "specializes"
+            }
+          },
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "sign"
+                ]
+              },
+              {
+                "required": [
+                  "inheritance"
+                ]
+              },
+              {
+                "required": [
+                  "sourceQualifiers"
+                ]
+              },
+              {
+                "required": [
+                  "targetQualifiers"
+                ]
+              }
+            ]
+          }
+        }
+      ]
     },
     "mechanic": {
-      "type": "object", "additionalProperties": false, "required": ["schemaVersion", "kind", "workspaceId", "id", "name", "scope", "nodeIds", "edges", "positions"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "kind",
+        "workspaceId",
+        "id",
+        "name",
+        "scope",
+        "nodeIds",
+        "edges",
+        "positions"
+      ],
       "properties": {
-        "schemaVersion": { "const": 1 }, "kind": { "const": "mechanic" }, "workspaceId": { "$ref": "#/definitions/id" },
-        "id": { "$ref": "#/definitions/id" }, "name": { "$ref": "#/definitions/text" }, "scope": { "$ref": "#/definitions/text" },
-        "nodeIds": { "$ref": "#/definitions/ids" }, "edges": { "type": "array", "items": { "$ref": "#/definitions/edge" } },
-        "positions": { "$ref": "#/definitions/positions" }
+        "schemaVersion": {
+          "enum": [
+            4,
+            5,
+            6
+          ]
+        },
+        "kind": {
+          "const": "mechanic"
+        },
+        "workspaceId": {
+          "$ref": "#/definitions/id"
+        },
+        "id": {
+          "$ref": "#/definitions/id"
+        },
+        "name": {
+          "$ref": "#/definitions/text"
+        },
+        "scope": {
+          "$ref": "#/definitions/text"
+        },
+        "nodeIds": {
+          "$ref": "#/definitions/ids"
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/edge"
+          }
+        },
+        "positions": {
+          "$ref": "#/definitions/positions"
+        },
+        "projectionPositions": {
+          "$ref": "#/definitions/projectionPositions"
+        },
+        "routeCache": {
+          "$ref": "#/definitions/routeCache"
+        }
       }
     }
   }

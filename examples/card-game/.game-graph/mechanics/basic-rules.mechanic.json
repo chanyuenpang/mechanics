@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 6,
+  "kind": "mechanic",
+  "workspaceId": "sample-card-game",
+  "id": "basic-rules",
+  "name": "基础规则",
+  "scope": "人工构造的机制图，非游戏运行时事实；未建模牌库耗尽、伤害量和行动时序。",
+  "nodeIds": [
+    "turn-start",
+    "draw",
+    "hand",
+    "melee",
+    "damage",
+    "health",
+    "failure"
+  ],
+  "edges": [
+    {
+      "id": "turn-start-2-draw",
+      "source": "turn-start",
+      "target": "draw",
+      "relation": "influence",
+      "sign": 1,
+      "inheritance": {
+        "mode": "none"
+      },
+      "ruleText": "该回合允许抽牌且牌库有牌"
+    },
+    {
+      "id": "draw-2-hand",
+      "source": "draw",
+      "target": "hand",
+      "relation": "influence",
+      "sign": 1,
+      "inheritance": {
+        "mode": "none"
+      },
+      "ruleText": "手牌未达到上限"
+    },
+    {
+      "id": "melee-2-damage",
+      "source": "melee",
+      "target": "damage",
+      "relation": "influence",
+      "sign": 1,
+      "inheritance": {
+        "mode": "none"
+      },
+      "ruleText": "攻击命中"
+    },
+    {
+      "id": "damage-2-health",
+      "source": "damage",
+      "target": "health",
+      "relation": "influence",
+      "sign": -1,
+      "inheritance": {
+        "mode": "none"
+      },
+      "ruleText": "伤害未被其他机制吸收"
+    },
+    {
+      "id": "health-2-failure",
+      "source": "health",
+      "target": "failure",
+      "relation": "influence",
+      "sign": -1,
+      "inheritance": {
+        "mode": "none"
+      },
+      "ruleText": "只考虑血量归零的失败方式"
+    }
+  ],
+  "positions": {}
+}

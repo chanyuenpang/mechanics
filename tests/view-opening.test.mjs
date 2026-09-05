@@ -5,14 +5,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createWorkspaceStore } from '../src/server/store.mjs';
-import { ViewAutosave, readOpening, prepareOpening, createAndRememberView, viewSaveRequest, graphPositions, changeViewVisibility, registerViewMechanic } from '../src/web/view-files.mjs';
+import { readWorkspace } from '../src/server/workspace.mjs';
+import { publishCatalog } from '../src/server/catalog.mjs';
+import { ViewAutosave, readOpening, prepareOpening, createAndRememberView, viewSaveRequest, graphPositions, changeViewVisibility, moveViewMechanic, registerViewMechanic, removeViewMechanic } from '../src/web/view-files.mjs';
+import { copyExampleFixture } from './example-fixture.mjs';
 
-const view = { schemaVersion: 2, kind: 'view', workspaceId: 'sample-card-game', id: 'test-view', name: '测试视图', mechanicRegistrations: [{ mechanicId: 'hand', visible: true }], collapsedNodeIds: [], positions: {} };
+const view = { schemaVersion: 3, kind: 'view', workspaceId: 'sample-card-game', id: 'test-view', name: '测试视图', mechanicRegistrations: [{ mechanicId: 'hand', visible: true }], collapsedNodeIds: [], positions: {}, structuralPresentation: 'line' };
 async function fixture(t) {
-  const root = await mkdtemp(join(tmpdir(), 'rule-view-opening-'));
+  const projectRoot = await mkdtemp(join(tmpdir(), 'rule-view-opening-'));
+  const root = join(projectRoot, '.game-graph');
   let store;
-  t.after(async () => { if (store) await store.close(); await rm(root, { recursive: true, force: true }); });
-  await cp(fileURLToPath(new URL('../examples/card-game/', import.meta.url)), root, { recursive: true });
+  t.after(async () => { if (store) await store.close(); await rm(projectRoot, { recursive: true, force: true }); });
+  await copyExampleFixture(projectRoot);
   store = await createWorkspaceStore(root);
   const api = (path, body) => path === '/api/workspace' ? store.read() : path === '/api/views' ? store.createView(body) : store.save(body);
   return { root, store, api };
@@ -23,8 +27,12 @@ test('重新打开同一个视图也读取最新规则；失败不会返回部�
   const initial = await api('/api/workspace');
   await createAndRememberView(api, initial.revision, view, 'test.view.json');
   const first = await readOpening(api, view.id);
+  assert.equal(first.snapshot.structuralPresentation, 'line');
+  assert.equal(first.graph.structuralPresentation, 'line');
   const hand = first.workspace.mechanics.find(g => g.id === 'hand');
   await writeFile(join(root, 'mechanics/hand.mechanic.json'), JSON.stringify({ ...hand, name: '外部最新规则' }));
+  const canonical = await readWorkspace(root, { verifyGeneratedCatalog: false });
+  await publishCatalog(canonical.agentExportRoot, canonical);
   const second = await readOpening(api, view.id);
   assert.equal(second.workspace.mechanics.find(g => g.id === 'hand').name, '外部最新规则');
   assert.notEqual(second.workspace.revision, first.workspace.revision);
@@ -35,13 +43,37 @@ test('重新打开同一个视图也读取最新规则；失败不会返回部�
   assert.throws(() => prepareOpening(first.workspace, 'absent'), /视图文件不存在/);
 });
 
-test('不可折叠的候选先失败，不写最近打开记录', async t => {
+test('对象形式的视图打开请求使用其 ID，而不是把对象转为文件名', async t => {
   const { api } = await fixture(t);
+  const initial = await api('/api/workspace');
+  await createAndRememberView(api, initial.revision, view, 'test.view.json');
+  const opened = await readOpening(api, { kind: 'view', id: view.id });
+  assert.equal(opened.viewId, view.id);
+});
+
+test('打开 badge 视图携带结构展示设置，保存后重新打开仍保持且源文件字节不变', async t => {
+  const { root, api } = await fixture(t);
+  const initial = await api('/api/workspace');
+  const definitionsBefore = await readFile(join(root, 'definitions.graph.json'), 'utf8');
+  const mechanicBefore = await readFile(join(root, 'mechanics/hand.mechanic.json'), 'utf8');
+  await createAndRememberView(api, initial.revision, { ...view, id: 'badge-view', structuralPresentation: 'badge' }, 'badge.view.json');
+  let opened = await readOpening(api, 'badge-view');
+  assert.equal(opened.snapshot.structuralPresentation, 'badge');
+  assert.equal(opened.graph.structuralPresentation, 'badge');
+  const saved = await api('/api/save', { revision: opened.workspace.revision, ...viewSaveRequest(opened.workspace, 'badge-view', opened.snapshot) });
+  opened = await readOpening(async path => path === '/api/workspace' ? saved : api(path), 'badge-view');
+  assert.equal(opened.snapshot.structuralPresentation, 'badge');
+  assert.equal(await readFile(join(root, 'definitions.graph.json'), 'utf8'), definitionsBefore);
+  assert.equal(await readFile(join(root, 'mechanics/hand.mechanic.json'), 'utf8'), mechanicBefore);
+});
+
+test('旧视图中的折叠记录仅兼容读取，不再影响图投影', async t => {
+  const { api, root } = await fixture(t);
   const data = await api('/api/workspace');
-  const bad = { ...data, views: [{ ...view, collapsedNodeIds: ['absent'] }] };
-  const before = structuredClone(bad); let writes = 0;
-  await assert.rejects(readOpening(async (path) => { if (path === '/api/workspace') return bad; writes++; }, view.id));
-  assert.equal(writes, 0); assert.deepEqual(bad, before);
+  await api('/api/views', { revision: data.revision, document: { ...view, collapsedNodeIds: ['repel'] }, file: 'legacy-fold.view.json' });
+  const opened = await readOpening(api, view.id);
+  assert.deepEqual(opened.snapshot.collapsedNodeIds, []);
+  assert.deepEqual(JSON.parse(await readFile(join(root, 'legacy-fold.view.json'), 'utf8')).collapsedNodeIds, ['repel']);
 });
 
 test('创建成功但最近打开记录失败：明确报告文件已存在、不重复创建、不删除', async t => {
@@ -109,7 +141,7 @@ test('旧内联叠加只预览，不在启动时改写；首次无记录仅打�
   assert.equal(await readFile(join(root, 'workspace.json'), 'utf8'), bytes);
 });
 
-test('view v2 始终优先使用自身位置；最新源规则不抢占视图布局', async t => {
+test('view v3 始终优先使用自身位置；最新源规则不抢占视图布局', async t => {
   const { api, root } = await fixture(t);
   let workspace = await api('/api/workspace');
   const hand = workspace.mechanics.find(item => item.id === 'hand');
@@ -130,7 +162,7 @@ test('view v2 始终优先使用自身位置；最新源规则不抢占视图布
   assert.deepEqual(graphPositions(opened.workspace, opened.graph, opened.snapshot.positions).evade, { x: 333, y: 444 });
 });
 
-test('视图隐藏子机制保留位置和暂不可用的折叠记忆；整次修改可反向保存', async t => {
+test('视图隐藏子机制保留位置；旧折叠记录不进入新快照', async t => {
   const { api, root } = await fixture(t);
   const initial = await api('/api/workspace');
   await createAndRememberView(api, initial.revision, { ...view, mechanicRegistrations: [{ mechanicId: 'hand', visible: true }, { mechanicId: 'encounter', visible: true }], collapsedNodeIds: ['repel'], positions: { melee: { x: 345, y: 678 } } }, 'members.view.json');
@@ -138,7 +170,7 @@ test('视图隐藏子机制保留位置和暂不可用的折叠记忆；整次�
   const before = await readFile(join(root, 'mechanics/hand.mechanic.json'), 'utf8');
   const next = changeViewVisibility(opened.workspace, previous, 'hand', false);
   assert.deepEqual(next.positions.melee, { x: 345, y: 678 });
-  assert.deepEqual(next.positions.evade, previous.positions.evade); assert.deepEqual(next.collapsedNodeIds, ['repel']);
+  assert.deepEqual(next.positions.evade, previous.positions.evade); assert.deepEqual(next.collapsedNodeIds, []);
   let workspace = await api('/api/save', { revision: opened.workspace.revision, ...viewSaveRequest(opened.workspace, view.id, next) });
   workspace = await api('/api/save', { revision: workspace.revision, ...viewSaveRequest(workspace, view.id, previous) });
   assert.deepEqual(prepareOpening(workspace, view.id).snapshot, previous);
@@ -169,18 +201,30 @@ test('共用节点在子图切换中始终复用视图坐标，全部隐藏后�
   assert.deepEqual(encounterAgain.positions.melee, { x: 777, y: 333 });
 });
 
-test('外部规则使折叠失效时不擅自保存；明确展开修复才写视图', async t => {
+test('视图成员排序不重排节点，移除成员仍保留其位置记忆', async t => {
+  const { api } = await fixture(t), workspace = await api('/api/workspace');
+  const snapshot = registerViewMechanic(workspace, registerViewMechanic(workspace,
+    { mechanicRegistrations: [], collapsedNodeIds: [], positions: {} }, 'hand'), 'encounter');
+  snapshot.positions.melee = { x: 901, y: 902 };
+  const moved = moveViewMechanic(workspace, snapshot, 'encounter', 0);
+  assert.deepEqual(moved.mechanicRegistrations.map(item => item.mechanicId), ['encounter', 'hand']);
+  assert.deepEqual(moved.positions.melee, { x: 901, y: 902 });
+  const removed = removeViewMechanic(workspace, moved, 'encounter');
+  assert.deepEqual(removed.mechanicRegistrations.map(item => item.mechanicId), ['hand']);
+  assert.deepEqual(removed.positions.melee, { x: 901, y: 902 });
+});
+
+test('旧折叠记录不再触发修复流程或改写视图文件', async t => {
   const { api, root } = await fixture(t);
   let workspace = await api('/api/workspace');
   workspace = await createAndRememberView(api, workspace.revision, { ...view, collapsedNodeIds: ['repel'] }, 'fold.view.json');
   const hand = workspace.mechanics.find(item => item.id === 'hand');
-  await api('/api/save', { revision: workspace.revision, kind: 'mechanic', id: hand.id, document: { ...hand, edges: [...hand.edges, { id: 'extra', source: 'repel', target: 'stamina', relation: 'influence', sign: -1, condition: '', note: '' }] } });
+  await api('/api/save', { revision: workspace.revision, kind: 'mechanic', id: hand.id, document: { ...hand, edges: [...hand.edges, { id: 'repel-2-stamina', source: 'repel', target: 'stamina', relation: 'influence', sign: -1, inheritance: { mode: 'none' } }] } });
   const before = await readFile(join(root, 'fold.view.json'), 'utf8');
-  await assert.rejects(readOpening(api, view.id), { code: 'FOLD_REPAIR_REQUIRED' });
-  assert.equal(await readFile(join(root, 'fold.view.json'), 'utf8'), before);
-  const opened = await readOpening(api, view.id, { repairFolds: true });
+  const opened = await readOpening(api, view.id);
   assert.deepEqual(opened.snapshot.collapsedNodeIds, []);
-  assert.deepEqual(JSON.parse(await readFile(join(root, 'fold.view.json'), 'utf8')).collapsedNodeIds, []);
+  assert.equal(await readFile(join(root, 'fold.view.json'), 'utf8'), before);
+  assert.deepEqual(JSON.parse(before).collapsedNodeIds, ['repel']);
 });
 test('连续自动保存捕获各自目标与快照，串行采用自身已确认版本', async () => {
   const sent = [], states = [];

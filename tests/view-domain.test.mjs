@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { composeView, registerMechanic, registeredMechanicIds, setMechanicVisibility, visibleMechanicIds } from '../src/domain/view.mjs';
+import { composeView, moveMechanic, registerMechanic, registeredMechanicIds, removeMechanic, setMechanicVisibility, visibleMechanicIds } from '../src/domain/view.mjs';
 import { queryWorkspace } from '../src/domain/query.mjs';
 
 const node = id => ({ id, label: id, description: id, increaseMeaning: id });
@@ -23,9 +23,9 @@ test('注册顺序稳定，新增默认可见，重复注册与修改未注册�
 });
 
 test('隐藏只改变可见投影，注册事实和位置保持；Agent 只查询可见机制', () => {
-  const view = { schemaVersion: 2, kind: 'view', workspaceId: 'test', id: 'battle', name: '战斗',
+  const view = { schemaVersion: 3, kind: 'view', workspaceId: 'test', id: 'battle', name: '战斗',
     mechanicRegistrations: [{ mechanicId: 'one', visible: true }, { mechanicId: 'two', visible: false }],
-    collapsedNodeIds: [], positions: { b: { x: 10, y: 20 } } };
+    collapsedNodeIds: [], positions: { b: { x: 10, y: 20 } }, structuralPresentation: 'line' };
   const data = { ...workspace, views: [view] };
   assert.deepEqual(composeView(data, view).nodes.map(item => item.id), ['a']);
   const scopes = queryWorkspace(data, { command: 'scopes' });
@@ -38,4 +38,18 @@ test('隐藏只改变可见投影，注册事实和位置保持；Agent 只查�
   assert.deepEqual(hidden.positions, view.positions);
   assert.deepEqual(registeredMechanicIds(hidden), ['one', 'two']);
   assert.deepEqual(composeView(data, hidden).nodes, []);
+});
+
+test('排序和移除只改变注册清单，并保留视图位置与折叠记忆', () => {
+  const view = { mechanicRegistrations: [{ mechanicId: 'one', visible: true }, { mechanicId: 'two', visible: false }],
+    collapsedNodeIds: ['a'], positions: { a: { x: 12, y: 34 }, b: { x: 56, y: 78 } } };
+  const moved = moveMechanic(view, 'two', 0);
+  assert.deepEqual(registeredMechanicIds(moved), ['two', 'one']);
+  assert.deepEqual(moved.positions, view.positions); assert.deepEqual(moved.collapsedNodeIds, view.collapsedNodeIds);
+  const removed = removeMechanic(moved, 'two');
+  assert.deepEqual(registeredMechanicIds(removed), ['one']);
+  assert.deepEqual(removed.positions, view.positions); assert.deepEqual(removed.collapsedNodeIds, view.collapsedNodeIds);
+  assert.throws(() => moveMechanic(view, 'missing', 0), { code: 'VIEW_MECHANIC_NOT_REGISTERED' });
+  assert.throws(() => moveMechanic(view, 'one', 2), { code: 'VIEW_MECHANIC_ORDER_INVALID' });
+  assert.throws(() => removeMechanic(view, 'missing'), { code: 'VIEW_MECHANIC_NOT_REGISTERED' });
 });
