@@ -24,7 +24,7 @@ for (const path of names) {
 }
 assert.ok(!names.includes('examples/card-game/.game-graph/.game-graph.lock'), '打包清单不得包含运行态工作区锁');
 for (const path of ['src/server/cli.mjs', 'src/server/native-directory-picker.mjs', 'src/server/windows-directory-dialog.cs', 'src/web/glossary.mjs', 'src/web/view-files.mjs', 'src/web/graph-compute.mjs',
-  'src/web/graph-compute-kernel.mjs', 'src/web/graph-compute-worker.js', 'src/web/geometry-settle.mjs', 'src/web/index.html', 'schemas/protocol.schema.json']) assert.ok(names.includes(path), path);
+  'src/web/graph-compute-kernel.mjs', 'src/web/graph-compute-worker.js', 'src/web/geometry-settle.mjs', 'src/web/hierarchical-layout.mjs', 'src/web/layout-structure.mjs', 'src/web/local-routing.mjs', 'src/web/flow-refinement.mjs', 'src/web/index.html', 'schemas/protocol.schema.json']) assert.ok(names.includes(path), path);
 for (const path of ['skills/game-mechanic-search/SKILL.md', 'skills/game-mechanic-modeling/SKILL.md']) assert.ok(names.includes(path), path);
 await mkdir(join(root, 'dist'), { recursive: true });
 const [packed] = JSON.parse(command(process.execPath, [npm, ...packArgs, '--pack-destination', join(root, 'dist')]));
@@ -99,9 +99,9 @@ try {
     selectionToken: preflight.selectionToken, intent: preflight.allowedIntent });
   assert.equal(openResponse.status, 200);
   for (const asset of ['/', '/app.mjs', '/canvas.mjs', '/glossary.mjs', '/view-files.mjs', '/graph-compute.mjs',
-    '/graph-compute-kernel.mjs', '/graph-compute-worker.js', '/geometry-settle.mjs', '/style.css',
+    '/graph-compute-kernel.mjs', '/graph-compute-worker.js', '/geometry-settle.mjs', '/hierarchical-layout.mjs', '/layout-structure.mjs', '/local-routing.mjs', '/flow-refinement.mjs', '/style.css',
     '/icons/eye.svg', '/icons/eye-off.svg',
-    '/vendor/elk.js', '/vendor/elk-worker.js', '/vendor/webcola.js', '/domain/graph.mjs', '/domain/view.mjs']) {
+    '/vendor/elk.js', '/vendor/elk-worker.js', '/vendor/webcola.js', '/vendor/libavoid/index.js', '/vendor/libavoid/libavoid.wasm', '/domain/graph.mjs', '/domain/view.mjs']) {
     assert.equal((await fetch(origin + asset)).status, 200, asset);
   }
   const response = await fetch(origin + '/api/workspace');

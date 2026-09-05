@@ -2,8 +2,47 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { GraphComputeCoordinator, computeCancelled } from '../src/web/graph-compute.mjs';
 import { computeGraphTask } from '../src/web/graph-compute-kernel.mjs';
-import { ROUTING_QUALITY, routeGraphScore } from '../src/web/canvas.mjs';
 import cola from 'webcola';
+import ELK from 'elkjs/lib/elk.bundled.js';
+import { refineHierarchy, AUTO_LAYOUT_OPTIONS, measureGeometry, qualityVector } from '../src/web/hierarchical-layout.mjs';
+import { improveFlowBySubtrees, compactHorizontalRoutes } from '../src/web/flow-refinement.mjs';
+import { createRouteCache, restoreRouteCache } from '../src/web/route-cache.mjs';
+
+test('正式整理返回共享算法与方向迭代的完整几何，复用并释放每阶段引擎', async () => {
+  const graph = { nodes: ['a', 'b', 'c', 'd'].map(id => ({ id })),
+    edges: [['a', 'b'], ['c', 'b'], ['b', 'd'], ['d', 'c']].map(([source, target], i) => ({ id: 'edge-' + i, source, target })) };
+  const base = await refineHierarchy(graph, { ...AUTO_LAYOUT_OPTIONS, ELK });
+  const directed = await improveFlowBySubtrees(graph, base.geometry, { ELK });
+  const expected = compactHorizontalRoutes(graph, directed.geometry);
+  // 使用参考坐标使生产入口的整体平移为零，从而逐点比较完整输出。
+  const positions = expected.geometry.positions;
+  let created = 0, disposed = 0;
+  class OwnedELK extends ELK { constructor() { super(); created++; } dispose() { disposed++; } }
+  const result = await computeGraphTask({ kind: 'layout', payload: { graph, positions } }, { ELK: OwnedELK });
+  assert.deepEqual(result.positions, expected.geometry.positions);
+  assert.deepEqual(result.routes, expected.geometry.routes);
+  assert.ok(created >= 1 && created <= 2); assert.equal(disposed, created);
+  assert.deepEqual(restoreRouteCache(graph, positions, createRouteCache(graph, positions, result.routes)), new Map(result.routes));
+});
+
+test('联合排版引擎失败仍释放资源，并把原始错误传出', async () => {
+  let disposed = 0;
+  class BrokenELK { async layout() { throw Error('模拟联合求解失败'); } dispose() { disposed++; } }
+  const graph = { nodes: [{ id: 'a' }, { id: 'b' }], edges: [{ id: 'a-b', source: 'a', target: 'b' }] },
+    positions = { a: { x: 0, y: 0 }, b: { x: 300, y: 0 } };
+  await assert.rejects(computeGraphTask({ kind: 'layout', payload: { graph, positions } }, { ELK: BrokenELK }), /模拟联合求解失败/);
+  assert.equal(disposed, 1);
+  assert.deepEqual(positions, { a: { x: 0, y: 0 }, b: { x: 300, y: 0 } });
+});
+
+test('空图与带自环的独立节点保留画布专用自环合同', async () => {
+  const empty = await computeGraphTask({ kind: 'layout', payload: { graph: { nodes: [], edges: [] }, positions: {} } }, { ELK });
+  assert.deepEqual(empty, { positions: {}, routes: [] });
+  const graph = { nodes: [{ id: 'a' }], edges: [{ id: 'loop', source: 'a', target: 'a' }] };
+  const result = await computeGraphTask({ kind: 'layout', payload: { graph, positions: { a: { x: 20, y: 40 } } } }, { ELK });
+  assert.deepEqual(result.positions, { a: { x: 20, y: 40 } });
+  assert.ok(createRouteCache(graph, result.positions, result.routes));
+});
 
 class FakeWorker {
   constructor() { this.messages = []; this.terminated = false; }
@@ -53,33 +92,33 @@ test('Worker kernel 路由边界使用可克隆 entries 且保留确定结果', 
   assert.deepEqual(result.routes, (await computeGraphTask({ kind: 'route', payload: { graph, positions } }, { cola })).routes);
 });
 
-test('Worker 局部落地不会让冲突优化把2比2端口迁到目标反方向', async () => {
+const geometryMetrics = (graph, result) => measureGeometry(graph, { ...result,
+  sizes: Object.fromEntries(graph.nodes.map(node => [node.id, { width: 166, height: 62 }])) });
+
+test('Worker 局部落地保留拖动落点，实际出线方向不背离目标', async () => {
   const graph = {
     nodes: ['play', 'a', 'b', 'c', 'd'].map(id => ({ id })),
     edges: ['a', 'b', 'c', 'd'].map(id => ({ id: 'play-' + id, source: 'play', target: id, sign: 1 })),
   };
   const previous = {
     play: { x: 300, y: 300 }, a: { x: 500, y: 0 }, b: { x: 700, y: 80 },
-    c: { x: 650, y: 180 }, d: { x: 800, y: 240 },
+    c: { x: 650, y: 180 }, d: { x: 950, y: 240 },
   };
   const cached = await computeGraphTask({ kind: 'route', payload: { graph, positions: previous } }, { cola });
-  const before = cached.routes.map(([, route]) => route.sourcePort.side);
-  assert.deepEqual(Object.fromEntries(['top', 'right'].map(side => [side, before.filter(value => value === side).length])),
-    { top: 2, right: 2 });
   const positions = { ...cached.positions, play: { x: cached.positions.play.x + 20, y: cached.positions.play.y + 20 } };
   const result = await computeGraphTask({ kind: 'route', payload: {
-    graph, positions, cachedRoutes: cached.routes, movedIds: ['play'],
+    graph, positions, previousPositions: cached.positions, cachedRoutes: cached.routes, movedIds: ['play'],
   } }, { cola });
-  const routes = new Map(result.routes), vectors = {
-    top: { x: 0, y: -1 }, right: { x: 1, y: 0 }, bottom: { x: 0, y: 1 }, left: { x: -1, y: 0 },
-  };
+  const routes = new Map(result.routes);
+  assert.deepEqual(result.positions, positions);
   for (const edge of graph.edges) {
-    const endpoint = routes.get(edge.id).sourcePort, target = result.positions[edge.target], source = result.positions.play;
-    const vector = vectors[endpoint.side];
-    assert.ok((target.x - source.x) * vector.x + (target.y - source.y) * vector.y >= 0,
-      `${edge.id} 不得被冲突优化迁到目标反方向的 ${endpoint.side} 面`);
+    const [start, next] = routes.get(edge.id).points, target = result.positions[edge.target], source = result.positions.play;
+    assert.ok((target.x - source.x) * (next.x - start.x) + (target.y - source.y) * (next.y - start.y) >= 0,
+      `${edge.id} 不得被冲突优化迁到目标反方向`);
   }
-  assert.equal(routeGraphScore(graph, result.positions, routes)[ROUTING_QUALITY.endpointExcursions], 0);
+  const metrics = geometryMetrics(graph, result);
+  assert.equal(metrics.invalid + metrics.missing + metrics.nodeHits + metrics.selfCrossings, 0);
+  assert.equal(metrics.nodeOverlaps, geometryMetrics(graph, cached).nodeOverlaps, '原有外围重叠不触发全局处理');
 });
 
 test('手牌移入抽牌近邻后优先松弛近共线端口形成直线', async () => {
@@ -97,14 +136,15 @@ test('手牌移入抽牌近邻后优先松弛近共线端口形成直线', async
   const cached = await computeGraphTask({ kind: 'route', payload: { graph, positions: previous } }, { cola });
   const positions = { ...cached.positions, hand: { x: 250, y: 130 } };
   const result = await computeGraphTask({ kind: 'route', payload: {
-    graph, positions, cachedRoutes: cached.routes, movedIds: ['hand'],
+    graph, positions, previousPositions: cached.positions, cachedRoutes: cached.routes, movedIds: ['hand'],
   } }, { cola });
-  const routes = new Map(result.routes), score = routeGraphScore(graph, result.positions, routes);
+  const routes = new Map(result.routes);
   const route = routes.get('draw-hand');
-  assert.equal(route.sourcePort.side, 'bottom');
-  assert.equal(route.targetPort.side, 'top');
-  assert.equal(route.sourcePort.port.x, route.targetPort.port.x);
+  assert.equal(route.points[0].y, result.positions.draw.y + 62);
+  assert.equal(route.points.at(-1).y, result.positions.hand.y);
+  assert.equal(route.points[0].x, route.points.at(-1).x);
   assert.equal(route.points.length, 2, '小于30px的近共线偏差应通过端口松弛消除，不应保留微小拐点');
-  assert.equal(score[ROUTING_QUALITY.endpointExcursions], 0);
-  assert.equal(score[ROUTING_QUALITY.hardInvalid], 0);
+  assert.equal(qualityVector(geometryMetrics(graph, result))[0], 0);
+  assert.ok(!result.edgeIds.includes('draw-discard'));
+  for (const [id, route] of cached.routes) if (!result.edgeIds.includes(id)) assert.deepEqual(routes.get(id), route);
 });

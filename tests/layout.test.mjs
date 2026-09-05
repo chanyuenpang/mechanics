@@ -2,9 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import ELK from 'elkjs/lib/elk.bundled.js';
 import cola from 'webcola';
-import { arrangeGraph, arrangeGraphWithRoutes, assignCohesivePorts, deriveCohesiveLayoutPlan, expandLayoutAtSpacingCuts, expandPositionsAtSpacingCuts, validateLayoutPartition } from '../src/web/layout.mjs';
+import { arrangeGraph, arrangeGraphWithRoutes } from '../src/web/layout.mjs';
+import { assignCohesivePorts, deriveCohesiveLayoutPlan, validateLayoutPartition } from '../scripts/experiments/legacy-layout-structure.mjs';
+import { expandLayoutAtSpacingCuts, expandPositionsAtSpacingCuts } from '../src/web/geometry-settle.mjs';
 import { auditGraphGeometryStrict, normalizeRouteLanes, routeGraphEdges, routeGraphScore, routeGraphSpacingCuts } from '../src/web/canvas.mjs';
 import { settleGraphGeometry } from '../src/web/geometry-settle.mjs';
+import { createRouteCache, restoreRouteCache } from '../src/web/route-cache.mjs';
+import { measureGeometry, qualityVector, refineHierarchy, AUTO_LAYOUT_OPTIONS } from '../src/web/hierarchical-layout.mjs';
+import { improveFlowBySubtrees } from '../src/web/flow-refinement.mjs';
 
 const graph = {
   nodes: ['turn', 'resource', 'card', 'damage', 'victory'].map(id => ({ id })),
@@ -17,38 +22,71 @@ const positions = {
   damage: { x: 110, y: 100 }, victory: { x: 120, y: 100 },
 };
 
-test('无选择时 ELK 重排全部节点，保持原区域并产生确定的从左到右布局', async () => {
+test('无选择与全选都联合重排全部节点，保持原区域且结果确定', async () => {
   const first = await arrangeGraph({ graph, positions, ELK, cola });
   const second = await arrangeGraph({ graph, positions, ELK, cola });
   assert.deepEqual(first, second);
   assert.deepEqual(await arrangeGraph({ graph, positions, selectedIds: graph.nodes.map(node => node.id), ELK, cola }), first);
   assert.deepEqual(Object.keys(first).sort(), graph.nodes.map(node => node.id).sort());
   assert.equal(Math.min(...Object.values(first).map(item => item.x)), 80);
-  for (const edge of graph.edges) assert.ok(first[edge.source].x < first[edge.target].x);
+  assert.equal(Math.min(...Object.values(first).map(item => item.y)), 100);
 });
 
-test('完整排版将接近同轴的关系对齐，明显分叉保持独立行', async () => {
+test('完整排版同时调整分叉节点与端口，保持有效且无交叉的完整几何', async () => {
   const ids = ['near', 'enemy', 'melee', 'action'];
   const fork = {
     nodes: ids.map(id => ({ id })),
     edges: [['near', 'enemy'], ['near', 'melee'], ['melee', 'action']]
       .map(([source, target], index) => ({ id: 'fork-' + index, source, target })),
   };
-  const arranged = await arrangeGraph({
+  const arranged = await arrangeGraphWithRoutes({
     graph: fork,
     positions: Object.fromEntries(ids.map((id, index) => [id, { x: index * 10, y: index * 10 }])),
     ELK, cola,
   });
-  assert.equal(arranged.near.y, arranged.enemy.y);
-  assert.equal(arranged.melee.y, arranged.action.y);
-  assert.notEqual(arranged.near.y, arranged.melee.y);
-  for (const point of Object.values(arranged)) { assert.equal(point.x % 10, 0); assert.equal(point.y % 10, 0); }
+  const metrics = measureGeometry(fork, { ...arranged, routes: [...arranged.routes],
+    sizes: Object.fromEntries(ids.map(id => [id, { width: 166, height: 62 }])) });
+  assert.deepEqual(qualityVector(metrics).slice(0, 3), [0, 0, 0]);
 });
 
-test('自动排版返回的连线可由最终坐标稳定重建', async () => {
+test('自动排版的完整路线经过保存与重开精确恢复', async () => {
   const result = await arrangeGraphWithRoutes({ graph, positions, ELK, cola });
-  const reopened = routeGraphEdges(graph, result.positions, cola);
-  assert.deepEqual([...result.routes].map(([id, route]) => [id, route.points]), [...reopened].map(([id, route]) => [id, route.points]));
+  const cache = createRouteCache(graph, result.positions, result.routes);
+  const reopened = restoreRouteCache(graph, result.positions, JSON.parse(JSON.stringify(cache)));
+  assert.deepEqual(reopened, new Map([...result.routes].sort(([a], [b]) => a.localeCompare(b))));
+});
+
+test('独立区域保持原有横向次序分别收紧，不重新排列内部节点', async () => {
+  const ids = ['build', 'encounter', 'end', 'rewards', 'route', 'survival'];
+  const upper = { nodes: ids.map(id => ({ id })), edges: [
+    ['build', 'encounter'], ['encounter', 'end'], ['encounter', 'rewards'], ['encounter', 'survival'],
+    ['rewards', 'build'], ['rewards', 'survival'], ['route', 'encounter'], ['survival', 'route'],
+  ].map(([source, target], i) => ({ id: 'upper-' + i, source, target })) };
+  const lowerIds = Array.from({ length: 12 }, (_, i) => 'lower-' + i);
+  const combined = { nodes: [...upper.nodes, ...lowerIds.map(id => ({ id }))],
+    edges: [...upper.edges, ...lowerIds.slice(1).map((id, i) => ({ id: 'lower-edge-' + i, source: lowerIds[i], target: id }))] };
+  const start = Object.fromEntries(combined.nodes.map((node, i) => [node.id, { x: i * 80, y: i < ids.length ? 0 : 800 }]));
+  const initial = await refineHierarchy(combined, { ...AUTO_LAYOUT_OPTIONS, ELK });
+  const directed = await improveFlowBySubtrees(combined, initial.geometry, { ELK });
+  const before = directed.geometry;
+  const together = await arrangeGraphWithRoutes({ graph: combined, positions: start, ELK });
+  for (const members of [ids, lowerIds]) {
+    const dy = together.positions[members[0]].y - before.positions[members[0]].y;
+    const order = positions => [...members].sort((a, b) => positions[a].x - positions[b].x || a.localeCompare(b));
+    assert.deepEqual(order(together.positions), order(before.positions));
+    for (const id of members) assert.ok(Math.abs(together.positions[id].y - before.positions[id].y - dy) < 1e-6);
+    for (const edge of combined.edges.filter(edge => members.includes(edge.source))) {
+      const old = new Map(before.routes).get(edge.id).points, actual = together.routes.get(edge.id).points;
+      assert.equal(actual.length, old.length);
+      actual.forEach((p, i) => assert.ok(Math.abs(p.y - old[i].y - dy) < 1e-6));
+    }
+  }
+  const metrics = measureGeometry(combined, { positions: together.positions, routes: [...together.routes],
+    sizes: Object.fromEntries(combined.nodes.map(n => [n.id, { width: 166, height: 62 }])) });
+  assert.equal(qualityVector(metrics)[0], 0);
+  const oldMetrics = measureGeometry(combined, before);
+  assert.ok(metrics.length < oldMetrics.length);
+  assert.ok(metrics.crossings <= oldMetrics.crossings);
 });
 
 test('正交路由对整图坐标平移保持相同的相对几何', () => {
@@ -293,7 +331,7 @@ test('无归属连线的展示缓存不会触发节点平移或阻断几何结�
   assert.deepEqual(positions, { a: { x: 0, y: 200 }, b: { x: 300, y: 200 } });
 });
 
-test('存在选择时 WebCola 只返回选中坐标，未选节点不会进入提交集合', async () => {
+test('存在选择时联合整理只返回选中坐标，未选节点不会进入提交集合', async () => {
   const source = {
     turn: { x: 0, y: 0 }, resource: { x: 260, y: 0 }, card: { x: 520, y: 0 },
     damage: { x: 780, y: 0 }, victory: { x: 1040, y: 0 },
@@ -302,8 +340,10 @@ test('存在选择时 WebCola 只返回选中坐标，未选节点不会进入�
   assert.deepEqual(arranged, await arrangeGraph({ graph, positions: source, selectedIds: ['resource', 'card'], ELK, cola }));
   assert.deepEqual(Object.keys(arranged).sort(), ['card', 'resource']);
   for (const point of Object.values(arranged)) {
-    assert.equal(point.x % 10, 0); assert.equal(point.y % 10, 0);
+    assert.ok(Number.isFinite(point.x) && Number.isFinite(point.y));
   }
+  assert.deepEqual(source.turn, { x: 0, y: 0 });
+  assert.deepEqual(source.damage, { x: 780, y: 0 });
 });
 
 test('选择中的未知节点被忽略；引擎缺失和坐标缺失显式失败', async () => {

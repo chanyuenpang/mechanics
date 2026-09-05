@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import { createProjectManager } from './project-manager.mjs';
 import { createPreferences } from './preferences.mjs';
 import { browseDirectories, createProjectHistory, createProjectPreflight } from './local-projects.mjs';
@@ -17,6 +18,10 @@ const assets = new Map([
   ['/canvas.mjs', [new URL('../web/canvas.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/route-cache.mjs', [new URL('../web/route-cache.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/layout.mjs', [new URL('../web/layout.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/hierarchical-layout.mjs', [new URL('../web/hierarchical-layout.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/layout-structure.mjs', [new URL('../web/layout-structure.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/local-routing.mjs', [new URL('../web/local-routing.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/flow-refinement.mjs', [new URL('../web/flow-refinement.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/graph-compute.mjs', [new URL('../web/graph-compute.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/graph-compute-kernel.mjs', [new URL('../web/graph-compute-kernel.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/geometry-settle.mjs', [new URL('../web/geometry-settle.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
@@ -34,6 +39,8 @@ const assets = new Map([
   ['/domain/identity.mjs', [new URL('../domain/identity.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/vendor/elk.js', [dependency.resolve('elkjs/lib/elk.bundled.js'), 'text/javascript; charset=utf-8']],
   ['/vendor/elk-worker.js', [dependency.resolve('elkjs/lib/elk-worker.min.js'), 'text/javascript; charset=utf-8']],
+  ['/vendor/libavoid/index.js', [new URL('index.js', pathToFileURL(dependency.resolve('libavoid-js'))), 'text/javascript; charset=utf-8']],
+  ['/vendor/libavoid/libavoid.wasm', [new URL('libavoid.wasm', pathToFileURL(dependency.resolve('libavoid-js'))), 'application/wasm']],
   ['/vendor/webcola.js', [dependency.resolve('webcola/WebCola/cola.min.js'), 'text/javascript; charset=utf-8']],
 ]);
 
@@ -47,12 +54,15 @@ export async function startServer({ projectRoot = null, workspaceRoot = null, po
   let origin;
   const server = createServer(async (request, response) => {
     const send = (status, data, type = 'application/json; charset=utf-8') => {
+      // libavoid 的 Emscripten 绑定还会动态生成函数包装；只在计算 Worker 中开放。
+      // 页面继续禁止动态脚本求值，Worker 的脚本来源仍限定本机自身。
+      const scriptPolicy = request.url.split('?')[0] === '/graph-compute-worker.js' ? "'self' 'unsafe-eval'" : "'self'";
       response.writeHead(status, {
         'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
         'Referrer-Policy': 'no-referrer', 'Cross-Origin-Resource-Policy': 'cross-origin',
         'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Allow-Private-Network': 'true',
-        'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+        'Content-Security-Policy': `default-src 'self'; script-src ${scriptPolicy}; style-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'`,
       });
       response.end(typeof data === 'string' || Buffer.isBuffer(data) ? data : JSON.stringify(data));
     };

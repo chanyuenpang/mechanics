@@ -2093,14 +2093,6 @@ export class GraphCanvas {
         return route ? [[edge.id, route]] : [];
       }));
       this.routed = preserved;
-    } else if (!primed && pendingMove?.ids?.length && previousGraph && previousPositions) {
-      const moved = new Set(pendingMove.ids), preview = new Map(this.routed);
-      for (const edge of graph.edges) {
-        if (!moved.has(edge.source) && !moved.has(edge.target)) continue;
-        const cached = this.routed.get(edge.id);
-        if (cached) preview.set(edge.id, incrementalEdgeGeometry(edge, positions, previousPositions, cached));
-      }
-      this.routed = preview;
     }
     this.geometryKey = nextKey; this.draw({ reroute: false });
     if (!graph.edges.length) { this.routed = new Map(); return Promise.resolve(true); }
@@ -2118,15 +2110,15 @@ export class GraphCanvas {
       });
       return Promise.resolve(true);
     }
-    if (!primed && geometryChanged) return this.requestRouting(nextKey, pendingMove?.ids);
+    if (!primed && geometryChanged) return this.requestRouting(nextKey, pendingMove?.ids, { previousPositions });
     return this.routingPromise ?? Promise.resolve(true);
   }
   primeRoutes(graph, positions, routes) {
     this.primedRoutes = routes ? { key: graphGeometryKey(graph, positions), routes } : null;
   }
-  requestRouting(geometryKey, movedIds = [], { fixedPositions = false, persistRouteCache = movedIds.length > 0 } = {}) {
+  requestRouting(geometryKey, movedIds = [], { fixedPositions = false, persistRouteCache = movedIds.length > 0, previousPositions = this.positions } = {}) {
     if (typeof this.callbacks.computeGraph !== 'function') return Promise.resolve(false);
-    const payload = { graph: this.graph, positions: this.positions, cachedRoutes: [...this.routed], movedIds, fixedPositions };
+    const payload = { graph: this.graph, positions: this.positions, previousPositions, cachedRoutes: [...this.routed], movedIds, fixedPositions };
     const promise = this.callbacks.computeGraph({ kind: 'route', geometryKey, payload,
       isCurrent: () => this.geometryKey === geometryKey })
       .then(result => {

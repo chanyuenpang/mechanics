@@ -33,7 +33,8 @@ const graph = {
 const positions = Object.fromEntries(nodeIds.map((id, index) => [id, { x: index * 20, y: 0 }]));
 
 const layoutUrl = new URL('../src/web/layout.mjs', import.meta.url).href;
-const canvasUrl = new URL('../src/web/canvas.mjs', import.meta.url).href;
+const qualityUrl = new URL('../src/web/hierarchical-layout.mjs', import.meta.url).href;
+const cacheUrl = new URL('../src/web/route-cache.mjs', import.meta.url).href;
 
 function runLayoutInWorker() {
   return new Promise((resolve, reject) => {
@@ -41,14 +42,16 @@ function runLayoutInWorker() {
       const { parentPort, workerData } = require('node:worker_threads');
       (async () => {
         const [{ default: ELK }, { default: cola }, { arrangeGraphWithRoutes },
-          { auditGraphGeometryStrict, routeGraphEdges }] = await Promise.all([
-          import('elkjs/lib/elk.bundled.js'), import('webcola'), import(workerData.layoutUrl), import(workerData.canvasUrl),
+          { measureGeometry }, { createRouteCache, restoreRouteCache }] = await Promise.all([
+          import('elkjs/lib/elk.bundled.js'), import('webcola'), import(workerData.layoutUrl), import(workerData.qualityUrl), import(workerData.cacheUrl),
         ]);
         const firstStarted = performance.now();
         const first = await arrangeGraphWithRoutes({ graph: workerData.graph, positions: workerData.positions, ELK, cola });
         const firstElapsed = performance.now() - firstStarted;
-        const reopened = routeGraphEdges(workerData.graph, first.positions, cola);
-        const audit = auditGraphGeometryStrict(workerData.graph, first.positions, first.routes);
+        const reopened = restoreRouteCache(workerData.graph, first.positions,
+          JSON.parse(JSON.stringify(createRouteCache(workerData.graph, first.positions, first.routes))));
+        const audit = measureGeometry(workerData.graph, { positions: first.positions, routes: [...first.routes],
+          sizes: Object.fromEntries(workerData.graph.nodes.map(node => [node.id, { width: 166, height: 62 }])) });
         const repeated = await arrangeGraphWithRoutes({ graph: workerData.graph, positions: workerData.positions, ELK, cola });
         parentPort.postMessage({ ok: true, firstElapsed, audit, positions: first.positions,
           routes: [...first.routes].map(([id, route]) => [id, route.points]),
@@ -57,7 +60,7 @@ function runLayoutInWorker() {
           repeatedRoutes: [...repeated.routes].map(([id, route]) => [id, route.points]),
         });
       })().catch(error => parentPort.postMessage({ ok: false, error: error.stack || error.message }));
-    `, { eval: true, workerData: { graph, positions, layoutUrl, canvasUrl } });
+    `, { eval: true, workerData: { graph, positions, layoutUrl, qualityUrl, cacheUrl } });
     const timer = setTimeout(() => {
       worker.terminate();
       reject(new Error('人员培养图自动排版超过 20 秒硬上限。'));
@@ -71,11 +74,11 @@ function runLayoutInWorker() {
   });
 }
 
-test('高扇出人员培养图在严格几何合同下快速完成自动排版', async () => {
+test('高扇出人员培养图完成联合排版，几何有效、缓存完整且结果可重复', async () => {
   const result = await runLayoutInWorker();
   assert.equal(result.routes.length, links.length);
-  assert.equal(result.audit.ok, true, result.audit.reasons.join('、'));
-  assert.deepEqual(result.reopened, result.routes);
+  for (const key of ['missing', 'invalid', 'nodeOverlaps', 'nodeHits', 'selfCrossings', 'overlaps']) assert.equal(result.audit[key], 0, key);
+  assert.deepEqual(new Map(result.reopened), new Map(result.routes));
   assert.deepEqual(result.repeatedPositions, result.positions);
   assert.deepEqual(result.repeatedRoutes, result.routes);
   assert.ok(result.firstElapsed < 8000,

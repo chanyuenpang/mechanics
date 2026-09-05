@@ -1400,29 +1400,35 @@ async function commitSettledGeometry(result, { recordHistory = false } = {}) {
   const changed = graph.nodes.some(node => current[node.id]?.x !== result.positions[node.id]?.x
     || current[node.id]?.y !== result.positions[node.id]?.y);
   const routes = new Map(result.routes);
-  canvas.primeRoutes(graph, result.positions, routes);
   const routeCache = createRouteCache(graph, result.positions, routes);
+  if (!routeCache) throw new Error('图计算返回的连线不完整，未提交整理结果。');
+  const previousCache = viewMode() ? viewRouteCache : draft?.routeCache;
+  const edited = changed || json(previousCache) !== json(routeCache);
+  if (recordHistory && edited) {
+    // 先捕获完整旧几何，再同时替换节点和路径；仅路径改善也属于一次编辑。
+    history.push(viewMode() ? viewSnapshot() : clone(draft)); if (history.length > 80) history.shift(); future = [];
+  }
+  canvas.primeRoutes(graph, result.positions, routes);
   if (routeCache && (recordHistory || result.persistRouteCache)) {
     if (viewMode()) viewRouteCache = routeCache;
     else if (draft) draft.routeCache = routeCache;
   }
-  if (changed) {
-    if (recordHistory) {
-      history.push(viewMode() ? viewSnapshot() : clone(draft)); if (history.length > 80) history.shift(); future = [];
+  if (changed || recordHistory && edited) {
+    if (recordHistory || result.commitPositions) {
       const regularPositions = Object.fromEntries(regularNodes.map(node => [node.id, clone(result.positions[node.id])]));
       const nextScopedPositions = Object.fromEntries(projectionNodes.map(node => [node.id, clone(result.positions[node.id])]));
       if (viewMode()) { Object.assign(viewPositions, regularPositions); Object.assign(scopedPositions, nextScopedPositions); }
       else if (draft?.positions) { Object.assign(draft.positions, regularPositions); Object.assign(draft.projectionPositions ??= {}, nextScopedPositions); }
       geometryEpoch++; settledRuntime = null;
     } else {
-      // 普通打开与拖动后的 route settle 是可重建的运行时几何，不把自动切分反复写回文件。
-      // 显式“自动排版”才把最终坐标作为一次可撤销编辑提交。
+      // 没有提交位置意图的后台计算只更新运行时几何。
+      // 拖动近邻微调通过 commitPositions 合并到已有拖动编辑。
       settledRuntime = { contextId: contextKey() + '/' + screen, epoch: geometryEpoch, positions: clone(result.positions) };
     }
   }
   $('error').hidden = true;
   render(true, { preserveRoutes: true });
-  if ((changed && recordHistory || result.persistRouteCache) && viewMode()) await persistView();
+  if ((edited && recordHistory || result.persistRouteCache) && viewMode()) await persistView();
   // 旧文件首次打开时没有路线快照。后台补算完成后只写入派生快照；这不会改变
   // 节点、规则或布局，但可让之后的打开直接复用路径。
   if (result.persistRouteCache === 'background' && !viewMode() && !definitionMode()) void saveDraft();
@@ -1473,7 +1479,7 @@ async function autoLayout({ fitView = false } = {}) {
   const geometryKey = graphGeometryKey(graph, positions), request = ++arrangeSequence;
   arranging = true; updateStatus();
   try {
-    const result = await runGraphCompute({ kind: 'layout', geometryKey, payload: { graph, positions, selectedIds },
+    const result = await runGraphCompute({ kind: 'layout', geometryKey, payload: { graph, positions, selectedIds, cachedRoutes: [...canvas.routed] },
       isCurrent: () => graphGeometryKey(graph, projection()) === geometryKey });
     if (request !== arrangeSequence) return;
     await commitSettledGeometry(result, { recordHistory: true });
