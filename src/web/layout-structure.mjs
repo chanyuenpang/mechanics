@@ -1,4 +1,10 @@
 // 布局结构完全独立于机制文件归属，不改变原图节点和边的身份。
+// 仅用于左右布局：负面影响按反向计算；规则端点和绘制方向仍由原始边拥有。
+export function layoutDirection(edge) {
+  return edge.sign === -1 ? { source: edge.target, target: edge.source }
+    : { source: edge.source, target: edge.target };
+}
+
 export function connectedComponents(graph) {
   const adjacent = new Map(graph.nodes.map(node => [node.id, []]));
   for (const edge of graph.edges) {

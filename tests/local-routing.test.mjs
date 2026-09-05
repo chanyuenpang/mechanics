@@ -82,7 +82,7 @@ test('两个节点的单向关系整体翻转，30px短直线不会阻止方向�
   const base = geometry(graph, await routeLocalGraph({ graph, positions }));
   const result = await improveFlowBySubtrees(graph, base, { ELK });
   assert.equal(result.metrics.backwardEdges, 0);
-  assert.equal(result.metrics.leftwardLength, 0);
+  assert.equal(result.metrics.backwardLength, 0);
   assert.equal(result.metrics.length, 30, '整块翻转不应增加线长');
   assert.deepEqual(result.geometry.positions.participant, { x: 0, y: 0 });
   assert.deepEqual(result.geometry.positions.attack, { x: 196, y: 0 });
@@ -113,7 +113,7 @@ test('超过16节点的反向区域无需求解器即可整体纠正，独立正
   const result = await improveFlowBySubtrees(graph, base, { rounds: 0,
     ELK: class { constructor() { throw new Error('整体镜像不应启动求解器'); } } });
   assert.equal(result.metrics.backwardEdges, 0);
-  assert.equal(result.metrics.leftwardLength, 0);
+  assert.equal(result.metrics.backwardLength, 0);
   assert.equal(result.metrics.length, 21 * 30);
   assert.equal(qualityVector(result.metrics)[0], 0);
   assert.equal(result.accepted[0].operation, 'mirror-component');

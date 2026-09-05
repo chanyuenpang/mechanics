@@ -1,4 +1,4 @@
-import { leafHierarchy, modularHierarchy, groupBoundary, connectedComponents } from './layout-structure.mjs';
+import { leafHierarchy, modularHierarchy, groupBoundary, connectedComponents, layoutDirection } from './layout-structure.mjs';
 import { solveLayout, measureGeometry, qualityVector, MIN_ROUTE_SEGMENT, routeMeetsMinimum } from './hierarchical-layout.mjs';
 import { routeLocalGraph } from './local-routing.mjs';
 
@@ -7,15 +7,20 @@ const bounds = (ids, positions) => ({
   left: Math.min(...ids.map(id => positions[id].x)), top: Math.min(...ids.map(id => positions[id].y)),
   right: Math.max(...ids.map(id => positions[id].x + W)), bottom: Math.max(...ids.map(id => positions[id].y + H)),
 });
+const isBackward = (edge, positions) => {
+  const { source, target } = layoutDirection(edge);
+  return positions[target].x < positions[source].x - EPS;
+};
 export function flowMetrics(graph, geometry) {
-  let backwardEdges = 0, leftwardLength = 0;
+  let backwardEdges = 0, backwardLength = 0;
+  const routes = new Map(geometry.routes);
   for (const edge of graph.edges) {
-    if (geometry.positions[edge.target].x < geometry.positions[edge.source].x - EPS) backwardEdges++;
+    if (isBackward(edge, geometry.positions)) backwardEdges++;
+    const points = routes.get(edge.id)?.points ?? [], sign = edge.sign === -1 ? -1 : 1;
+    // 负边向左符合布局方向；只评价水平位移，竖直段始终不计入逆向长度。
+    for (let i = 1; i < points.length; i++) backwardLength += Math.max(0, sign * (points[i - 1].x - points[i].x));
   }
-  for (const [, route] of geometry.routes) for (let i = 1; i < route.points.length; i++) {
-    leftwardLength += Math.max(0, route.points[i - 1].x - route.points[i].x);
-  }
-  return { backwardEdges, leftwardLength: Math.round(leftwardLength * 100) / 100 };
+  return { backwardEdges, backwardLength: Math.round(backwardLength * 100) / 100 };
 }
 
 export function flowSubtrees(graph) {
@@ -107,7 +112,7 @@ export function compactHorizontalRoutes(graph, geometry) {
 }
 function preferred(before, after, directionTradeoff, original) {
   if (qualityVector(after)[0] || after.overlaps > before.overlaps + EPS || after.nearParallel > before.nearParallel + EPS) return false;
-  if (after.leftwardLength > before.leftwardLength + EPS || after.length > original.length * 1.15) return false;
+  if (after.backwardLength > before.backwardLength + EPS || after.length > original.length * 1.15) return false;
   const beforeCross = before.crossings + before.contacts, afterCross = after.crossings + after.contacts;
   if (after.backwardEdges >= before.backwardEdges) return false;
   if (directionTradeoff === 'crossings-first') return afterCross <= beforeCross;
@@ -161,19 +166,19 @@ async function iterateFlow(graph, geometry, { ELK, engine, rounds = 2, candidate
     accepted.push({ round: 0, operation: 'mirror-component', members, boundary: [],
       crossings: currentQuality.crossings, backwardEdges: currentQuality.backwardEdges });
   }
-  const groups = flowSubtrees(graph);
+  const groups = flowSubtrees(graph), edges = new Map(graph.edges.map(edge => [edge.id, edge]));
   for (let round = 0; round < rounds; round++) {
     let winner;
     const ranked = groups.map(group => {
       const related = graph.edges.filter(edge => group.internal.includes(edge.id) || group.boundary.some(item => item.edgeId === edge.id));
-      const backward = related.filter(edge => current.positions[edge.target].x < current.positions[edge.source].x - EPS).length;
+      const backward = related.filter(edge => isBackward(edge, current.positions)).length;
       return { ...group, backward };
     }).filter(group => group.backward > 0).sort((a, b) => a.members.length - b.members.length
       || a.boundary.length - b.boundary.length || b.backward - a.backward).slice(0, candidateLimit);
     for (const group of ranked) {
       const ids = new Set(group.members), oldBounds = bounds(group.members, current.positions);
       const outside = graph.nodes.filter(node => !ids.has(node.id));
-      const outputs = group.boundary.filter(edge => edge.direction === 'out').length;
+      const outputs = group.boundary.filter(edge => ids.has(layoutDirection(edges.get(edge.edgeId)).source)).length;
       const left = outputs >= group.boundary.length - outputs;
       const neighborIds = [...new Set(group.boundary.map(edge => edge.outside))];
       const neighborBounds = neighborIds.length ? bounds(neighborIds, current.positions) : oldBounds;
@@ -194,15 +199,17 @@ async function iterateFlow(graph, geometry, { ELK, engine, rounds = 2, candidate
         if (neighborIds.length) {
           const outer = bounds(outside.map(node => node.id), current.positions);
           targets.push({ x, y: oldBounds.top },
-            { x, y: (neighborBounds.top + neighborBounds.bottom - size.bottom) / 2 },
             { x: left ? outer.left - size.right - 80 : outer.right + 80, y: oldBounds.top });
         }
         for (const target of targets) {
           const shift = point => ({ x: point.x + target.x, y: point.y + target.y });
           const localPositions = Object.fromEntries(Object.entries(shape.positions).map(([id, point]) => [id, shift(point)]));
+          // 方向纠正只调整横坐标；初始联合排版拥有纵向安排，不用上下挪位换取方向收益。
+          if (group.members.some(id => Math.abs(localPositions[id].y - current.positions[id].y) > EPS)) continue;
+          for (const id of group.members) localPositions[id].y = current.positions[id].y;
           if (Object.values(localPositions).some(point => outside.some(node => collides(point, current.positions[node.id])))) continue;
           const positions = { ...current.positions, ...localPositions };
-          if (graph.edges.filter(edge => positions[edge.target].x < positions[edge.source].x - EPS).length >= currentQuality.backwardEdges) continue;
+          if (graph.edges.filter(edge => isBackward(edge, positions)).length >= currentQuality.backwardEdges) continue;
           const routes = new Map(current.routes);
           for (const [id, route] of shape.routes) routes.set(id, { points: route.points.map(shift) });
           let result;
