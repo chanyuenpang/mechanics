@@ -77,6 +77,7 @@ export function validateConcept(node) {
     if (typeof node[key] !== 'string' || !node[key].trim() || node[key].length > 8000) throw new Error(label + '必填，且不能超过 8000 字。');
   }
   if (typeof node.agentLocked !== 'boolean') throw new Error('概念必须明确 agentLocked。');
+  if (node.customData !== undefined && (typeof node.customData !== 'string' || node.customData.length > 16000)) throw new Error('自定义文本必须是字符串，且不能超过 16000 字。');
   for (const [label, values] of [['别名', parseAliases(node.aliases)], ['标签', parseTags(node.tags)]]) {
     const normalizedValues = values.map(normalized);
     if (new Set(normalizedValues).size !== normalizedValues.length) throw new Error(label + '归一化后不能重复。');
@@ -144,7 +145,7 @@ export function conceptEditPresentation(node) {
 export function conceptEditorModel(mode, node = {}) {
   if (!['create', 'edit'].includes(mode)) throw new Error('概念编辑模式必须是新建或编辑。');
   return { mode, title: mode === 'create' ? '新建概念' : '编辑概念：' + node.label, idReadonly: mode === 'edit', firstField: mode === 'create' ? 'id' : 'label',
-    form: { id: node.id ?? '', label: node.label ?? '', description: node.description ?? '', aliases: node.aliases ?? [], tags: node.tags ?? [], agentLocked: node.agentLocked ?? false } };
+    form: { id: node.id ?? '', label: node.label ?? '', description: node.description ?? '', aliases: node.aliases ?? [], tags: node.tags ?? [], customData: node.customData ?? '', agentLocked: node.agentLocked ?? false } };
 }
 
 export function conceptLockModel(agentLocked) {
@@ -157,9 +158,10 @@ export function conceptShapeWarning() { return ''; }
 export function conceptEditorOpenState(openId, nextId) { return openId === nextId ? null : nextId; }
 export function conceptPayloadFromForm(values) {
   const node = { id: values.id?.trim(), label: values.label?.trim(), description: values.description?.trim(), agentLocked: values.agentLocked,
-    aliases: parseAliases(values.aliases), tags: parseTags(values.tags) };
+    aliases: parseAliases(values.aliases), tags: parseTags(values.tags), customData: values.customData ?? '' };
   if (!node.aliases.length) delete node.aliases;
   if (!node.tags.length) delete node.tags;
+  if (!node.customData) delete node.customData;
   validateConcept(node); return node;
 }
 
@@ -173,6 +175,9 @@ export function prepareConceptUpdate(definitions, id, values) {
     node[key] = parse(values[key]);
     if (!node[key].length) delete node[key];
   }
+  const customData = String(values.customData ?? '');
+  if (customData) node.customData = customData;
+  else delete node.customData;
   validateConcept(node);
   return next;
 }
@@ -274,8 +279,8 @@ export class ConceptEditor {
   field(label, key, type = 'input') {
     const wrap = element('label', undefined, 'field'), input = element(type); input.dataset.editorField = key; input.setAttribute('aria-label', label);
     input.value = Array.isArray(this.form[key]) ? this.form[key].join(', ') : this.form[key] ?? ''; input.required = ['id', 'label', 'description'].includes(key);
-    if (key === 'id') { input.maxLength = 96; input.readOnly = this.mode === 'edit'; } else input.maxLength = 8000;
-    if (type === 'textarea') input.rows = 2;
+    if (key === 'id') { input.maxLength = 96; input.readOnly = this.mode === 'edit'; } else input.maxLength = key === 'customData' ? 16000 : 8000;
+    if (type === 'textarea') input.rows = key === 'customData' ? 4 : 2;
     input.oninput = () => { this.form[key] = key === 'aliases' ? parseAliases(input.value) : key === 'tags' ? parseTags(input.value) : input.value; if (key === 'label') { this.allowDuplicate = false; this.drawDuplicates(); } };
     wrap.append(element('span', label), input); return wrap;
   }
@@ -284,12 +289,13 @@ export class ConceptEditor {
     const identity = element('fieldset', undefined, 'concept-editor-identity'); identity.append(element('legend', '身份'), this.field('名称', 'label'), this.field('稳定英文 ID', 'id'), this.field('概念含义', 'description', 'textarea'));
     const duplicateHost = element('div', undefined, 'concept-editor-duplicates'); identity.append(duplicateHost);
     const discovery = element('fieldset', undefined, 'concept-editor-discovery'); discovery.append(element('legend', '检索信息'), this.field('别名', 'aliases'), this.field('标签', 'tags'));
+    const customData = element('fieldset', undefined, 'concept-editor-custom-data'); customData.append(element('legend', '自定义文本'), this.field('自定义文本', 'customData', 'textarea'));
     const permission = element('fieldset', undefined, 'concept-editor-permission'), lock = conceptLockModel(this.form.agentLocked), descriptionId = 'concept-lock-description'; permission.append(element('legend', '修改权限'));
     const card = element('label', undefined, 'concept-lock-card'), toggle = element('input'); toggle.type = 'checkbox'; toggle.checked = lock.checked; toggle.setAttribute('role', 'switch'); toggle.setAttribute('aria-describedby', descriptionId); toggle.setAttribute('aria-label', 'Agent 修改锁');
     const state = element('strong', lock.state), description = element('p', lock.description); description.id = descriptionId; toggle.onchange = () => { this.form.agentLocked = toggle.checked; this.render(); }; card.append(toggle, state, description); permission.append(card);
     const error = element('p', undefined, 'concept-editor-error danger'); error.setAttribute('role', 'alert'); error.hidden = true;
     const actions = element('div', undefined, 'concept-editor-actions'); const save = action(this.mode === 'create' ? '创建并引用' : '保存概念', () => { try { if (this.mode === 'create' && conceptDuplicateModel(this.nodes(), this.form.label, this.form.id).length && !this.allowDuplicate) throw new Error('请确认仍创建同名概念，或复用已有概念。'); this.onSave(this.form, { allowDuplicate: this.allowDuplicate }); } catch (cause) { error.textContent = cause.message; error.hidden = false; } }, 'primary'); actions.append(save, action('取消', () => this.onCancel()));
-    this.root.replaceChildren(title, identity, discovery, permission, error, actions); this.drawDuplicates();
+    this.root.replaceChildren(title, identity, discovery, customData, permission, error, actions); this.drawDuplicates();
   }
   drawDuplicates() {
     const host = this.root.querySelector('.concept-editor-duplicates'); if (!host || this.mode !== 'create') return; host.replaceChildren();

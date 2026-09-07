@@ -51,6 +51,17 @@ test('对象形式的视图打开请求使用其 ID，而不是把对象转为�
   assert.equal(opened.viewId, view.id);
 });
 
+test('同一项目内切换机制复用已验证快照，不读取或写入工作区', async t => {
+  const { api, root } = await fixture(t);
+  const workspace = await api('/api/workspace');
+  const before = await readFile(join(root, 'workspace.json'), 'utf8');
+  let requests = 0;
+  const opened = await readOpening(async (...args) => { requests++; return api(...args); }, { kind: 'mechanic', id: 'hand' }, workspace);
+  assert.equal(opened.activeId, 'hand');
+  assert.equal(requests, 0);
+  assert.equal(await readFile(join(root, 'workspace.json'), 'utf8'), before);
+});
+
 test('打开 badge 视图携带结构展示设置，保存后重新打开仍保持且源文件字节不变', async t => {
   const { root, api } = await fixture(t);
   const initial = await api('/api/workspace');
@@ -76,30 +87,30 @@ test('旧视图中的折叠记录仅兼容读取，不再影响图投影', async
   assert.deepEqual(JSON.parse(await readFile(join(root, 'legacy-fold.view.json'), 'utf8')).collapsedNodeIds, ['repel']);
 });
 
-test('创建成功但最近打开记录失败：明确报告文件已存在、不重复创建、不删除', async t => {
+test('创建视图不再为最近打开状态写入 canonical 工作区', async t => {
   const { root, api } = await fixture(t);
   const initial = await api('/api/workspace'); let creates = 0;
-  await assert.rejects(createAndRememberView(async (path, body) => {
+  const created = await createAndRememberView(async (path, body) => {
     if (path === '/api/views') creates++;
-    if (path === '/api/save') throw Object.assign(new Error('响应丢失'), { code: 'SAVE_UNCERTAIN' });
     return api(path, body);
-  }, initial.revision, view, 'kept.view.json'), error => error.code === 'VIEW_CREATED_UNBOUND' && /kept.view.json/.test(error.message));
+  }, initial.revision, view, 'kept.view.json');
   assert.equal(creates, 1);
+  assert.equal(created.views.some(item => item.id === view.id), true);
   assert.deepEqual(JSON.parse(await readFile(join(root, 'kept.view.json'), 'utf8')), view);
   assert.deepEqual((await api('/api/workspace')).manifest.lastView, initial.manifest.lastView);
 });
 
-test('最近打开写入响应丢失时拒绝候选，即使服务端已提交', async t => {
+test('打开资源不会为最近打开状态写入 canonical 工作区', async t => {
   const { api } = await fixture(t);
   const data = await api('/api/workspace');
   await api('/api/views', { revision: data.revision, document: view, file: 'test.view.json' });
-  await assert.rejects(readOpening(async (path, body) => {
-    const result = await api(path, body);
-    if (body) throw Object.assign(new Error('写入结果待确认'), { code: 'SAVE_UNCERTAIN' });
-    return result;
-  }, view.id), { code: 'SAVE_UNCERTAIN' });
-  assert.deepEqual((await api('/api/workspace')).manifest.lastView, { viewId: view.id });
-  assert.equal((await readOpening(api)).viewId, view.id);
+  let writes = 0;
+  const opened = await readOpening(async (path, body) => {
+    if (body) writes++;
+    return api(path, body);
+  }, view.id);
+  assert.equal(opened.viewId, view.id);
+  assert.equal(writes, 0);
 });
 
 function queue() {
@@ -120,7 +131,7 @@ test('打开机制只显示自身，记录单文件最近打开，不改原视�
     assert.equal(opened.viewId, null); assert.equal(opened.activeId, id); assert.equal(opened.legacy, false);
     assert.deepEqual(opened.original.graphIds, [id]);
     assert.ok(opened.original.edges.every(edge => edge.steps.every(step => step.graphId === id)));
-    assert.deepEqual((await readOpening(api)).snapshot.graphIds, [id]);
+    assert.deepEqual(opened.snapshot.graphIds, [id]);
     assert.equal(await readFile(join(root, 'saved.view.json'), 'utf8'), bytes);
   }
   const returned = await readOpening(api, view.id);

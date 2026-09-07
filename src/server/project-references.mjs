@@ -61,7 +61,7 @@ export async function listProjectReferences(sourceRoot, { bindingsFile } = {}) {
     const projectRoot = bound?.projectRoot ?? (item.relativePath ? resolve(sourceRoot, item.relativePath) : null);
     if (!projectRoot) return { ...item, status: 'unlocated' };
     try {
-      const context = await projectContext(projectRoot, { createExportRoot: false, allowMissingExport: true });
+      const context = await projectContext(projectRoot, { createExportRoot: false, allowMissingExport: true, allowUnavailableExport: true });
       const workspace = await readQuerySnapshot(context.workspaceRoot);
       if (workspace.manifest.id !== item.workspaceId) return { ...item, projectRoot: context.projectRoot, status: 'workspace-mismatch', actualWorkspaceId: workspace.manifest.id };
       return { ...item, projectRoot: context.projectRoot, status: 'ready', actualName: workspace.manifest.name };
@@ -73,7 +73,7 @@ export async function bindProjectReference(sourceRoot, referenceId, projectRoot,
   const declaration = await readProjectReferences(sourceRoot);
   const reference = declaration.references.find(item => item.id === referenceId);
   if (!reference) fail('REFERENCE_NOT_DECLARED', `当前项目未声明参考：${referenceId}`);
-  const bindings = await readBindings(bindingsFile), context = await projectContext(projectRoot, { createExportRoot: false, allowMissingExport: true });
+  const bindings = await readBindings(bindingsFile), context = await projectContext(projectRoot, { createExportRoot: false, allowMissingExport: true, allowUnavailableExport: true });
   const workspace = await readQuerySnapshot(context.workspaceRoot);
   if (workspace.manifest.id !== reference.workspaceId) fail('REFERENCE_WORKSPACE_MISMATCH', `所选目录属于 ${workspace.manifest.id}，但“${reference.name}”要求 ${reference.workspaceId}`);
   bindings.bindings = bindings.bindings.filter(item => !(item.sourceRoot.toLowerCase() === sourceRoot.toLowerCase() && item.referenceId === referenceId));
@@ -83,7 +83,7 @@ export async function bindProjectReference(sourceRoot, referenceId, projectRoot,
 
 export async function declareProjectReference(sourceRoot, { projectRoot }, { bindingsFile } = {}) {
   if (typeof projectRoot !== 'string' || !isAbsolute(projectRoot)) fail('REFERENCE_DECLARATION_INVALID', '关联项目必须提供绝对项目目录');
-  const target = await projectContext(projectRoot, { createExportRoot: false, allowMissingExport: true });
+  const target = await projectContext(projectRoot, { createExportRoot: false, allowMissingExport: true, allowUnavailableExport: true });
   const workspace = await readQuerySnapshot(target.workspaceRoot), declaration = await readProjectReferences(sourceRoot);
   const id = workspace.manifest.id, name = workspace.manifest.name;
   if (declaration.references.some(item => item.workspaceId === id)) fail('REFERENCE_DECLARATION_EXISTS', `当前项目已关联：${name}`);

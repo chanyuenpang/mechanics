@@ -12,7 +12,7 @@ game-graph web
 game-graph validate --project ./my-game
 game-graph catalog --project ./my-game
 game-graph root --project ./my-game
-game-graph agent guide --format text
+game-graph agent guide --format json
 game-graph agent scopes --project ./my-game
 game-graph agent concept create --project ./my-game ... --revision <definitions资源版本>
 game-graph agent rule add --project ./my-game ... --revision <机制资源版本>
@@ -51,7 +51,7 @@ my-game/
 
 canonical 目录递归发现普通 `*.mechanic.json` 和 `*.view.json`。隐藏条目与 `node_modules` 排除；其他后缀不作为规则或视图。文件名和目录不是图 ID。外部移动文件后按稳定 ID 恢复引用；缺失来源、坏 JSON、重复 ID、越界路径、junction/符号链接或嵌套工作区都整体失败，不返回部分成功。
 
-正式协议固定为 workspace v8、definitions/mechanic v4、view v3；查询协议与阅读合同为 v7。CLI 对旧版本严格失败，不兼容读取；只能用 `game-graph migrate --from 7 --to 8 --project <项目目录>` 预览并显式执行受控升级。
+正式协议固定为 workspace v8、definitions/mechanic v4、view v3；查询协议与阅读合同为 v9。CLI 对旧版本严格失败，不兼容读取；只能用 `game-graph migrate --from 7 --to 8 --project <项目目录>` 预览并显式执行受控升级。
 
 ## 制作可安装包
 
@@ -61,4 +61,4 @@ npm run check
 npm run check:package
 ```
 
-包验收会审查 dry-run 清单，创建 `dist/game-graph-0.7.0.tgz`，在隔离目录安装并验证 CLI、两个 canonical skill、项目初始化时的 skill 注册、只读查询、受约束 mutation、在线服务、静态资源和工作区读取。skill 的维护源固定在 Game-Graph 包 `skills/`；项目 `.agents/skills/` 是初始化产生的注册副本，不反向成为工具真相。`private:true` 表示 npm 拒绝公开发布；本地 tarball 不代表公开发布。
+包验收会审查 dry-run 清单，创建 `dist/game-graph-<version>.tgz`，在隔离目录安装并验证 CLI、两个 canonical skill、项目初始化时的 skill 注册、只读查询、受约束 mutation、在线服务、静态资源和工作区读取。skill 的维护源固定在 Game-Graph 包 `skills/`；项目 `.agents/skills/` 是初始化产生的注册副本，不反向成为工具真相。公开发布的完整步骤见仓库根目录 [`DISTRIBUTION.md`](../DISTRIBUTION.md)；本地 tarball 仅是发布前验收，不能代替 registry 回读验证。

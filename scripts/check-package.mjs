@@ -19,10 +19,13 @@ const packArgs = ['pack', '--json', '--ignore-scripts'];
 const [preview] = JSON.parse(command(process.execPath, [npm, ...packArgs, '--dry-run']));
 const names = preview.files.map(file => file.path);
 for (const path of names) {
-  assert.match(path, /^(src\/|schemas\/|skills\/|docs\/|examples\/|README\.md$|package\.json$)/);
-  assert.ok(!/(?:^|\/)(?:node_modules|\.git|\.claw|design)(?:\/|$)|\.lock$|\.tmp$|\.log$/.test(path), path);
+  assert.match(path, /^(src\/|workspace-tools\/|schemas\/|skills\/|docs\/|examples\/|README\.md$|package\.json$)/);
+  assert.ok(!/(?:^|\/)(?:node_modules|\.git|\.claw|design|\.agents|game-mechanics|\.rule-text-backup-[^/]+)(?:\/|$)|(?:^|\/)\.ui-state\.json$|\.lock$|\.tmp$|\.log$/.test(path), path);
 }
 assert.ok(!names.includes('examples/card-game/.game-graph/.game-graph.lock'), '打包清单不得包含运行态工作区锁');
+assert.ok(!names.some(path => path.includes('/.rule-text-backup-')), '打包清单不得包含规则文本备份');
+assert.ok(!names.some(path => path.includes('/.agents/')), '打包清单不得包含项目注册 skill 副本');
+assert.ok(!names.some(path => path.includes('/game-mechanics/')), '打包清单不得包含生成的 Agent 文档');
 for (const path of ['src/server/cli.mjs', 'src/server/native-directory-picker.mjs', 'src/server/windows-directory-dialog.cs', 'src/web/glossary.mjs', 'src/web/view-files.mjs', 'src/web/graph-compute.mjs',
   'src/web/graph-compute-kernel.mjs', 'src/web/graph-compute-worker.js', 'src/web/geometry-settle.mjs', 'src/web/hierarchical-layout.mjs', 'src/web/layout-structure.mjs', 'src/web/local-routing.mjs', 'src/web/flow-refinement.mjs', 'src/web/index.html', 'schemas/protocol.schema.json']) assert.ok(names.includes(path), path);
 for (const path of ['skills/game-mechanic-search/SKILL.md', 'skills/game-mechanic-modeling/SKILL.md']) assert.ok(names.includes(path), path);
@@ -60,15 +63,15 @@ try {
   assert.equal(data.workspaceId, 'package-check');
   const scopes = JSON.parse(command(process.execPath, [cli, 'agent', 'scopes'], join(workspace, '.game-graph', 'mechanics')));
   assert.equal(scopes.workspaceId, 'package-check');
-  assert.equal(scopes.queryApiVersion, 8);
+  assert.equal(scopes.queryApiVersion, 9);
   assert.match(scopes.resourceRevisions.definitions, /^[a-f0-9]{64}$/u);
   const guide = JSON.parse(command(process.execPath, [cli, 'agent', 'guide'], temporary));
-  assert.equal(guide.queryApiVersion, 8);
-  assert.equal(guide.readingContract.version, 8);
+  assert.equal(guide.queryApiVersion, 9);
+  assert.equal(guide.readingContract.version, 9);
   const search = JSON.parse(command(process.execPath, [cli, 'agent', 'search', '--query', '未建模概念'], join(workspace, '.game-graph', 'mechanics')));
-  assert.equal(search.queryApiVersion, 8);
-  assert.equal(search.readingContract.version, 8);
-  assert.equal(search.output.totalMatches, 0);
+  assert.equal(search.queryApiVersion, 9);
+  assert.equal(search.readingContract.version, 9);
+  assert.equal(search.resolution.status, 'not_found');
   const created = JSON.parse(command(process.execPath, [cli, 'agent', 'concept', 'create', '--project', workspace,
     '--id', 'package-focus', '--label', '打包专注', '--description', '隔离安装验收使用的概念。', '--aliases', '[]', '--tags', '[]',
     '--revision', scopes.resourceRevisions.definitions], temporary));
@@ -110,8 +113,16 @@ try {
   assert.equal(opened.projectRoot, await realpath(workspace));
   assert.equal(opened.workspaceRoot, await realpath(join(workspace, '.game-graph')));
   assert.equal(await readFile(join(workspace, '.game-graph', 'workspace.json'), 'utf8'), manifestBefore);
+  const createdMechanic = JSON.parse(command(process.execPath, [cli, 'agent', 'mechanic', 'create', '--connect', origin,
+    '--project', workspace, '--project-generation', String(opened.projectGeneration), '--id', 'package-rules', '--name', '打包规则',
+    '--scope', '隔离验收', '--workspace-revision', opened.revision], temporary));
+  assert.equal(createdMechanic.canonicalCommitted, true);
+  const session = JSON.parse(command(process.execPath, [cli, 'agent', 'session', 'open', '--connect', origin,
+    '--project', workspace, '--project-generation', String(opened.projectGeneration), '--mechanic', 'package-rules'], temporary));
+  assert.equal(session.status, 'open');
   const online = JSON.parse(command(process.execPath, [cli, 'agent', 'concept', 'update', '--connect', origin,
-    '--project-generation', String(opened.projectGeneration), '--concept', 'package-focus', '--label', '在线打包专注',
+    '--project', workspace, '--project-generation', String(opened.projectGeneration), '--session', session.session,
+    '--concept', 'package-focus', '--label', '在线打包专注',
     '--revision', opened.resourceRevisions.definitions], temporary));
   assert.equal(online.canonicalCommitted, true);
   const afterOnline = await (await fetch(origin + '/api/workspace')).json();
@@ -122,7 +133,7 @@ try {
   assert.equal(lockResponse.status, 200);
   const afterLock = await (await fetch(origin + '/api/workspace')).json();
   const lockedMutation = await fetch(origin + '/api/agent/mutation', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ projectGeneration: afterLock.projectGeneration, revision: afterLock.resourceRevisions.definitions,
+    body: JSON.stringify({ projectRoot: workspace, projectGeneration: afterLock.projectGeneration, editSessionId: session.session, revision: afterLock.resourceRevisions.definitions,
       resource: 'concept', action: 'update', id: 'package-focus', label: '不应写入' }) });
   assert.equal(lockedMutation.status, 422);
   assert.equal((await lockedMutation.json()).error, 'CONCEPT_AGENT_LOCKED');

@@ -22,11 +22,13 @@ test('最近打开资源在项目工作区内持久化，并由嵌套 gitignore 
   const originalRevision = workspace.revision;
   const saved = await post(first.origin, '/api/local-ui-state', {
     projectSessionToken: workspace.projectSessionToken, projectGeneration: workspace.projectGeneration,
+    lastOpened: { kind: 'mechanic', id: workspace.mechanics[0].id },
     recentViews: ['view-recent'], recentMechanics: [workspace.mechanics[0].id],
   });
   assert.equal(saved.response.status, 200, JSON.stringify(saved.data));
   assert.deepEqual(saved.data.recentViews, ['view-recent']);
   assert.deepEqual(saved.data.recentMechanics, [workspace.mechanics[0].id]);
+  assert.deepEqual(saved.data.lastOpened, { kind: 'mechanic', id: workspace.mechanics[0].id });
   assert.equal((await (await fetch(first.origin + '/api/workspace')).json()).revision, originalRevision);
   assert.match(await readFile(join(projectRoot, '.game-graph/.gitignore'), 'utf8'), /^\.ui-state\.json$/m);
   await first.close();
@@ -36,4 +38,5 @@ test('最近打开资源在项目工作区内持久化，并由嵌套 gitignore 
   const restored = await (await fetch(second.origin + '/api/local-ui-state')).json();
   assert.deepEqual(restored.recentViews, ['view-recent']);
   assert.deepEqual(restored.recentMechanics, [workspace.mechanics[0].id]);
+  assert.deepEqual(restored.lastOpened, { kind: 'mechanic', id: workspace.mechanics[0].id });
 });

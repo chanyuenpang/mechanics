@@ -59,12 +59,13 @@ autoCloseEditorTabs = uiPreference('game-graph:auto-close-editor-tabs', false);
 const persistTabState = () => persistRecentState();
 let inspectorCollapsed = uiPreference('game-graph:inspector-collapsed', false);
 let hoverTooltipsEnabled = uiPreference('game-graph:hover-tooltips-enabled', true);
+let hoverTooltipsTemporarilyEnabled = false;
 let referencesCollapsed = uiPreference('game-graph:references-collapsed', false);
 // 导航页、筛选、目录展开和最近资源只属于本次浏览会话，不写入图文件。
 const sidebarState = {
   page: 'views', detailViewId: null, memberQuery: '',
   queries: { views: '', mechanics: '', recent: '' },
-  folders: new Set(), recentViews: [], recentMechanics: [],
+  folders: new Set(), recentViews: [], recentMechanics: [], lastOpened: null,
 };
 let recentStateWrite = Promise.resolve();
 const busy = () => opening || pending > 0;
@@ -285,7 +286,7 @@ function write(operation) {
   pending++; updateStatus();
   const result = writeQueue.then(async () => {
     const next = await operation(workspace.revision);
-    workspace = next;
+    workspace = next; renderSidebar();
     return next;
   });
   writeQueue = result.catch(() => {});
@@ -330,7 +331,7 @@ function updateStatus() {
   $('auto-layout').setAttribute('aria-label', layoutLabel);
   $('auto-layout').title = layoutHint;
   const tooltipToggle = $('toggle-information-bar');
-  const tooltipLabel = hoverTooltipsEnabled ? '关闭悬浮说明' : '开启悬浮说明';
+  const tooltipLabel = hoverTooltipsEnabled ? '关闭悬浮说明' : '开启悬浮说明（按住 Shift 可临时查看）';
   tooltipToggle.setAttribute('aria-pressed', String(hoverTooltipsEnabled));
   tooltipToggle.setAttribute('aria-label', tooltipLabel);
   tooltipToggle.title = tooltipLabel;
@@ -647,7 +648,7 @@ function persistRecentState() {
   // 关联项目只是在源项目会话中浏览；不允许它覆盖关联项目自己的本地状态。
   if (!workspace?.projectSessionToken || sourceProject?.projectRoot?.toLowerCase() !== workspace.projectRoot?.toLowerCase()) return;
   const projectSessionToken = workspace.projectSessionToken, projectGeneration = workspace.projectGeneration;
-  const payload = { recentViews: [...sidebarState.recentViews], recentMechanics: [...sidebarState.recentMechanics], openTabs: editorTabs
+  const payload = { lastOpened: sidebarState.lastOpened, recentViews: [...sidebarState.recentViews], recentMechanics: [...sidebarState.recentMechanics], openTabs: editorTabs
     .filter(tab => tab.projectRoot?.toLowerCase() === workspace.projectRoot.toLowerCase())
     .map(tab => ({ kind: tab.kind, id: tab.id })) };
   recentStateWrite = recentStateWrite.catch(() => {}).then(async () => {
@@ -661,6 +662,8 @@ async function restoreRecentState() {
   const viewIds = new Set(workspace.views.map(item => item.id)), mechanicIds = new Set(workspace.mechanics.map(item => item.id));
   sidebarState.recentViews = state.recentViews.filter(id => viewIds.has(id));
   sidebarState.recentMechanics = state.recentMechanics.filter(id => mechanicIds.has(id));
+  sidebarState.lastOpened = state.lastOpened && (state.lastOpened.kind === 'view' ? viewIds : mechanicIds).has(state.lastOpened.id)
+    ? state.lastOpened : null;
   editorTabs.splice(0, editorTabs.length, ...state.openTabs.filter(tab => (tab.kind === 'view' ? viewIds : mechanicIds).has(tab.id)).map(tab => ({ ...tab, projectSessionToken: workspace.projectSessionToken, projectRoot: workspace.projectRoot,
     name: (tab.kind === 'view' ? workspace.views : workspace.mechanics).find(item => item.id === tab.id)?.name ?? tab.id, projectName: workspace.manifest.name })));
 }
@@ -801,6 +804,16 @@ function renderSidebar() {
   $('workspace-path').textContent = primary.projectRoot.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1) || '本地项目';
   $('workspace-name').title = primary.manifest.name + '\n项目：' + primary.projectRoot
     + '\n工作区：' + primary.workspaceRoot + '\nAgent 机制文档：' + primary.agentExportRoot;
+  const exportStatus = $('export-publication-status'), publication = browsing.exportPublication;
+  exportStatus.replaceChildren(); exportStatus.hidden = !publication || publication.state === 'current';
+  if (!exportStatus.hidden) {
+    exportStatus.append(el('span', publication.message ?? '机制文档尚未发布。'));
+    const recover = button(publication.state === 'unconfigured' || publication.state === 'unavailable' ? '打开项目设置' : '打开导出设置并生成', async () => {
+      if (publication.state === 'unconfigured' || publication.state === 'unavailable') return configureProject();
+      await openDocs();
+    });
+    exportStatus.append(recover);
+  }
   const sameProject = browsing.projectRoot.toLowerCase() === workspace?.projectRoot?.toLowerCase();
   const draftWorkspace = { ...browsing, mechanics: browsing.mechanics.map(item => sameProject && item.id === activeId && draft && !definitionMode() ? draft : item) };
   const currentViewId = sameProject ? viewId : null, currentMechanicId = sameProject && !definitionMode() ? activeId : null;
@@ -887,7 +900,7 @@ function projection() {
 }
 function render(withInspector = true, { preserveRoutes = false } = {}) {
   if (!workspace) return Promise.resolve(false);
-  canvas.setTooltipsEnabled(hoverTooltipsEnabled);
+  canvas.setTooltipsEnabled(hoverTooltipsEnabled || hoverTooltipsTemporarilyEnabled);
   const table = definitionMode();
   $('stage').hidden = table; $('glossary').hidden = !table;
   if (table) {
@@ -1001,6 +1014,10 @@ function inspect() {
         }
         panel.append(qualifierActions);
       }
+      const customData = field(panel, '自定义文本（不参与建模）', originalEdge.customData ?? '', { multiline: true, onChange: value => edit(data => {
+        const item = data.edges.find(item => item.id === id); if (value) item.customData = value; else delete item.customData;
+      }, { inspect: false }) });
+      customData.maxLength = 16000;
       panel.append(button('删除此连线', () => removeSelection(), 'danger'));
     } else panel.append(el('p', '视图中的源规则只读；请打开对应机制文件编辑。', 'note'));
     edge.steps.forEach(step => {
@@ -1028,6 +1045,7 @@ function inspect() {
   detail(panel, '概念形态', structure.shape);
   if (node.aliases?.length) detail(panel, '别名', node.aliases.join('、'));
   if (node.tags?.length) detail(panel, '标签', node.tags.join('、'));
+  if (node.customData) detail(panel, '自定义文本', node.customData);
   detail(panel, 'Agent 锁', node.agentLocked ? '已锁定；Agent 不能修改或删除此概念' : '未锁定');
   if (!legacy) panel.append(button('修改概念', () => editConcept(node.id)));
   if (draft && !draft.nodeIds.includes(node.id)) panel.append(button('引用到当前图层', () => edit(data => { data.nodeIds.push(node.id); })));
@@ -1314,9 +1332,9 @@ async function newGraph(defaultDirectory = 'mechanics') {
     await write(revision => api('/api/mechanics', { revision, document, file }));
     // 新文件已存在后，打开失败不能自动重复创建。
     try {
-      const candidate = await readOpening(api, { kind: 'mechanic', id: document.id });
+      const candidate = await readOpening(api, { kind: 'mechanic', id: document.id }, workspace);
       rememberCamera(); workspace = candidate.workspace; viewId = null; legacy = false;
-      assignLayer(document.id); assignSnapshot(candidate.snapshot); autosave.reset(); revealNewMechanic(document.id); render(); restoreCamera();
+      assignLayer(document.id); assignSnapshot(candidate.snapshot); sidebarState.lastOpened = { kind: 'mechanic', id: document.id }; persistRecentState(); autosave.reset(); revealNewMechanic(document.id); render(); restoreCamera();
     } catch (error) {
       $('dialog').close('cancel'); showError(new Error('机制文件已创建：' + file + '，但打开未完成。请重新读取，不要重复创建。\n' + error.message));
     }
@@ -1492,7 +1510,7 @@ async function autoLayout({ fitView = false } = {}) {
 autosave = new ViewAutosave(write, body => api('/api/save', body), state => { viewState = state; updateStatus(); });
 
 async function applyBrowsingWorkspace(opened, { restoreSourceState }) {
-  const candidate = prepareOpening(opened);
+  let candidate = prepareOpening(opened);
   if (workspace) rememberCamera();
   workspace = opened; viewId = candidate.viewId; legacy = candidate.legacy;
   $('concept-docs').hidden = true; $('stage').hidden = false;
@@ -1500,7 +1518,10 @@ async function applyBrowsingWorkspace(opened, { restoreSourceState }) {
   sidebarState.page = viewId !== null ? 'views' : 'mechanics'; sidebarState.detailViewId = null;
   sidebarState.queries.views = ''; sidebarState.queries.mechanics = ''; sidebarState.folders.clear();
   if (restoreSourceState) {
-    try { await restoreRecentState(); } catch (error) { console.warn('最近打开记录未恢复：', error); sidebarState.recentViews = []; sidebarState.recentMechanics = []; }
+    try {
+      await restoreRecentState();
+      if (sidebarState.lastOpened) candidate = prepareOpening(opened, sidebarState.lastOpened);
+    } catch (error) { console.warn('最近打开记录未恢复：', error); sidebarState.recentViews = []; sidebarState.recentMechanics = []; sidebarState.lastOpened = null; }
   }
   assignLayer(candidate.activeId); assignSnapshot(candidate.snapshot); graphHistory = null;
   rememberRecent(viewId !== null ? 'view' : 'mechanic', viewId ?? candidate.activeId);
@@ -1633,14 +1654,16 @@ async function openProject() {
 
 async function configureProject() {
   if (!workspace || busy() || !await guard()) return false;
-  let displayName, selectedPath = workspace.agentExportRoot, selectionLabel;
+  let displayName, selectedPath = workspace.agentExportStatus === 'available' ? workspace.agentExportRoot : workspace.projectRoot, selectionLabel;
   const report = error => { $('dialog-error').textContent = error.message; $('dialog-error').hidden = false; };
   return dialog('项目设置', container => {
     displayName = field(container, '显示名称', workspace.manifest.name, { required: true });
     const section = el('section', undefined, 'project-folder-setting');
     section.append(el('strong', '机制文档导出目录'));
     section.append(el('p', '供 Agent 阅读的生成文档目录。请选择项目内子文件夹。', 'note'));
-    selectionLabel = el('span', '当前选择：' + workspace.manifest.agentExportPath, 'selected-folder'); section.append(selectionLabel);
+    selectionLabel = el('span', workspace.manifest.agentExportPath ? '当前选择：' + workspace.manifest.agentExportPath : '尚未配置导出目录', 'selected-folder'); section.append(selectionLabel);
+    const publication = workspace.exportPublication;
+    if (publication && publication.state !== 'current') section.append(el('p', publication.message ?? '机制文档尚未发布。请修复目录后显式生成。', 'note'));
     section.append(folderPicker({ initialPath: selectedPath, rootPath: workspace.projectRoot, selectLabel: '从项目目录选择…', onSelect: absolutePath => {
       selectedPath = absolutePath; selectionLabel.textContent = '当前选择：' + relativeProjectPath(workspace.projectRoot, absolutePath);
     }, onError: report }));
@@ -1695,11 +1718,15 @@ async function load(requestedId, { reload = false, allowLegacy = false, project 
   canvas.cancel(); opening = true; updateStatus();
   try {
     // 读取、校验叠加与记录最近打开全部确认后，才替换当前画面和草稿。
-    const candidate = await readOpening((path, body) => apiForProject(project, path, body), requestedId);
+    const sameProject = !reload && workspace?.projectSessionToken === project?.projectSessionToken;
+    const candidate = await readOpening((path, body) => apiForProject(project, path, body), requestedId, sameProject ? workspace : null);
     if (!first) rememberCamera();
     workspace = candidate.workspace; viewId = candidate.viewId; legacy = candidate.legacy;
     $('concept-docs').hidden = true; $('stage').hidden = false;
     assignLayer(candidate.activeId); assignSnapshot(candidate.snapshot); graphHistory = null;
+    sidebarState.lastOpened = viewId !== null ? { kind: 'view', id: viewId }
+      : candidate.activeId ? { kind: 'mechanic', id: candidate.activeId } : null;
+    persistRecentState();
     autosave.reset(); $('startup-help').hidden = true; $('error').hidden = true; await render(); renderProjectTabs(); refreshReferenceProjects().catch(showError); rememberEditorTab(candidate);
     // 文件打开是明确的视口定位操作：始终以当前可见节点为准，不恢复可能停在空白区域的旧相机。
     canvas.fit();
@@ -1731,7 +1758,7 @@ async function newView({ fromLegacy = false } = {}) {
       const next = await createAndRememberView(api, workspace.revision, document, file);
       const candidate = prepareOpening(next, document.id);
       rememberCamera(); workspace = next; viewId = document.id; legacy = false;
-      assignLayer(null); assignSnapshot(candidate.snapshot); autosave.reset(); $('error').hidden = true; await render(); canvas.fit();
+      assignLayer(null); assignSnapshot(candidate.snapshot); sidebarState.lastOpened = { kind: 'view', id: document.id }; persistRecentState(); autosave.reset(); $('error').hidden = true; await render(); canvas.fit();
     } catch (error) {
       if (['VIEW_CREATED_UNBOUND', 'SAVE_UNCERTAIN'].includes(error.code)) {
         autosave.pause(error); $('dialog').close('cancel'); showError(error); return false;
@@ -1844,7 +1871,7 @@ $('auto-layout').onclick = () => autoLayout({ fitView: true }).catch(showError);
 $('toggle-information-bar').onclick = () => {
   hoverTooltipsEnabled = !hoverTooltipsEnabled;
   saveUiPreference('game-graph:hover-tooltips-enabled', hoverTooltipsEnabled);
-  canvas.setTooltipsEnabled(hoverTooltipsEnabled); updateStatus();
+  canvas.setTooltipsEnabled(hoverTooltipsEnabled || hoverTooltipsTemporarilyEnabled); updateStatus();
 };
 $('zoom-in').onclick = () => canvas.zoom(1.2); $('zoom-out').onclick = () => canvas.zoom(1 / 1.2);
 const closeSidebar = () => document.body.classList.add('sidebar-hidden');
@@ -1874,6 +1901,10 @@ window.addEventListener('beforeunload', event => {
   if (dirty() || conceptEditDirty || busy() || autosave.blocked || referenceSession?.commit || referenceSession?.form || referenceSession?.selected.size) { event.preventDefault(); event.returnValue = ''; }
 });
 document.addEventListener('keydown', event => {
+  if (event.key === 'Shift' && !hoverTooltipsEnabled) {
+    hoverTooltipsTemporarilyEnabled = true;
+    canvas.setTooltipsEnabled(true);
+  }
   if (event.key === 'Escape' && matchMedia('(max-width: 700px)').matches && !document.body.classList.contains('sidebar-hidden')) {
     closeSidebar(); $('toggle-sidebar').focus(); return;
   }
@@ -1890,6 +1921,15 @@ document.addEventListener('keydown', event => {
   if (event.key.toLowerCase() === 'v') setMode('select');
   if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); void removeSelection().catch(showError); }
 });
+const restorePersistentTooltipPreference = () => {
+  if (!hoverTooltipsTemporarilyEnabled) return;
+  hoverTooltipsTemporarilyEnabled = false;
+  canvas.setTooltipsEnabled(hoverTooltipsEnabled);
+};
+document.addEventListener('keyup', event => {
+  if (event.key === 'Shift') restorePersistentTooltipPreference();
+});
+window.addEventListener('blur', restorePersistentTooltipPreference);
 // 首次加载也属于打开文件：旧缓存失效后固定节点补算，并保存新版路线快照。
 opening = true; updateStatus();
 try {

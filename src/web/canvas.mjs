@@ -1,4 +1,6 @@
 import { graphGeometryKey } from './route-cache.mjs';
+import { SNAP_GRID } from './layout-structure.mjs';
+import { affectedRouteIds } from './local-routing.mjs';
 
 export { graphGeometryKey } from './route-cache.mjs';
 
@@ -64,7 +66,6 @@ const ROUTE_READABLE_GAP = 48;
 const ROUTE_DETOUR_BAND = ROUTE_READABLE_GAP * 4;
 const ROUTE_CORNER = 12;
 const ENDPOINT_SEGMENT_MIN = 30;
-const SNAP_GRID = 20;
 const PORT_MARGIN = 12;
 const PORT_GAP = 12;
 const PORT_ANCHOR_DISTANCE = ROUTE_PADDING + 12;
@@ -2024,6 +2025,7 @@ export class GraphCanvas {
     this.routed = new Map(); this.routeArchive = new Map(); this.nodeElements = new Map(); this.edgeElements = new Map(); this.geometryKey = null;
     this.tooltip = root.parentElement?.querySelector('#canvas-tooltip') ?? null;
     this.tooltipsEnabled = true;
+    this.tooltipPointer = null;
     root.addEventListener('wheel', event => {
       event.preventDefault(); const rect = root.getBoundingClientRect();
       this.zoom(Math.exp(-event.deltaY * .0015), event.clientX - rect.left, event.clientY - rect.top);
@@ -2053,9 +2055,19 @@ export class GraphCanvas {
   tooltipTarget(event) { return event.target?.closest?.('[data-node],[data-edge]') ?? null; }
   setTooltipsEnabled(enabled) {
     this.tooltipsEnabled = Boolean(enabled);
-    if (!this.tooltipsEnabled && this.tooltip) this.tooltip.hidden = true;
+    if (!this.tooltipsEnabled) {
+      if (this.tooltip) this.tooltip.hidden = true;
+      return;
+    }
+    if (this.tooltipPointer) this.showTooltip(this.tooltipPointer);
   }
   showTooltip(event) {
+    this.tooltipPointer = {
+      target: event.target,
+      pointerType: event.pointerType,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    };
     if (!this.tooltipsEnabled || event.pointerType && event.pointerType !== 'mouse') return;
     const target = this.tooltipTarget(event), text = target?.dataset.tooltip?.trim();
     if (!this.tooltip || !text) return;
@@ -2064,6 +2076,7 @@ export class GraphCanvas {
   hideTooltip(event) {
     if (!this.tooltip || event.pointerType && event.pointerType !== 'mouse') return;
     if (this.tooltipTarget(event) === this.tooltipTarget({ target: event.relatedTarget })) return;
+    this.tooltipPointer = null;
     this.tooltip.hidden = true;
   }
   moveTooltip(event) {
@@ -2093,6 +2106,10 @@ export class GraphCanvas {
         return route ? [[edge.id, route]] : [];
       }));
       this.routed = preserved;
+    }
+    if (primed) { this.unsettledRouteIds = new Set(); this.routingErrorMessage = null; }
+    else if (geometryChanged && !preserveRoutes) {
+      this.unsettledRouteIds = new Set(affectedRouteIds(graph, positions, this.routed, pendingMove?.ids ?? []));
     }
     this.geometryKey = nextKey; this.draw({ reroute: false });
     if (!graph.edges.length) { this.routed = new Map(); return Promise.resolve(true); }
@@ -2127,11 +2144,13 @@ export class GraphCanvas {
           return this.callbacks.commitGeometry({ baseGeometryKey: geometryKey, persistRouteCache, ...result });
         }
         this.routed = new Map(result.routes); this.lastRouting = { edgeIds: result.edgeIds, full: result.full };
+        this.unsettledRouteIds = new Set();
         for (const [id, route] of this.routed) this.routeArchive.set(id, route);
         this.routingErrorMessage = null; this.draw({ reroute: false }); return true;
       })
       .catch(error => {
         if (error?.name === 'AbortError' || error?.code === 'COMPUTE_CANCELLED') return false;
+        if (this.geometryKey !== geometryKey) return false;
         if (this.routingErrorMessage !== error.message) {
           this.routingErrorMessage = error.message; this.callbacks.routeError?.(error);
         }
@@ -2303,6 +2322,8 @@ export class GraphCanvas {
     }
     for (const ids of parallel.values()) ids.sort();
     for (const edge of projection.edges) {
+      // 松手后的旧线不能充当新坐标下的正式路线；失败时继续隐藏并显示错误。
+      if (this.unsettledRouteIds?.has(edge.id)) continue;
       const a = positions[edge.source], b = positions[edge.target]; if (!a || !b) continue;
       const siblings = parallel.get([edge.source, edge.target].sort().join('/'));
       const offset = (siblings.indexOf(edge.id) - (siblings.length - 1) / 2) * 34;

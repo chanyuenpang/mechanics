@@ -1,7 +1,7 @@
 {
   "name": "game-graph",
-  "version": "0.7.0",
-  "private": true,
+  "version": "0.7.1",
+  "private": false,
   "description": "独立的游戏规则因果与包含关系图分析工具",
   "type": "module",
   "bin": {
@@ -9,16 +9,23 @@
   },
   "files": [
     "src/",
+    "workspace-tools/",
     "schemas/",
     "skills/",
     "docs/",
     "examples/",
     "!examples/card-game/.game-graph/.game-graph.lock",
+    "!examples/**/.agents/",
+    "!examples/**/.rule-text-backup-*/",
+    "!examples/**/game-mechanics/",
     "README.md"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/chanyuenpang/game-graph.git"
+    "url": "git+https://github.com/chanyuenpang/game-graph.git"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "engines": {
     "node": ">=24"
@@ -28,7 +35,8 @@
     "validate": "node src/server/cli.mjs validate",
     "test": "node --test",
     "check": "node scripts/check.mjs",
-    "check:package": "node scripts/check-package.mjs"
+    "check:package": "node scripts/check-package.mjs",
+    "release:check": "npm run check && npm run check:package"
   },
   "dependencies": {
     "ajv": "^8.17.1",

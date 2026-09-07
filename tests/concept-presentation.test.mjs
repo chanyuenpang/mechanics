@@ -7,15 +7,10 @@ const nodes = [
   { id: 'enemy', label: '敌人' },
 ];
 
-test('基础与限定概念列表摘要明确展示结构和引用', () => {
-  assert.deepEqual(conceptStructurePresentation(nodes[0], nodes), { shape: '基础概念', summary: '基础概念', base: null, qualifiers: [] });
-  const qualified = { id: 'damage-enemy', label: '对敌伤害', baseConceptId: 'damage', qualifiers: [
-    { key: 'target', value: { kind: 'concept', conceptId: 'enemy' } },
-  ] };
-  assert.deepEqual(conceptStructurePresentation(qualified, nodes), {
-    shape: '限定概念', summary: '限定概念 · 基础：伤害（damage） · target：概念 敌人（enemy）',
-    base: '伤害（damage）', qualifiers: ['target：概念 敌人（enemy）'],
-  });
+test('概念列表摘要不把规则端点限定误写成概念分类', () => {
+  assert.deepEqual(conceptStructurePresentation(nodes[0], nodes), { shape: '概念', summary: '概念', base: null, qualifiers: [] });
+  assert.deepEqual(conceptStructurePresentation({ ...nodes[0], baseConceptId: 'damage', qualifiers: [{ key: 'target', value: { kind: 'concept', conceptId: 'enemy' } }] }, nodes),
+    { shape: '概念', summary: '概念', base: null, qualifiers: [] });
 });
 
 test('限定 literal 展示四类明确类型和值', () => {
@@ -28,13 +23,9 @@ test('限定 literal 展示四类明确类型和值', () => {
   for (const [qualifier, expected] of cases) assert.equal(qualifierPresentation(qualifier, nodes), expected);
 });
 
-test('详情展示缺失引用 ID 而不猜测名称', () => {
-  const qualified = { id: 'broken', label: '损坏限定', baseConceptId: 'missing-base', qualifiers: [
-    { key: 'target', value: { kind: 'concept', conceptId: 'missing-target' } },
-  ] };
-  const result = conceptStructurePresentation(qualified, nodes);
-  assert.equal(result.base, '缺失概念（ID：missing-base）');
-  assert.deepEqual(result.qualifiers, ['target：概念 缺失概念（ID：missing-target）']);
+test('规则端点限定的缺失引用仍显式展示 ID', () => {
+  assert.equal(qualifierPresentation({ key: 'target', value: { kind: 'concept', conceptId: 'missing-target' } }, nodes),
+    'target：概念 缺失概念（ID：missing-target）');
 });
 
 test('概念编辑状态提供可见按钮与保存取消文案', () => {

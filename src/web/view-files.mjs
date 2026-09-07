@@ -1,7 +1,6 @@
 import { compose } from '../domain/graph.mjs';
 import { composeView, moveMechanic, registerMechanic, removeMechanic, setMechanicVisibility, visibleMechanicIds } from '../domain/view.mjs';
 
-const equal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const fail = message => { throw new Error(message); };
 const NODE_WIDTH = 166, NODE_HEIGHT = 62, GRID_X = 235, GRID_Y = 160;
 
@@ -99,26 +98,19 @@ export function prepareOpening(workspace, requestedId) {
         : structuredClone(snapshot), original, graph };
 }
 
-export async function readOpening(api, requestedId) {
-  let workspace = await api('/api/workspace');
-  let candidate = prepareOpening(workspace, requestedId);
-  const lastView = candidate.viewId === null ? candidate.snapshot : { viewId: candidate.viewId };
-  if (!candidate.legacy && !equal(workspace.manifest.lastView, lastView)) {
-    workspace = await api('/api/save', { revision: workspace.revision, kind: 'workspace', document: { ...workspace.manifest, lastView } });
-    candidate = prepareOpening(workspace, requestedId);
-  }
-  return candidate;
+export async function readOpening(api, requestedId, cachedWorkspace = null) {
+  // 同一项目内的资源切换只切换已验证快照；最近打开资源属于本地 UI 状态，
+  // 不能因此重读或改写 canonical workspace.json。
+  return prepareOpening(cachedWorkspace ?? await api('/api/workspace'), requestedId);
 }
 
 export async function createAndRememberView(api, revision, document, file) {
   const created = await api('/api/views', { revision, document, file });
   try {
     prepareOpening(created, document.id);
-    const next = await api('/api/save', { revision: created.revision, kind: 'workspace', document: { ...created.manifest, lastView: { viewId: document.id } } });
-    prepareOpening(next, document.id);
-    return next;
+    return created;
   } catch (cause) {
-    const error = new Error('视图文件已创建：' + file + '；最近打开记录未完成确认。不要重复创建，请重新读取后打开该文件。\n' + cause.message, { cause });
+    const error = new Error('视图文件已创建：' + file + '，但无法作为当前文件打开。不要重复创建，请重新读取后打开该文件。\n' + cause.message, { cause });
     error.code = 'VIEW_CREATED_UNBOUND';
     throw error;
   }

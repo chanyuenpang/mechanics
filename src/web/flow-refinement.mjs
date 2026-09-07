@@ -1,4 +1,4 @@
-import { leafHierarchy, modularHierarchy, groupBoundary, connectedComponents, layoutDirection } from './layout-structure.mjs';
+import { leafHierarchy, modularHierarchy, groupBoundary, connectedComponents, layoutDirection, SNAP_GRID } from './layout-structure.mjs';
 import { solveLayout, measureGeometry, qualityVector, MIN_ROUTE_SEGMENT, routeMeetsMinimum } from './hierarchical-layout.mjs';
 import { routeLocalGraph } from './local-routing.mjs';
 
@@ -15,10 +15,12 @@ export function flowMetrics(graph, geometry) {
   let backwardEdges = 0, backwardLength = 0;
   const routes = new Map(geometry.routes);
   for (const edge of graph.edges) {
-    if (isBackward(edge, geometry.positions)) backwardEdges++;
-    const points = routes.get(edge.id)?.points ?? [], sign = edge.sign === -1 ? -1 : 1;
-    // 负边向左符合布局方向；只评价水平位移，竖直段始终不计入逆向长度。
-    for (let i = 1; i < points.length; i++) backwardLength += Math.max(0, sign * (points[i - 1].x - points[i].x));
+    for (const member of edge.bundleMembers ?? [edge]) {
+      if (isBackward(member, geometry.positions)) backwardEdges++;
+      const points = routes.get(edge.id)?.points ?? [], sign = (member.sign === -1 ? -1 : 1) * (member.source === edge.source ? 1 : -1);
+      // 合并通道只减少求解数量，水平朝向仍逐条评价真实关系，竖直段不计入逆向长度。
+      for (let i = 1; i < points.length; i++) backwardLength += Math.max(0, sign * (points[i - 1].x - points[i].x));
+    }
   }
   return { backwardEdges, backwardLength: Math.round(backwardLength * 100) / 100 };
 }
@@ -53,6 +55,60 @@ export function flowSubtrees(graph) {
 
 function quality(graph, geometry) {
   return { ...measureGeometry(graph, geometry), ...flowMetrics(graph, geometry) };
+}
+
+// 每个独立区域先尝试就近吸附，再逐步放大间距；卡片尺寸不变，沿原侧面接回端口。
+// 每次都从原几何生成候选，避免累积吸附误差；只提交通过审计的最小放大比例。
+export function snapLayoutToGrid(graph, geometry) {
+  const before = measureGeometry(graph, geometry);
+  if (qualityVector(before)[0]) throw new Error('自动排版吸附前的几何无效，未提交。');
+  if (Object.values(geometry.positions).every(p => p.x % SNAP_GRID === 0 && p.y % SNAP_GRID === 0)
+    && geometry.routes.every(([, route]) => routeMeetsMinimum(route.points))) return geometry;
+  const snap = value => Math.round(value / SNAP_GRID) * SNAP_GRID, routes = new Map(geometry.routes);
+  const origin = { x: Math.min(...Object.values(geometry.positions).map(p => p.x)),
+    y: Math.min(...Object.values(geometry.positions).map(p => p.y)) };
+  const attempts = [];
+  for (let step = 0; step <= 10; step++) {
+    const factor = 1 + step * 0.05;
+    const scale = p => ({ x: origin.x + (p.x - origin.x) * factor, y: origin.y + (p.y - origin.y) * factor });
+    const positions = Object.fromEntries(graph.nodes.map(node => {
+      const p = geometry.positions[node.id], center = scale({ x: p.x + W / 2, y: p.y + H / 2 });
+      return [node.id, { x: snap(center.x - W / 2), y: snap(center.y - H / 2) }];
+    }));
+    const candidate = { ...geometry, positions, routes: [] }; let blockedEdge = null;
+    for (const edge of graph.edges) {
+      const old = routes.get(edge.id).points, points = old.map(scale), ports = [];
+      for (const [role, i, adjacent] of [['source', 0, 1], ['target', old.length - 1, old.length - 2]]) {
+        const p = positions[edge[role]], original = geometry.positions[edge[role]];
+        const horizontal = Math.abs(old[i].y - old[adjacent].y) < EPS;
+        const port = { x: p.x + old[i].x - original.x, y: p.y + old[i].y - original.y };
+        const axis = horizontal ? 'y' : 'x', size = horizontal ? H : W;
+        port[axis] = Math.max(p[axis], Math.min(p[axis] + size, scale(old[i])[axis]));
+        ports.push({ port, p, horizontal }); points[i] = port;
+        if (old.length > 2) points[adjacent][horizontal ? 'y' : 'x'] = port[horizontal ? 'y' : 'x'];
+      }
+      // 原直线继续使用同一条直线，端口只在两端侧面的共同区间内移动。
+      if (old.length === 2) {
+        const axis = ports[0].horizontal ? 'y' : 'x', size = ports[0].horizontal ? H : W;
+        const lo = Math.max(...ports.map(p => p.p[axis])), hi = Math.min(...ports.map(p => p.p[axis] + size));
+        if (lo > hi) { blockedEdge = edge.id; break; }
+        points[0][axis] = points[1][axis] = Math.max(lo, Math.min(hi, (ports[0].port[axis] + ports[1].port[axis]) / 2));
+      }
+      // 端口接回不能把短中间段翻到另一边，否则可能改变原折线的转弯形状。
+      if (points.some((p, i) => i > 0 && ['x', 'y'].some(axis => {
+        const delta = old[i][axis] - old[i - 1][axis];
+        return Math.abs(delta) > EPS && delta * (p[axis] - points[i - 1][axis]) <= 0;
+      }))) { blockedEdge = edge.id; break; }
+      candidate.routes.push([edge.id, { points }]);
+    }
+    if (blockedEdge) { attempts.push({ factor, blockedEdge }); continue; }
+    const after = measureGeometry(graph, candidate);
+    const shortEdges = candidate.routes.filter(([, route]) => !routeMeetsMinimum(route.points)).map(([id]) => id);
+    if (!qualityVector(after)[0] && !shortEdges.length && after.crossings <= before.crossings
+      && after.contacts <= before.contacts && after.overlaps <= before.overlaps + EPS) return candidate;
+    attempts.push({ factor, metrics: after, shortEdges });
+  }
+  throw Object.assign(new Error('自动排版放大并吸附后未通过几何检查，未提交。'), { attempts });
 }
 
 // 对一个独立区域按 x 从左往右反复收紧；节点、端口与拐点共用坐标约束。
@@ -171,15 +227,16 @@ async function iterateFlow(graph, geometry, { ELK, engine, rounds = 2, candidate
     let winner;
     const ranked = groups.map(group => {
       const related = graph.edges.filter(edge => group.internal.includes(edge.id) || group.boundary.some(item => item.edgeId === edge.id));
-      const backward = related.filter(edge => isBackward(edge, current.positions)).length;
+      const backward = related.flatMap(edge => edge.bundleMembers ?? [edge]).filter(edge => isBackward(edge, current.positions)).length;
       return { ...group, backward };
     }).filter(group => group.backward > 0).sort((a, b) => a.members.length - b.members.length
       || a.boundary.length - b.boundary.length || b.backward - a.backward).slice(0, candidateLimit);
     for (const group of ranked) {
       const ids = new Set(group.members), oldBounds = bounds(group.members, current.positions);
       const outside = graph.nodes.filter(node => !ids.has(node.id));
-      const outputs = group.boundary.filter(edge => ids.has(layoutDirection(edges.get(edge.edgeId)).source)).length;
-      const left = outputs >= group.boundary.length - outputs;
+      const boundary = group.boundary.flatMap(edge => edges.get(edge.edgeId).bundleMembers ?? [edges.get(edge.edgeId)]);
+      const outputs = boundary.filter(edge => ids.has(layoutDirection(edge).source)).length;
+      const left = outputs >= boundary.length - outputs;
       const neighborIds = [...new Set(group.boundary.map(edge => edge.outside))];
       const neighborBounds = neighborIds.length ? bounds(neighborIds, current.positions) : oldBounds;
       const shapes = [shapeGeometry(graph, current, group.members, false), shapeGeometry(graph, current, group.members, true)];
@@ -191,7 +248,12 @@ async function iterateFlow(graph, geometry, { ELK, engine, rounds = 2, candidate
           { x: point.x - localBounds.left, y: point.y - localBounds.top }])),
           routes: arranged.geometry.routes.map(([id, route]) => [id, { points: route.points.map(point => ({ x: point.x - localBounds.left, y: point.y - localBounds.top })) }]) });
       }
+      // 单节点镜像与原形完全相同；相同子图形状只搜索一次，保留首次候选和原有择优规则。
+      const seenShapes = new Set();
       for (const shape of shapes) {
+        const shapeKey = JSON.stringify(shape);
+        if (seenShapes.has(shapeKey)) continue;
+        seenShapes.add(shapeKey);
         const size = bounds(group.members, shape.positions);
         const x = left ? neighborBounds.left - size.right - 80 : neighborBounds.right + 80;
         // 小图本身也可作为一块翻转或重排；没有外部连接时留在原区域。
@@ -201,7 +263,10 @@ async function iterateFlow(graph, geometry, { ELK, engine, rounds = 2, candidate
           targets.push({ x, y: oldBounds.top },
             { x: left ? outer.left - size.right - 80 : outer.right + 80, y: oldBounds.top });
         }
+        const seenTargets = [];
         for (const target of targets) {
+          if (seenTargets.some(previous => Object.is(previous.x, target.x) && Object.is(previous.y, target.y))) continue;
+          seenTargets.push(target);
           const shift = point => ({ x: point.x + target.x, y: point.y + target.y });
           const localPositions = Object.fromEntries(Object.entries(shape.positions).map(([id, point]) => [id, shift(point)]));
           // 方向纠正只调整横坐标；初始联合排版拥有纵向安排，不用上下挪位换取方向收益。
@@ -209,7 +274,7 @@ async function iterateFlow(graph, geometry, { ELK, engine, rounds = 2, candidate
           for (const id of group.members) localPositions[id].y = current.positions[id].y;
           if (Object.values(localPositions).some(point => outside.some(node => collides(point, current.positions[node.id])))) continue;
           const positions = { ...current.positions, ...localPositions };
-          if (graph.edges.filter(edge => isBackward(edge, positions)).length >= currentQuality.backwardEdges) continue;
+          if (flowMetrics(graph, { positions, routes: [] }).backwardEdges >= currentQuality.backwardEdges) continue;
           const routes = new Map(current.routes);
           for (const [id, route] of shape.routes) routes.set(id, { points: route.points.map(shift) });
           let result;

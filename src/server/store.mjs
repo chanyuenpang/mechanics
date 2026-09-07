@@ -8,7 +8,7 @@ import { assertDocument, validateWorkspace, ContractError } from '../domain/vali
 import { composeView } from '../domain/view.mjs';
 import { documentExportStructure } from '../domain/document-export.mjs';
 import { readQuerySnapshot } from './query-snapshot.mjs';
-import { assertCatalogRemovable, publishCatalog, removeCatalog } from './catalog.mjs';
+import { assertCatalogRemovable, inspectCatalogPublication, publishCatalog, removeCatalog } from './catalog.mjs';
 import { projectContext } from './project-context.mjs';
 import { applyAgentMutation } from './agent-mutation.mjs';
 import { semanticRuleId } from '../domain/identity.mjs';
@@ -46,13 +46,41 @@ export async function createWorkspaceStore(workspaceRoot) {
     try { return await readWorkspace(root); }
     catch (error) { fail('SAVE_UNCERTAIN', '提交后工作区回读失败：' + error.message + '。请核实磁盘内容。'); }
   };
+  // catalog 是 canonical 的派生读模型。保存后无论发布是否可用，都要把两项事实并列返回；
+  // 不能让一个可重建目录的 I/O 失败阻断已经成功提交的规则资料。
+  const exportPublication = (workspace, error = null) => {
+    if (workspace.agentExportStatus === 'unconfigured') return { state: 'unconfigured', code: 'EXPORT_ROOT_UNCONFIGURED',
+      message: '尚未配置 Agent 机制文档导出目录。', actions: ['choose-path'] };
+    if (workspace.agentExportStatus === 'missing') return { state: 'missing', code: 'EXPORT_ROOT_MISSING',
+      message: 'Agent 机制文档导出目录不存在；规则已保存，但文档尚未生成。', path: workspace.agentExportRoot,
+      actions: ['create-and-publish', 'choose-path'] };
+    if (workspace.agentExportStatus === 'unavailable') return { state: 'unavailable',
+      code: workspace.agentExportError?.code ?? 'EXPORT_TARGET_UNAVAILABLE',
+      message: workspace.agentExportError?.message ?? 'Agent 机制文档导出目录不可用。', actions: ['choose-path'] };
+    if (error) return { state: 'failed', code: error.code ?? 'AGENT_EXPORT_FAILED',
+      message: '规则已保存，但 Agent 机制文档发布失败：' + error.message, path: workspace.agentExportRoot,
+      actions: ['republish', 'choose-path'] };
+    return { state: 'current', path: workspace.agentExportRoot };
+  };
+  const withExportPublication = (workspace, publication) => ({ ...workspace, exportPublication: publication });
+  const inspectExportPublication = async workspace => {
+    const declared = exportPublication(workspace);
+    if (declared.state !== 'current') return declared;
+    const inspected = await inspectCatalogPublication(workspace.agentExportRoot, workspace);
+    return inspected.state === 'current' ? declared : { ...declared, ...inspected, path: workspace.agentExportRoot,
+      actions: ['republish', 'choose-path'] };
+  };
+  const publishAfterCommit = async workspace => {
+    const baseline = await verified();
+    const unavailable = exportPublication(baseline);
+    if (unavailable.state !== 'current') return withExportPublication(baseline, unavailable);
+    try { await publishCatalog(baseline.agentExportRoot, baseline); }
+    catch (error) { return withExportPublication(baseline, exportPublication(baseline, error)); }
+    return withExportPublication(await verified(), exportPublication(baseline));
+  };
   const refreshCatalog = async () => {
     const canonical = await readWorkspace(root);
-    try { await publishCatalog(canonical.agentExportRoot, canonical); }
-    catch (error) {
-      fail('AGENT_EXPORT_FAILED', 'canonical 资料已保存，但 Agent 机制文档发布失败：' + error.message);
-    }
-    return verified();
+    return publishAfterCommit(canonical);
   };
   const mechanicFolder = value => {
     if (typeof value !== 'string') fail('UNSAFE_PATH', '机制文件夹必须是字符串');
@@ -206,7 +234,8 @@ export async function createWorkspaceStore(workspaceRoot) {
     const file = `${mechanicDirectory(folder)}/${body.id}.mechanic.json`;
     const committed = await create('mechanic', { revision: body.revision, document, file, requireExistingFolder: true });
     return { canonicalCommitted: true, workspaceId: committed.manifest.id, revision: committed.revision,
-      resourceRevision: committed.resourceRevisions.mechanics[body.id], resource: 'mechanic', action: 'create', id: body.id, folder };
+      resourceRevision: committed.resourceRevisions.mechanics[body.id], resource: 'mechanic', action: 'create', id: body.id, folder,
+      exportPublication: committed.exportPublication };
   };
   const agentMechanicDelete = async body => {
     if (body?.action !== 'delete' || typeof body.mechanic !== 'string') fail('AGENT_MUTATION_INVALID', 'Agent 删除机制必须提供 mechanic delete 和 --mechanic');
@@ -216,7 +245,7 @@ export async function createWorkspaceStore(workspaceRoot) {
     }
     const committed = await deleteMechanic({ revision: before.revision, mechanicId: body.mechanic });
     return { canonicalCommitted: true, workspaceId: committed.manifest.id, revision: committed.revision,
-      resource: 'mechanic', action: 'delete', id: body.mechanic };
+      resource: 'mechanic', action: 'delete', id: body.mechanic, exportPublication: committed.exportPublication };
   };
   const agentViewDelete = body => write(async () => {
     if (body?.action !== 'delete' || typeof body.view !== 'string') fail('AGENT_MUTATION_INVALID', 'Agent 删除视图必须提供 view delete 和 --view');
@@ -253,7 +282,8 @@ export async function createWorkspaceStore(workspaceRoot) {
     await commitFile(root, file, encode(mechanic));
     const committed = await refreshCatalog();
     return { canonicalCommitted: true, workspaceId: committed.manifest.id, revision: committed.revision,
-      resourceRevision: committed.resourceRevisions.mechanics[mechanic.id], resource: 'mechanic', action: 'arrange', id: mechanic.id };
+      resourceRevision: committed.resourceRevisions.mechanics[mechanic.id], resource: 'mechanic', action: 'arrange', id: mechanic.id,
+      exportPublication: committed.exportPublication };
   });
   // 规则归属迁移是唯一允许同时改动多个机制、删除旧机制并建立总览视图的 Agent 写入。
   // 输入仅声明“哪条既有规则归属哪个机制”；规则语义始终从来源机制的 canonical 边复制，
@@ -362,7 +392,8 @@ export async function createWorkspaceStore(workspaceRoot) {
         { canonicalCommitted: true, sourceMechanic: source.id, viewId: view.id });
     }
     return { canonicalCommitted: true, workspaceId: committed.manifest.id, revision: committed.revision, resource: 'mechanic', action: 'transfer',
-      sourceMechanic: source.id, targetMechanicIds: targetIds, viewId: view.id, ruleCount: source.edges.length };
+      sourceMechanic: source.id, targetMechanicIds: targetIds, viewId: view.id, ruleCount: source.edges.length,
+      exportPublication: committed.exportPublication };
   });
   const recipeMigrationPlan = async manifestPath => {
     const workspace = await readWorkspace(root);
@@ -456,14 +487,19 @@ export async function createWorkspaceStore(workspaceRoot) {
     assertDocument(manifest, 'workspace', 'workspace.json');
     workspace.manifest = manifest; validateWorkspace(workspace);
     await commitFile(root, 'workspace.json', encode(manifest));
-    return verified();
+    const committed = await verified();
+    return withExportPublication(committed, await inspectExportPublication(committed));
   });
   // 导出设置和生成是两个显式动作：重建文档只读取已保存的 canonical 范围，绝不借机改写 manifest。
   const generateDocumentExport = body => write(async () => {
     const workspace = await current(body?.revision);
+    if (!workspace.manifest.agentExportPath) fail('EXPORT_ROOT_UNCONFIGURED', '尚未配置 Agent 机制文档导出目录；请先在项目设置中选择目录。');
     try {
-      const catalog = await publishCatalog(workspace.agentExportRoot, workspace);
-      return { ...workspace, documentRevision: catalog.documentRevision,
+      // 这是用户明确的恢复/生成动作，才允许创建缺失目录。
+      const context = await projectContext(workspace.projectRoot, { manifest: workspace.manifest, createExportRoot: true });
+      const candidate = { ...workspace, agentExportRoot: context.exportRoot, agentExportStatus: 'available' };
+      const catalog = await publishCatalog(context.exportRoot, candidate);
+      return { ...candidate, exportPublication: { state: 'current', path: context.exportRoot }, documentRevision: catalog.documentRevision,
         documentCount: catalog.folders.length + catalog.mechanics.length + catalog.views.length };
     } catch (error) {
       fail('DOCUMENT_EXPORT_FAILED', '机制文档生成失败：' + error.message);
@@ -496,16 +532,51 @@ export async function createWorkspaceStore(workspaceRoot) {
       : committed.resourceRevisions.mechanics[target.id];
     const envelope = { canonicalCommitted: true, workspaceId: committed.manifest.id, revision: committed.revision,
       resourceRevision, resource: body.resource, action: body.action, ...(target.id ? { id: target.id } : {}) };
-    try { await publishCatalog(committed.agentExportRoot, committed); }
-    catch (error) {
-      fail('AGENT_EXPORT_FAILED', 'canonical 资料已保存，但 Agent 机制文档发布失败：' + error.message, envelope);
-    }
-    await verified();
-    return envelope;
+    const published = await publishAfterCommit(committed);
+    return { ...envelope, exportPublication: published.exportPublication };
     });
   };
+  // Agent 草稿只能在此处进入 canonical：它没有坐标，保存时必须重新校验、排版并一次提交定义与机制。
+  const saveAgentDraft = body => write(async () => {
+    if (!body || typeof body !== 'object' || typeof body.mechanic !== 'string' || !body.mechanic
+      || !body.definitions || !body.document) fail('AGENT_DRAFT_INVALID', '草稿保存必须提供定义、机制和目标机制 ID');
+    const workspace = await readWorkspace(root);
+    if (body.workspaceRevision !== workspace.revision) fail('REVISION_CONFLICT', '工作区已改变；草稿未覆盖正式文件，请重新 open 后合并。');
+    if (body.definitionsRevision !== workspace.resourceRevisions.definitions) fail('RESOURCE_REVISION_CONFLICT', '概念定义已改变；草稿未覆盖正式文件，请重新 open 后合并。');
+    if (body.mechanicRevision !== workspace.resourceRevisions.mechanics[body.mechanic]) fail('RESOURCE_REVISION_CONFLICT', `机制 ${body.mechanic} 已改变；草稿未覆盖正式文件，请重新 open 后合并。`);
+    const index = workspace.mechanics.findIndex(item => item.id === body.mechanic);
+    if (index < 0 || body.document.id !== body.mechanic || body.document.kind !== 'mechanic') fail('AGENT_DRAFT_SCOPE_MISMATCH', '草稿机制与 open 的目标不一致');
+    if (body.definitions.kind !== 'definitions' || body.definitions.workspaceId !== workspace.manifest.id || body.document.workspaceId !== workspace.manifest.id) {
+      fail('AGENT_DRAFT_SCOPE_MISMATCH', '草稿不属于当前工作区');
+    }
+    const definitionIds = new Set((body.definitions.nodes ?? []).map(node => node.id));
+    workspace.definitions = { ...body.definitions, positions: Object.fromEntries(Object.entries(workspace.definitions.positions ?? {})
+      .filter(([id]) => definitionIds.has(id))) };
+    workspace.mechanics[index] = { ...body.document, positions: {}, routeCache: undefined };
+    validateWorkspace(workspace);
+    const mechanic = workspace.mechanics[index], graph = compose(workspace, [mechanic.id]);
+    if (graph.nodes.length) {
+      let layout;
+      try { layout = await arrangeGraphWithRoutes({ graph, positions: graphPositions(workspace, graph, {}, mechanic.id), ELK, cola }); }
+      catch (error) { fail('MECHANIC_LAYOUT_FAILED', `机制 ${mechanic.id} 自动排版失败：${error.message}`); }
+      mechanic.positions = layout.positions;
+      mechanic.routeCache = createRouteCache(graph, layout.positions, layout.routes);
+    }
+    validateWorkspace(workspace);
+    const mechanicPath = workspace.files.find(file => file.kind === 'mechanic' && file.id === mechanic.id)?.path;
+    if (!mechanicPath) fail('AGENT_DRAFT_INVALID', '草稿目标机制文件不存在');
+    await commitFiles(root, [{ path: workspace.manifest.definitions, document: workspace.definitions }, { path: mechanicPath, document: mechanic }], { verify: () => readWorkspace(root) });
+    const committed = await verified();
+    const envelope = { canonicalCommitted: true, workspaceId: committed.manifest.id, revision: committed.revision,
+      definitionsRevision: committed.resourceRevisions.definitions, mechanicRevision: committed.resourceRevisions.mechanics[mechanic.id], mechanic: mechanic.id };
+    const published = await publishAfterCommit(committed);
+    return { ...envelope, exportPublication: published.exportPublication };
+  });
   return {
-    read: () => enqueue(() => readWorkspace(root)),
+    read: () => enqueue(async () => {
+      const workspace = await readWorkspace(root);
+      return withExportPublication(workspace, await inspectExportPublication(workspace));
+    }),
     readForQuery: () => enqueue(() => readQuerySnapshot(root)),
     save: body => write(async () => {
       const { revision, kind, id, document } = body;
@@ -539,6 +610,7 @@ export async function createWorkspaceStore(workspaceRoot) {
     deleteMechanic,
     createView: body => create('view', body),
     mutateAgent,
+    saveAgentDraft,
     recipeMigration,
     setProjectSettings,
     documentExportStructure: () => enqueue(async () => {

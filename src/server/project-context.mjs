@@ -62,7 +62,8 @@ export async function resolveAgentExportRoot(projectRoot, agentExportPath, { cre
   return path;
 }
 
-export async function projectContext(projectRoot, { requireWorkspace = true, createExportRoot = false, allowMissingExport = false, manifest = null } = {}) {
+export async function projectContext(projectRoot, { requireWorkspace = true, createExportRoot = false, allowMissingExport = false,
+  allowUnavailableExport = false, manifest = null } = {}) {
   const root = await canonicalProjectRoot(projectRoot);
   const workspaceRoot = resolve(root, WORKSPACE_DIRECTORY);
   inside(root, workspaceRoot);
@@ -82,12 +83,26 @@ export async function projectContext(projectRoot, { requireWorkspace = true, cre
     if (manifest?.schemaVersion !== 10) fail('WORKSPACE_VERSION_UNSUPPORTED', `只支持 Game-Graph 工作区 v10；当前为 v${String(manifest?.schemaVersion)}`);
     assertDocument(manifest, 'workspace', 'workspace.json');
   }
-  const agentExportPath = manifest?.agentExportPath ?? DEFAULT_AGENT_EXPORT_PATH;
-  const exportRoot = await resolveAgentExportRoot(root, agentExportPath, { create: createExportRoot, allowMissing: allowMissingExport });
-  if (workspaceRoot === exportRoot || workspaceRoot.startsWith(exportRoot + sep) || exportRoot.startsWith(workspaceRoot + sep)) {
-    fail('INVALID_EXPORT_PATH', 'Agent 机制文档目录不能与 .game-graph 重叠');
+  // 导出目录是 canonical 的派生投影目标；缺失配置不再悄悄回填默认目录。
+  // 新建工作区仍由 init 显式写入 DEFAULT_AGENT_EXPORT_PATH。
+  const agentExportPath = manifest?.agentExportPath;
+  if (agentExportPath === undefined) return { projectRoot: root, workspaceRoot, exportRoot: null, agentExportPath: null,
+    exportStatus: 'unconfigured' };
+  try {
+    const exportRoot = await resolveAgentExportRoot(root, agentExportPath, { create: createExportRoot, allowMissing: allowMissingExport });
+    if (workspaceRoot === exportRoot || workspaceRoot.startsWith(exportRoot + sep) || exportRoot.startsWith(workspaceRoot + sep)) {
+      fail('INVALID_EXPORT_PATH', 'Agent 机制文档目录不能与 .game-graph 重叠');
+    }
+    // allowMissingExport 只允许 canonical 读取继续；不把路径存在误报为已发布。
+    let exportStatus = 'available';
+    try { await ordinaryDirectory(exportRoot, 'Agent 机制文档目录'); }
+    catch (error) { if (error.code === 'ENOENT') exportStatus = 'missing'; else throw error; }
+    return { projectRoot: root, workspaceRoot, exportRoot, agentExportPath, exportStatus };
+  } catch (error) {
+    if (!allowUnavailableExport) throw error;
+    return { projectRoot: root, workspaceRoot, exportRoot: null, agentExportPath, exportStatus: 'unavailable',
+      exportError: { code: error.code ?? 'EXPORT_TARGET_UNAVAILABLE', message: error.message } };
   }
-  return { projectRoot: root, workspaceRoot, exportRoot, agentExportPath };
 }
 
 export async function projectRootFromWorkspace(workspaceRoot) {

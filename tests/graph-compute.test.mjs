@@ -5,7 +5,7 @@ import { computeGraphTask } from '../src/web/graph-compute-kernel.mjs';
 import cola from 'webcola';
 import ELK from 'elkjs/lib/elk.bundled.js';
 import { refineHierarchy, AUTO_LAYOUT_OPTIONS, measureGeometry, qualityVector } from '../src/web/hierarchical-layout.mjs';
-import { improveFlowBySubtrees, compactHorizontalRoutes } from '../src/web/flow-refinement.mjs';
+import { improveFlowBySubtrees, compactHorizontalRoutes, snapLayoutToGrid } from '../src/web/flow-refinement.mjs';
 import { createRouteCache, restoreRouteCache } from '../src/web/route-cache.mjs';
 
 test('正式整理返回共享算法与方向迭代的完整几何，复用并释放每阶段引擎', async () => {
@@ -13,16 +13,19 @@ test('正式整理返回共享算法与方向迭代的完整几何，复用并�
     edges: [['a', 'b'], ['c', 'b'], ['b', 'd'], ['d', 'c']].map(([source, target], i) => ({ id: 'edge-' + i, source, target })) };
   const base = await refineHierarchy(graph, { ...AUTO_LAYOUT_OPTIONS, ELK });
   const directed = await improveFlowBySubtrees(graph, base.geometry, { ELK });
-  const expected = compactHorizontalRoutes(graph, directed.geometry);
-  // 使用参考坐标使生产入口的整体平移为零，从而逐点比较完整输出。
-  const positions = expected.geometry.positions;
+  const expected = snapLayoutToGrid(graph, compactHorizontalRoutes(graph, directed.geometry).geometry);
+  // 独立区域会整体移回原位置；消去这次网格平移后逐点比较完整输出。
+  const positions = directed.geometry.positions;
   let created = 0, disposed = 0;
   class OwnedELK extends ELK { constructor() { super(); created++; } dispose() { disposed++; } }
   const result = await computeGraphTask({ kind: 'layout', payload: { graph, positions } }, { ELK: OwnedELK });
-  assert.deepEqual(result.positions, expected.geometry.positions);
-  assert.deepEqual(result.routes, expected.geometry.routes);
+  const dx = result.positions.a.x - expected.positions.a.x, dy = result.positions.a.y - expected.positions.a.y;
+  assert.ok(dx % 20 === 0 && dy % 20 === 0);
+  const shift = p => ({ x: p.x + dx, y: p.y + dy });
+  assert.deepEqual(result.positions, Object.fromEntries(Object.entries(expected.positions).map(([id, p]) => [id, shift(p)])));
+  assert.deepEqual(result.routes, expected.routes.map(([id, route]) => [id, { points: route.points.map(shift) }]));
   assert.ok(created >= 1 && created <= 2); assert.equal(disposed, created);
-  assert.deepEqual(restoreRouteCache(graph, positions, createRouteCache(graph, positions, result.routes)), new Map(result.routes));
+  assert.deepEqual(restoreRouteCache(graph, result.positions, createRouteCache(graph, result.positions, result.routes)), new Map(result.routes));
 });
 
 test('联合排版引擎失败仍释放资源，并把原始错误传出', async () => {

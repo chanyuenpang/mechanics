@@ -11,37 +11,11 @@ function workspace(nodes, edges = [], mechanics = null) {
     definitions: { schemaVersion: 4, kind: 'definitions', workspaceId: 'sample', nodes, positions: {} }, mechanics: graphs, views: [] };
 }
 
-const qualified = (id, baseConceptId, qualifiers) => ({ ...node(id), baseConceptId, qualifiers });
-
-test('基础与限定概念是互斥形态，且限定值只允许 concept 或 JSON 标量 literal', () => {
-  const base = node('damage');
-  const specialized = qualified('damage-to-target', 'damage', [{ key: 'target', value: { kind: 'concept', conceptId: 'target' } }, { key: 'critical', value: { kind: 'literal', value: true } }]);
-  validateWorkspace(workspace([base, node('target'), specialized]));
-  for (const mutate of [
-    value => { value.baseConceptId = 'damage'; },
-    value => { value.qualifiers = []; },
-    value => { value.qualifiers = [{ key: 'target', value: { kind: 'runtimeInstance', instanceId: 'x' } }]; },
-    value => { value.qualifiers = [{ key: 'target', value: { kind: 'literal', value: { unsupported: true } } }]; },
-  ]) {
-    const candidate = node('candidate'); mutate(candidate);
-    assert.throws(() => assertDocument({ schemaVersion: 4, kind: 'definitions', workspaceId: 'sample', nodes: [candidate], positions: {} }, 'definitions'), { code: 'INVALID_DOCUMENT' });
-  }
-});
-
-test('限定概念拒绝非法基础、悬空引用、重复 key 与规范化重复', () => {
-  const base = node('damage'), target = node('target');
-  const self = workspace([base, qualified('damage-self', 'damage-self', [{ key: 'target', value: { kind: 'concept', conceptId: 'target' } }]), target]);
-  assert.throws(() => validateWorkspace(self), { code: 'QUALIFIED_BASE_INVALID' });
-  const nested = qualified('damage-nested', 'damage', [{ key: 'target', value: { kind: 'concept', conceptId: 'target' } }]);
-  const wrongBase = workspace([base, target, nested, qualified('damage-illegal', 'damage-nested', [{ key: 'source', value: { kind: 'literal', value: 'x' } }])]);
-  assert.throws(() => validateWorkspace(wrongBase), { code: 'QUALIFIED_BASE_INVALID' });
-  const dangling = workspace([base, qualified('damage-dangling', 'damage', [{ key: 'target', value: { kind: 'concept', conceptId: 'missing' } }])]);
-  assert.throws(() => validateWorkspace(dangling), { code: 'QUALIFIER_CONCEPT_NOT_FOUND' });
-  const repeatedKey = workspace([base, target, qualified('damage-repeated-key', 'damage', [{ key: 'target', value: { kind: 'concept', conceptId: 'target' } }, { key: 'target', value: { kind: 'literal', value: 'target' } }])]);
-  assert.throws(() => validateWorkspace(repeatedKey), { code: 'QUALIFIER_KEY_DUPLICATE' });
-  const first = qualified('damage-first', 'damage', [{ key: 'target', value: { kind: 'concept', conceptId: 'target' } }, { key: 'critical', value: { kind: 'literal', value: true } }]);
-  const second = qualified('damage-second', 'damage', [{ key: 'critical', value: { kind: 'literal', value: true } }, { key: 'target', value: { kind: 'concept', conceptId: 'target' } }]);
-  assert.throws(() => validateWorkspace(workspace([base, target, first, second])), { code: 'QUALIFIED_CONCEPT_DUPLICATE' });
+test('概念不以限定词派生为新类型；限定词只属于规则端点', () => {
+  const definitions = { schemaVersion: 4, kind: 'definitions', workspaceId: 'sample', nodes: [node('damage'), node('target')], positions: {} };
+  assertDocument(definitions, 'definitions');
+  const graph = workspace(definitions.nodes, [{ ...influence('damage', 'target'), sourceQualifiers: [{ key: 'target-faction', value: { kind: 'literal', value: 'enemy' } }] }]);
+  validateWorkspace(graph);
 });
 
 test('specializes 仅允许无 sign 的有向 DAG，influence 必须显式 inheritance:none', () => {

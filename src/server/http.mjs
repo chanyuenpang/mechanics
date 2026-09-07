@@ -113,7 +113,7 @@ export async function startServer({ projectRoot = null, workspaceRoot = null, po
         }
         if (request.method === 'GET' && url.pathname === '/api/preferences') { send(200, await preferences.read()); return; }
         if (request.method === 'POST' && ['/api/directories/pick', '/api/project/open', '/api/project/select', '/api/project/reference-enter', '/api/project/preflight', '/api/project/settings', '/api/project/export-path', '/api/document-export/settings', '/api/document-export/generate', '/api/projects/pin',
-          '/api/projects/remove', '/api/save', '/api/local-ui-state', '/api/project-references/bind', '/api/project-references/declare', '/api/mechanics', '/api/mechanic-folders', '/api/mechanic-folder-move', '/api/mechanic-folder-delete', '/api/mechanic-move', '/api/mechanic-delete', '/api/views', '/api/preferences', '/api/agent/session', '/api/agent/mutation'].includes(url.pathname)) {
+          '/api/projects/remove', '/api/save', '/api/local-ui-state', '/api/project-references/bind', '/api/project-references/declare', '/api/mechanics', '/api/mechanic-folders', '/api/mechanic-folder-move', '/api/mechanic-folder-delete', '/api/mechanic-move', '/api/mechanic-delete', '/api/views', '/api/preferences', '/api/agent/session', '/api/agent/mutation', '/api/agent/draft'].includes(url.pathname)) {
           if (!(request.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
             send(415, { error: 'JSON_REQUIRED', message: '写入必须使用 application/json' }); return;
           }
@@ -147,6 +147,11 @@ export async function startServer({ projectRoot = null, workspaceRoot = null, po
             if (body.action === 'open') { send(200, await projects.openAgentEdit(body)); return; }
             if (body.action === 'close') { send(202, await projects.closeAgentEdit(body)); return; }
             throw Object.assign(new Error('Agent 编辑会话只支持 open 或 close'), { code: 'AGENT_EDIT_SESSION_INVALID' });
+          }
+          if (url.pathname === '/api/agent/draft') {
+            if (body.action === 'open') { send(200, await projects.openAgentDraft(body)); return; }
+            if (body.action === 'save') { send(200, await projects.saveAgentDraft(body)); return; }
+            throw Object.assign(new Error('Agent 草稿只支持 open 或 save'), { code: 'AGENT_DRAFT_INVALID' });
           }
           if (url.pathname === '/api/agent/mutation') { send(200, await projects.mutateAgent(body)); return; }
           if (url.pathname === '/api/mechanic-folders') { send(200, await projects.createMechanicFolder(body)); return; }

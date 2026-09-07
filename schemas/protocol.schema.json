@@ -188,7 +188,6 @@
         "id",
         "name",
         "definitions",
-        "agentExportPath",
         "compositions"
       ],
       "properties": {
@@ -415,6 +414,9 @@
         "description": {
           "$ref": "#/definitions/text"
         },
+        "customData": {
+          "$ref": "#/definitions/customData"
+        },
         "agentLocked": {
           "type": "boolean"
         },
@@ -449,6 +451,10 @@
     "node": {
       "$ref": "#/definitions/baseNode"
     },
+    "customData": {
+      "type": "string",
+      "maxLength": 16000
+    },
     "baseNode": {
       "type": "object",
       "additionalProperties": false,
@@ -467,6 +473,9 @@
         },
         "description": {
           "$ref": "#/definitions/text"
+        },
+        "customData": {
+          "$ref": "#/definitions/customData"
         },
         "agentLocked": {
           "type": "boolean"
@@ -509,6 +518,9 @@
         },
         "description": {
           "$ref": "#/definitions/text"
+        },
+        "customData": {
+          "$ref": "#/definitions/customData"
         },
         "agentLocked": {
           "type": "boolean"
@@ -679,6 +691,9 @@
         "ruleText": {
           "type": "string",
           "maxLength": 8000
+        },
+        "customData": {
+          "$ref": "#/definitions/customData"
         }
       },
       "oneOf": [

@@ -9,6 +9,7 @@ import { createLocalUiState } from './local-ui-state.mjs';
 import { ContractError } from '../domain/validate.mjs';
 import { bindProjectReference, declareProjectReference, listProjectReferences } from './project-references.mjs';
 import { registerProjectSkills } from './project-skills.mjs';
+import { openAgentDraft, readAgentDraft, removeAgentDraft } from './agent-draft.mjs';
 
 const fail = (code, message) => { throw new ContractError(code, message); };
 const rootKey = value => value.toLowerCase();
@@ -94,11 +95,11 @@ export function createProjectManager({ onActivated = null } = {}) {
       catch (failure) { if (failure.code === 'INVALID_ID') fail('PROJECT_METADATA_REQUIRED', failure.message); throw failure; }
     }
     if (syncSkills) await registerProjectSkills(requested);
-    const context = await projectContext(requested), store = await createWorkspaceStore(context.workspaceRoot);
+    const context = await projectContext(requested, { allowMissingExport: true, allowUnavailableExport: true }), store = await createWorkspaceStore(context.workspaceRoot);
     let workspace;
     try { workspace = await store.read(); } catch (error) { await store.close(); throw error; }
     const session = { token: randomUUID(), generation: ++generation, context, store, workspaceId: workspace.manifest.id,
-      localUiState: createLocalUiState(context.workspaceRoot), agentEdit: { records: new Map(), queue: Promise.resolve() } };
+      localUiState: createLocalUiState(context.workspaceRoot), agentEdit: { records: new Map(), queue: Promise.resolve() }, agentDraft: null };
     sessions.set(session.token, session); roots.set(rootKey(context.projectRoot), session); if (activate) activeToken = session.token;
     if (recordHistory && onActivated) await onActivated({ projectRoot: context.projectRoot, workspaceId: workspace.manifest.id, name: workspace.manifest.name });
     return attach(workspace, session);
@@ -144,8 +145,31 @@ export function createProjectManager({ onActivated = null } = {}) {
       return attach({ mechanic: body.mechanic, exists: Boolean(mechanic), status: mechanic ? 'existing' : 'create-required', workspaceRevision: workspace.revision,
         ...(mechanic ? { resourceRevision: workspace.resourceRevisions.mechanics[body.mechanic], name: mechanic.name, scope: mechanic.scope } : {}) }, session);
     }),
+    openAgentDraft: body => enqueue(async () => {
+      const session = await agentProject(body);
+      if (typeof body?.mechanic !== 'string' || !body.mechanic) fail('AGENT_DRAFT_INVALID', 'draft open 必须提供机制 ID');
+      // open 是切换动作：旧草稿先走完全相同的 save，失败则不创建新草稿。
+      if (session.agentDraft) {
+        const previous = session.agentDraft, { definitions, mechanic: document } = await readAgentDraft(previous);
+        await session.store.saveAgentDraft({ mechanic: previous.mechanic, workspaceRevision: previous.workspaceRevision,
+          definitionsRevision: previous.definitionsRevision, mechanicRevision: previous.mechanicRevision, definitions, document });
+        await removeAgentDraft(previous); session.agentDraft = null;
+      }
+      const record = await openAgentDraft(await session.store.read(), body.mechanic);
+      session.agentDraft = record;
+      return { ...record, draftId: record.id, draftPath: record.root, projectGeneration: session.generation, projectSessionToken: session.token };
+    }),
+    saveAgentDraft: body => enqueue(async () => {
+      const session = await agentProject(body), record = session.agentDraft;
+      if (!record || record.id !== body?.draftId) fail('AGENT_DRAFT_NOT_FOUND', '没有与当前服务会话匹配的草稿；请重新 draft open');
+      const { definitions, mechanic: document } = await readAgentDraft(record);
+      const result = await session.store.saveAgentDraft({ mechanic: record.mechanic, workspaceRevision: record.workspaceRevision,
+        definitionsRevision: record.definitionsRevision, mechanicRevision: record.mechanicRevision, definitions, document });
+      await removeAgentDraft(record); session.agentDraft = null;
+      return { ...result, projectGeneration: session.generation, projectSessionToken: session.token };
+    }),
     readLocalUiState: token => enqueue(async () => { const session = current(token); return { ...await session.localUiState.read(), projectGeneration: session.generation, projectSessionToken: session.token }; }),
-    saveLocalUiState: body => enqueue(async () => { const session = current(body?.projectSessionToken, body?.projectGeneration); return { ...await session.localUiState.save({ version: 1, recentViews: body?.recentViews, recentMechanics: body?.recentMechanics, openTabs: body?.openTabs }), projectGeneration: session.generation, projectSessionToken: session.token }; }),
+    saveLocalUiState: body => enqueue(async () => { const session = current(body?.projectSessionToken, body?.projectGeneration); return { ...await session.localUiState.save({ version: 1, lastOpened: body?.lastOpened, recentViews: body?.recentViews, recentMechanics: body?.recentMechanics, openTabs: body?.openTabs }), projectGeneration: session.generation, projectSessionToken: session.token }; }),
     listProjectReferences: token => enqueue(async () => { const session = current(token); return { projectRoot: session.context.projectRoot, projectGeneration: session.generation, projectSessionToken: session.token, references: await listProjectReferences(session.context.projectRoot) }; }),
     bindProjectReference: body => enqueue(async () => { const session = current(body?.projectSessionToken, body?.projectGeneration); if (typeof body?.referenceId !== 'string' || typeof body?.projectRoot !== 'string' || !isAbsolute(body.projectRoot)) fail('REFERENCE_BINDING_INVALID', '参考目录绑定必须提供 referenceId 与绝对 projectRoot'); return { projectRoot: session.context.projectRoot, projectGeneration: session.generation, projectSessionToken: session.token, references: await bindProjectReference(session.context.projectRoot, body.referenceId, body.projectRoot) }; }),
     declareProjectReference: body => enqueue(async () => { const session = current(body?.projectSessionToken, body?.projectGeneration); return { projectRoot: session.context.projectRoot, projectGeneration: session.generation, projectSessionToken: session.token, references: await declareProjectReference(session.context.projectRoot, body) }; }),
@@ -198,10 +222,10 @@ export function createProjectManager({ onActivated = null } = {}) {
         return attach(result, session);
       });
     },
-    setProjectSettings: body => enqueue(async () => { const session = current(body?.projectSessionToken, body?.projectGeneration), workspace = await session.store.setProjectSettings(body); session.context = await projectContext(session.context.projectRoot); if (onActivated) await onActivated({ projectRoot: session.context.projectRoot, workspaceId: workspace.manifest.id, name: workspace.manifest.name }); return attach(workspace, session); }),
+    setProjectSettings: body => enqueue(async () => { const session = current(body?.projectSessionToken, body?.projectGeneration), workspace = await session.store.setProjectSettings(body); session.context = await projectContext(session.context.projectRoot, { allowMissingExport: true, allowUnavailableExport: true }); if (onActivated) await onActivated({ projectRoot: session.context.projectRoot, workspaceId: workspace.manifest.id, name: workspace.manifest.name }); return attach(workspace, session); }),
     setDocumentExport: body => call(body, store => store.setDocumentExport(body)),
     generateDocumentExport: body => call(body, store => store.generateDocumentExport(body)),
-    setAgentExportPath: body => enqueue(async () => { const session = current(body?.projectSessionToken, body?.projectGeneration), workspace = await session.store.setAgentExportPath(body); session.context = await projectContext(session.context.projectRoot); return attach(workspace, session); }),
+    setAgentExportPath: body => enqueue(async () => { const session = current(body?.projectSessionToken, body?.projectGeneration), workspace = await session.store.setAgentExportPath(body); session.context = await projectContext(session.context.projectRoot, { allowMissingExport: true, allowUnavailableExport: true }); return attach(workspace, session); }),
     close: async () => { if (closed) return; await enqueue(async () => { await Promise.all([...sessions.values()].map(async session => { await session.agentEdit.queue; await session.store.close(); })); sessions.clear(); roots.clear(); activeToken = null; }); closed = true; },
   };
 }

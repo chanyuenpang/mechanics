@@ -54,6 +54,8 @@ test('规则只在所属机制文档声明一次，并只导出可读的端点�
   const workspace = await readWorkspace(exampleWorkspace);
   const mechanic = workspace.mechanics[0], edge = mechanic.edges[0];
   edge.sign = 'random'; edge.ruleText = '唯一规则文字 <script>\n下一行';
+  workspace.definitions.nodes.find(node => node.id === edge.source).customData = 'refs: https://example.invalid/concept';
+  edge.customData = 'refs: https://example.invalid/rule';
   edge.sourceQualifiers = [{ key: '阵营', value: { kind: 'literal', value: '我方' } }];
   edge.targetQualifiers = [{ key: '类别', value: { kind: 'concept', conceptId: 'health' } }];
   edge.inheritance = { mode: 'specializeEndpoint', endpoints: ['source'], maxSpecializationHops: 2 };
@@ -65,6 +67,7 @@ test('规则只在所属机制文档声明一次，并只导出可读的端点�
   assert.match(content, /&lt;script/); assert.doesNotMatch(content, /<script>/);
   assert.doesNotMatch(content, new RegExp(`${mechanic.id}/${edge.id}`));
   assert.doesNotMatch(content, /规则 ID|specializeEndpoint|maxSpecializationHops|来源参与者限定/);
+  assert.doesNotMatch(content, /example\.invalid/);
   edge.relation = 'specializes'; delete edge.sign; delete edge.inheritance; edge.ruleText = '不应写入分类导出';
   const specialized = buildCatalog(workspace).files.get(mechanicFile);
   const labels = new Map(workspace.definitions.nodes.map(node => [node.id, node.label]));
@@ -79,6 +82,7 @@ test('导出清单将文件夹聚合为一篇，单机制图保持独立且不�
   third.path = 'mechanics/cards/sub/third.mechanic.json';
   workspace.manifest.exportSelections = [{ kind: 'folder', folder: 'cards' }, { kind: 'mechanic', mechanicId: third.id }];
   const catalog = buildCatalog(workspace);
+  assert.doesNotMatch(catalog.files.get('concepts.md'), /概念定义：/);
   assert.ok(catalog.files.has('folders/cards.md'));
   assert.match(catalog.files.get('folders/cards.md'), /基础规则/);
   assert.match(catalog.files.get('folders/cards.md'), /近战遭遇/);

@@ -96,12 +96,11 @@ test('Schema 与 Agent mutation 拒绝旧字段，规则空白不改变路径推
   const folded = collapse(graph, 'repel').edges.find(edge => edge.derived);
   assert.ok(folded.ruleText.includes('体力'));
   assert.equal(Object.hasOwn(folded, 'condition'), false);
-  for (const command of ['graph', 'node', 'impact']) {
-    const request = { command, mechanic: 'basic-rules', ...(command === 'node' ? { id: 'melee' } : command === 'impact' ? { from: 'melee', to: 'health' } : {}) };
+  for (const command of ['node', 'impact']) {
+    const request = { command, ...(command === 'node' ? { id: 'melee' } : { from: 'melee', to: 'health' }) };
     const result = queryWorkspace(workspace, request);
     assert.doesNotMatch(JSON.stringify(result), /"condition(?:Status|sEvaluated)?":/);
     assert.doesNotMatch(formatQueryText(result), /；条件 |条件：未注明/);
-    assert.equal(result.ruleTextEvaluated, false);
   }
 });
 

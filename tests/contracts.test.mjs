@@ -101,23 +101,19 @@ test('结构和引用错误明确拒绝，不修补原始数据', () => {
 });
 
 
-test('限定概念要求基础节点与规范化 qualifiers 全局唯一', () => {
+test('概念与规则都只能保存受限长度的自定义文本', () => {
   const valid = structuredClone(source);
-  valid.definitions.nodes.push({ id: 'melee-fire', label: '火焰近战', description: '限定概念', agentLocked: false, baseConceptId: 'melee', qualifiers: [
-    { key: 'damage-type', value: { kind: 'literal', value: 'fire' } },
-    { key: 'source-concept', value: { kind: 'concept', conceptId: 'enemy' } },
-  ] });
+  valid.definitions.nodes[0].customData = 'refs: combat/melee';
+  valid.mechanics[0].edges[0].customData = 'refs: combat/rules';
   validateWorkspace(valid);
-  for (const [change, code] of [
-    [data => { data.definitions.nodes.at(-1).baseConceptId = 'missing'; }, 'QUALIFIED_BASE_INVALID'],
-    [data => { data.definitions.nodes.at(-1).baseConceptId = 'melee-fire'; }, 'QUALIFIED_BASE_INVALID'],
-    [data => { data.definitions.nodes.push({ id: 'nested-base', label: '嵌套', description: '限定', agentLocked: false, baseConceptId: 'melee', qualifiers: [{ key: 'tier', value: { kind: 'literal', value: 1 } }] }); data.definitions.nodes.at(-2).baseConceptId = 'nested-base'; }, 'QUALIFIED_BASE_INVALID'],
-    [data => { data.definitions.nodes.at(-1).qualifiers[1].value.conceptId = 'missing'; }, 'QUALIFIER_CONCEPT_NOT_FOUND'],
-    [data => { data.definitions.nodes.at(-1).qualifiers.push({ key: 'damage-type', value: { kind: 'literal', value: 'ice' } }); }, 'QUALIFIER_KEY_DUPLICATE'],
-    [data => { data.definitions.nodes.push({ ...structuredClone(data.definitions.nodes.at(-1)), id: 'melee-fire-copy', qualifiers: [...structuredClone(data.definitions.nodes.at(-1).qualifiers)].reverse() }); }, 'QUALIFIED_CONCEPT_DUPLICATE'],
+  for (const change of [
+    data => { data.definitions.nodes[0].customData = { refs: [] }; },
+    data => { data.mechanics[0].edges[0].customData = 1; },
+    data => { data.definitions.nodes[0].customData = 'x'.repeat(16001); },
+    data => { data.mechanics[0].edges[0].customData = 'x'.repeat(16001); },
   ]) {
     const invalid = structuredClone(valid); change(invalid);
-    assert.throws(() => validateWorkspace(invalid), { code });
+    assert.throws(() => validateWorkspace(invalid));
   }
 });
 

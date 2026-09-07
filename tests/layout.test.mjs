@@ -9,7 +9,7 @@ import { auditGraphGeometryStrict, normalizeRouteLanes, routeGraphEdges, routeGr
 import { settleGraphGeometry } from '../src/web/geometry-settle.mjs';
 import { createRouteCache, restoreRouteCache } from '../src/web/route-cache.mjs';
 import { measureGeometry, qualityVector, refineHierarchy, AUTO_LAYOUT_OPTIONS } from '../src/web/hierarchical-layout.mjs';
-import { improveFlowBySubtrees } from '../src/web/flow-refinement.mjs';
+import { improveFlowBySubtrees, compactHorizontalRoutes } from '../src/web/flow-refinement.mjs';
 
 const graph = {
   nodes: ['turn', 'resource', 'card', 'damage', 'victory'].map(id => ({ id })),
@@ -70,22 +70,35 @@ test('独立区域保持原有横向次序分别收紧，不重新排列内部�
   const directed = await improveFlowBySubtrees(combined, initial.geometry, { ELK });
   const before = directed.geometry;
   const together = await arrangeGraphWithRoutes({ graph: combined, positions: start, ELK });
+  let compactedLength = 0;
   for (const members of [ids, lowerIds]) {
-    const dy = together.positions[members[0]].y - before.positions[members[0]].y;
+    const component = { nodes: combined.nodes.filter(node => members.includes(node.id)),
+      edges: combined.edges.filter(edge => members.includes(edge.source)) };
+    const geometry = { positions: Object.fromEntries(members.map(id => [id, before.positions[id]])),
+      sizes: Object.fromEntries(members.map(id => [id, before.sizes[id]])),
+      routes: before.routes.filter(([id]) => component.edges.some(edge => edge.id === id)) };
+    compactedLength += compactHorizontalRoutes(component, geometry).metrics.length;
     const order = positions => [...members].sort((a, b) => positions[a].x - positions[b].x || a.localeCompare(b));
     assert.deepEqual(order(together.positions), order(before.positions));
-    for (const id of members) assert.ok(Math.abs(together.positions[id].y - before.positions[id].y - dy) < 1e-6);
+    for (const id of members) for (const axis of ['x', 'y']) assert.equal(together.positions[id][axis] % 20, 0);
+    for (const a of members) for (const b of members) if (before.positions[a].y <= before.positions[b].y) {
+      assert.ok(together.positions[a].y <= together.positions[b].y, '吸附不颠倒上下顺序');
+    }
     for (const edge of combined.edges.filter(edge => members.includes(edge.source))) {
       const old = new Map(before.routes).get(edge.id).points, actual = together.routes.get(edge.id).points;
       assert.equal(actual.length, old.length);
-      actual.forEach((p, i) => assert.ok(Math.abs(p.y - old[i].y - dy) < 1e-6));
+      for (let i = 1; i < old.length; i++) for (const axis of ['x', 'y']) {
+        const direction = delta => Math.abs(delta) < 1e-6 ? 0 : Math.sign(delta);
+        assert.equal(direction(actual[i][axis] - actual[i - 1][axis]), direction(old[i][axis] - old[i - 1][axis]), '吸附保留每段的正交方向');
+      }
     }
   }
   const metrics = measureGeometry(combined, { positions: together.positions, routes: [...together.routes],
     sizes: Object.fromEntries(combined.nodes.map(n => [n.id, { width: 166, height: 62 }])) });
   assert.equal(qualityVector(metrics)[0], 0);
   const oldMetrics = measureGeometry(combined, before);
-  assert.ok(metrics.length < oldMetrics.length);
+  // 紧缩本身必须缩短连线；最终落格可能把 30px 直线扩到 34px，单独验证其几何合同。
+  assert.ok(compactedLength < oldMetrics.length);
   assert.ok(metrics.crossings <= oldMetrics.crossings);
 });
 

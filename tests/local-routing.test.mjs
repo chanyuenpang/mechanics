@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import ELK from 'elkjs/lib/elk.bundled.js';
-import { routeLocalGraph } from '../src/web/local-routing.mjs';
+import { routeLocalGraph, shortcutLocalRoutes } from '../src/web/local-routing.mjs';
 import { arrangeGraphWithRoutes } from '../src/web/layout.mjs';
 import { improveFlowBySubtrees, flowMetrics, compactHorizontalRoutes } from '../src/web/flow-refinement.mjs';
 import { measureGeometry, qualityVector, routeMeetsMinimum } from '../src/web/hierarchical-layout.mjs';
@@ -27,6 +27,97 @@ test('拖动孤立节点挡住已有路线，只处理被挡的边，外围对�
   valid(graph, result);
 });
 
+test('位置编辑没有 movedIds 时也识别新障碍，不能复用穿节点的固定缓存', async () => {
+  const graph = graphOf(['a', 'b', 'z'], [['a', 'b']]);
+  const before = { a: { x: 0, y: 0 }, b: { x: 600, y: 0 }, z: { x: 300, y: 300 } };
+  const cached = await routeLocalGraph({ graph, positions: before });
+  const positions = { ...before, z: { x: 300, y: 0 } };
+  const result = await routeLocalGraph({ graph, positions, previousPositions: before, cachedRoutes: cached.routes });
+  assert.deepEqual(result.positions, positions);
+  assert.deepEqual(result.edgeIds, ['a-b']);
+  valid(graph, result);
+});
+
+test('显式局部边清单也必须包含被新落点挡住的缓存路线', async () => {
+  const graph = graphOf(['a', 'b', 'c', 'd', 'z'], [['a', 'b'], ['c', 'd']]);
+  const before = { a: { x: 0, y: 0 }, b: { x: 600, y: 0 }, c: { x: 0, y: 500 },
+    d: { x: 600, y: 500 }, z: { x: -400, y: 250 } };
+  const cached = await routeLocalGraph({ graph, positions: before });
+  const positions = { ...before, z: { x: 300, y: 0 } };
+  const result = await routeLocalGraph({ graph, positions, previousPositions: before,
+    cachedRoutes: cached.routes, movedIds: ['z'], edgeIds: ['c-d'] });
+  assert.deepEqual(result.positions, positions);
+  assert.ok(result.edgeIds.includes('a-b'));
+  valid(graph, result);
+});
+
+test('局部直线与固定折线共线时换用空闲通道，固定折线对象不变', async () => {
+  const graph = graphOf(['a', 'b', 'c', 'd'], [['a', 'b'], ['c', 'd']]);
+  const before = { a: { x: 0, y: 0 }, b: { x: 600, y: 0 }, c: { x: 200, y: 400 }, d: { x: 400, y: 400 } };
+  const cached = new Map([
+    ['a-b', { points: [{ x: 166, y: 31 }, { x: 600, y: 31 }] }],
+    ['c-d', { points: [{ x: 283, y: 400 }, { x: 283, y: 231 }, { x: 483, y: 231 }, { x: 483, y: 400 }] }],
+  ]);
+  valid(graph, { positions: before, routes: cached });
+  const positions = { ...before, a: { x: 0, y: 200 }, b: { x: 600, y: 200 } };
+  const result = await routeLocalGraph({ graph, positions, previousPositions: before, cachedRoutes: cached, movedIds: ['a', 'b'] });
+  valid(graph, result);
+  assert.deepEqual(result.positions, positions);
+  assert.equal(result.routes.get('c-d'), cached.get('c-d'));
+  assert.equal(measureGeometry(graph, geometry(graph, result)).overlaps, 0);
+});
+
+test('局部刷新不能为避开轻微平行拥挤保留回字形，允许单边换侧简化', async () => {
+  const graph = graphOf(['a', 'b', 'c', 'd'], [['a', 'b'], ['c', 'd']]);
+  const positions = { a: { x: 0, y: 0 }, b: { x: 400, y: 100 }, c: { x: 200, y: -200 }, d: { x: 800, y: -200 } };
+  const route = pairs => ({ points: pairs.map(([x, y]) => ({ x, y })) });
+  const cached = new Map([
+    ['a-b', route([[166, 31], [196, 31], [196, 240], [650, 240], [650, 180], [370, 180], [370, 131], [400, 131]])],
+    ['c-d', route([[283, -138], [283, 21], [883, 21], [883, -138]])],
+  ]);
+  valid(graph, { positions, routes: cached });
+  const result = await routeLocalGraph({ graph, positions, cachedRoutes: cached, edgeIds: ['a-b'] });
+  valid(graph, result);
+  const points = result.routes.get('a-b').points;
+  assert.equal(points.length, 3, '空闲的一次转弯应替代六次转弯的绕圈');
+  assert.ok(routeMeetsMinimum(points));
+  const metrics = measureGeometry(graph, geometry(graph, result));
+  assert.equal(metrics.crossings, 0); assert.equal(metrics.contacts, 0); assert.equal(metrics.overlaps, 0);
+  assert.equal(result.routes.get('c-d'), cached.get('c-d'));
+  assert.deepEqual(result.positions, positions);
+});
+
+test('接入段已足够长也要检查一次转弯，不能只在短线补救时检查', async () => {
+  const graph = graphOf(['a', 'b'], [['a', 'b']]);
+  const positions = { a: { x: 0, y: 0 }, b: { x: 300, y: 100 } };
+  const result = await routeLocalGraph({ graph, positions });
+  valid(graph, result);
+  assert.equal(result.routes.get('a-b').points.length, 3);
+  assert.ok(routeMeetsMinimum(result.routes.get('a-b').points));
+});
+
+test('逐段剪掉中间折返，保留端口法线、必要绕障与外围路线', () => {
+  for (const blocked of [false, true]) {
+    const graph = graphOf(['a', 'b', 'z', 'c', 'd', ...(blocked ? ['wall'] : [])], [['a', 'b'], ['c', 'd']]);
+    const positions = { a: { x: 0, y: 0 }, b: { x: 600, y: 300 }, z: { x: 280, y: 0 },
+      c: { x: 0, y: 700 }, d: { x: 600, y: 700 }, ...(blocked ? { wall: { x: 200, y: 240 } } : {}) };
+    const original = [[166, 31], [226, 31], [226, 150], [500, 150], [500, 100], [550, 100], [550, 331], [600, 331]].map(([x, y]) => ({ x, y }));
+    const cached = new Map([['a-b', { points: original }], ['c-d', { points: [{ x: 166, y: 731 }, { x: 600, y: 731 }] }]]);
+    valid(graph, { positions, routes: cached });
+    const routes = shortcutLocalRoutes(graph, positions, cached, [graph.edges[0]]);
+    valid(graph, { positions, routes });
+    const points = routes.get('a-b').points;
+    assert.equal(points.length, blocked ? 6 : 4, '只保留绕开障碍所需的转弯');
+    assert.deepEqual(points[0], original[0]); assert.deepEqual(points.at(-1), original.at(-1));
+    assert.ok(points[1].x > points[0].x && points.at(-2).x < points.at(-1).x, '保持朝外的首尾法线');
+    assert.ok(routeMeetsMinimum(points));
+    assert.equal(routes.get('c-d'), cached.get('c-d'));
+    assert.equal(cached.get('a-b').points, original);
+    const again = shortcutLocalRoutes(graph, positions, routes, [graph.edges[0]]);
+    assert.equal(again, routes, '达到局部稳定结果后不再生成不同几何');
+  }
+});
+
 test('落点发生碰撞时只让直接近邻挪位，拖动节点与远处节点固定', async () => {
   const graph = graphOf(['a', 'b', 'c', 'd', 'z'], [['a', 'b'], ['c', 'd']]);
   const before = { a: { x: 0, y: 0 }, b: { x: 600, y: 0 }, c: { x: 0, y: 500 },
@@ -40,6 +131,33 @@ test('落点发生碰撞时只让直接近邻挪位，拖动节点与远处节�
   assert.equal(result.routes.get('c-d'), cached.routes.get('c-d'));
   assert.deepEqual(before.a, { x: 0, y: 0 });
   valid(graph, result);
+});
+
+test('外围原有重合保持隔离，不允许局部路线再贡献重合', async () => {
+  const graph = graphOf(['a', 'b', 'c', 'd', 'e', 'f'], [['a', 'b'], ['c', 'd'], ['e', 'f']]);
+  const before = { a: { x: 0, y: 0 }, b: { x: 600, y: 0 }, c: { x: 0, y: 500 }, d: { x: 600, y: 500 },
+    e: { x: 0, y: 700 }, f: { x: 600, y: 700 } };
+  const cached = new Map([
+    ['a-b', { points: [{ x: 166, y: 31 }, { x: 600, y: 31 }] }],
+    ['c-d', { points: [{ x: 166, y: 531 }, { x: 600, y: 531 }] }],
+    ['e-f', { points: [{ x: 166, y: 731 }, { x: 200, y: 731 }, { x: 200, y: 531 },
+      { x: 550, y: 531 }, { x: 550, y: 731 }, { x: 600, y: 731 }] }],
+  ]);
+  valid(graph, { positions: before, routes: cached });
+  const positions = { ...before, a: { x: 0, y: 20 } };
+  const result = await routeLocalGraph({ graph, positions, previousPositions: before, cachedRoutes: cached, movedIds: ['a'] });
+  valid(graph, result);
+  assert.equal(measureGeometry(graph, geometry(graph, result)).overlaps, 350);
+  for (const id of ['c-d', 'e-f']) assert.equal(result.routes.get(id), cached.get(id));
+  assert.deepEqual(result.edgeIds, ['a-b']);
+});
+
+test('局部路由的完整审计不把画布自环算作丢失路线', async () => {
+  const graph = graphOf(['a', 'b'], [['a', 'b'], ['a', 'a']]);
+  const result = await routeLocalGraph({ graph, positions: { a: { x: 0, y: 0 }, b: { x: 400, y: 0 } } });
+  assert.deepEqual([...result.routes.keys()], ['a-b']);
+  const reused = await routeLocalGraph({ graph, positions: result.positions, cachedRoutes: result.routes });
+  assert.deepEqual(reused.edgeIds, []);
 });
 
 test('几何没有变化时不重新生成任何缓存路线', async () => {

@@ -3,7 +3,7 @@
 <!-- state: current -->
 ## 当前行为
 
-- Node.js 24+ 本地 CLI 提供 `init/serve/validate/catalog/root`、只读 `agent guide/scopes/search/graph/node/impact` 与受约束 `agent concept/rule` mutation。源码和本地 tarball 独立于游戏引擎、宿主资产和 claw-kit；`private: true`，没有公开 npm 发布或开源授权。
+- Node.js 24+ 本地 CLI 提供 `init/serve/validate/catalog/root`、只读 `agent guide/scopes/search/graph/node/impact` 与受约束 `agent concept/rule` mutation。源码和 npm 包独立于游戏引擎、宿主资产和 claw-kit；`game-graph@0.7.0` 已公开发布到 npm。npm 分发不代表仓库授权条款变更。
 - 每个游戏项目固定使用 `<project>/.game-graph` 保存 canonical。`init` 可在现有普通项目内创建该目录，也可创建项目根，并把包内 `game-mechanic-search`、`game-mechanic-modeling` 注册到项目 `.agents/skills/`；已有 `.game-graph` 时拒绝覆盖。
 - 两个 Codex skill 的唯一维护源在工具包 `skills/`。目标项目同名 skill 不存在时安装、内容完全相同时视为已注册；路径被占用或内容不同时在创建工作区前返回 `PROJECT_SKILL_CONFLICT`，不覆盖用户文件。初始化后阶段失败用 `INIT_PARTIAL` 显式报告已创建工作区或已安装 skill。
 - 显式 `--project` 优先；`validate/catalog/root` 省略时向上寻找最近 `.game-graph/workspace.json`。`serve` 可空项目启动并从网页打开或初始化项目。候选完整打开并取得锁后才切换，`projectGeneration` 阻止旧页面写入新项目。
@@ -19,6 +19,8 @@
 ## 验证边界
 
 2026-08-31 的 `npm run check` 通过 44 项测试，包含视图文件/HTTP、ID、移动/revision、断引用、迁移、候选打开与失败队列，以及 0.4.0 单机制导航、旧记录和坐标接管、成员反向保存和显式折叠修复。0.4.0 通过 `npm run check:package`：31 个分发文件，Windows 隔离安装、命令 shim、资料子目录启动和静态模块成功；包不含 `.claw` 与游戏私有资料。后续版本须重新验收。
+
+2026-09-07：`npm run check` 通过 360 项测试；`npm run check:package` 验证 74 个发行文件的隔离安装、CLI、内置 skill 注册、查询、离线/在线写入与网页服务。`game-graph@0.7.0` 已由 npm registry 回读，并以 `npx -y game-graph@0.7.0 --version` 独立验证为 `0.7.0`。发行流程见仓库根目录 `DISTRIBUTION.md`。
 
 不承诺任意外部编辑器的原子 CAS、多文件事务、掉电恢复、网络共享盘或多人协作。未实现文件监听、跨文件撤销和相机持久化。测试只使用临时工作区，不写用户正式资料、不调用宿主游戏运行时。
 

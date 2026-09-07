@@ -117,7 +117,7 @@ export async function readWorkspace(workspaceRoot, { context = null } = {}) {
   }
   assertDocument(manifest, 'workspace', 'workspace.json');
   context ??= await projectContext(await projectRootFromWorkspace(root), { manifest, createExportRoot: false,
-    allowMissingExport: true });
+    allowMissingExport: true, allowUnavailableExport: true });
   if (context.workspaceRoot !== root && (process.platform !== 'win32' || context.workspaceRoot.toLowerCase() !== root.toLowerCase())) {
     throw new ContractError('PROJECT_CONTEXT_MISMATCH', '工作区不属于当前项目上下文：' + root);
   }
@@ -137,5 +137,6 @@ export async function readWorkspace(workspaceRoot, { context = null } = {}) {
   // 空目录变化也会改变文件树版本，避免目录操作基于旧树执行。
   hash.update(JSON.stringify(directories));
   return { ...workspace, projectRoot: context.projectRoot, workspaceRoot: root, agentExportRoot: context.exportRoot,
+    agentExportPath: context.agentExportPath, agentExportStatus: context.exportStatus, agentExportError: context.exportError,
     files, directories, revision: hash.digest('hex'), resourceRevisions: workspaceResourceRevisions(workspace) };
 }

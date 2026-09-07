@@ -191,7 +191,8 @@ async function inspectProject(body) {
       fingerprint: `missing:${rootInfo.dev}:${rootInfo.ino}:${rootInfo.mtimeMs}` };
   }
   try {
-    const context = await projectContext(projectRoot);
+    // 预检只判断 canonical 是否可打开；生成文档目录的问题由打开后的导出状态处理。
+    const context = await projectContext(projectRoot, { allowMissingExport: true, allowUnavailableExport: true });
     const workspace = await readWorkspace(context.workspaceRoot, { context });
     return { result: { projectRoot: context.projectRoot, status: 'existing', workspaceRoot: context.workspaceRoot,
       workspaceName: workspace.manifest.name, workspaceId: workspace.manifest.id, requiredMetadata: [], willInitialize: false },

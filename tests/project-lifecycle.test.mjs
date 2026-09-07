@@ -149,6 +149,7 @@ test('文档导出设置与生成文档分别提交，并允许用未改动的�
   });
   assert.equal(saved.response.status, 200);
   assert.notEqual(saved.data.revision, settings.revision);
+  assert.equal(saved.data.exportPublication.state, 'stale');
   const stale = await fetch(server.origin + '/api/concept-docs?projectSessionToken=' + encodeURIComponent(saved.data.projectSessionToken));
   assert.equal(stale.status, 422); assert.equal((await stale.json()).error, 'CATALOG_STALE');
   const generated = await post(server.origin, '/api/document-export/generate', {
@@ -156,6 +157,7 @@ test('文档导出设置与生成文档分别提交，并允许用未改动的�
   });
   assert.equal(generated.response.status, 200);
   assert.equal(generated.data.revision, saved.data.revision);
+  assert.equal(generated.data.exportPublication.state, 'current');
   assert.ok(generated.data.documentRevision); assert.equal(generated.data.documentCount, 1);
   const docs = await (await fetch(server.origin + '/api/concept-docs?projectSessionToken=' + encodeURIComponent(generated.data.projectSessionToken))).json();
   assert.deepEqual(docs.documents.map(item => item.id), [mechanicId]);

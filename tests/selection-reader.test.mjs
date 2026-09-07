@@ -24,8 +24,8 @@ test('详情栏折叠状态与 hover 开关均通过浏览器偏好保留', () =
   assert.match(css, /#inspector\.is-collapsed\{display:grid;width:38px;height:38px/);
 });
 
-test('悬浮提示宽度增加到 660px，关系图例仍固定在底部', () => {
+test('悬浮提示宽度增加到 660px，采用半透明黑底，关系图例仍固定在底部', () => {
   assert.match(css, /#canvas-tooltip\{[^}]*max-width:min\(660px/);
-  assert.match(css, /#canvas-tooltip\{[^}]*background:#fff/);
+  assert.match(css, /#canvas-tooltip\{[^}]*background:#000c/);
   assert.match(css, /#legend\{top:auto;right:190px;bottom:25px;left:150px/);
 });

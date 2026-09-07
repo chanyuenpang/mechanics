@@ -22,18 +22,16 @@ test('注册顺序稳定，新增默认可见，重复注册与修改未注册�
   assert.throws(() => setMechanicVisibility(two, 'missing', false), { code: 'VIEW_MECHANIC_NOT_REGISTERED' });
 });
 
-test('隐藏只改变可见投影，注册事实和位置保持；Agent 只查询可见机制', () => {
+test('隐藏只改变可见投影，注册事实和位置保持；Agent 查询不把视图当作语义范围', () => {
   const view = { schemaVersion: 3, kind: 'view', workspaceId: 'test', id: 'battle', name: '战斗',
     mechanicRegistrations: [{ mechanicId: 'one', visible: true }, { mechanicId: 'two', visible: false }],
     collapsedNodeIds: [], positions: { b: { x: 10, y: 20 } }, structuralPresentation: 'line' };
   const data = { ...workspace, views: [view] };
   assert.deepEqual(composeView(data, view).nodes.map(item => item.id), ['a']);
   const scopes = queryWorkspace(data, { command: 'scopes' });
-  assert.deepEqual(scopes.views[0].mechanicRegistrations.map(item => [item.mechanicId, item.visible]), [['one', true], ['two', false]]);
-  const graph = queryWorkspace(data, { command: 'graph', view: 'battle' });
-  assert.deepEqual(graph.scope.mechanicIds, ['one']);
-  assert.equal(graph.scope.visibleMechanicCount, 1); assert.equal(graph.scope.registeredMechanicCount, 2);
-  assert.deepEqual(graph.nodes.map(item => item.id), ['a']);
+  assert.deepEqual(scopes.views.map(item => item.id), ['battle']);
+  const concept = queryWorkspace(data, { command: 'search', query: 'b' });
+  assert.equal(concept.concept.id, 'b');
   const hidden = setMechanicVisibility(view, 'one', false);
   assert.deepEqual(hidden.positions, view.positions);
   assert.deepEqual(registeredMechanicIds(hidden), ['one', 'two']);

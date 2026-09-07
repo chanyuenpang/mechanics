@@ -20,6 +20,11 @@ const stringArray = (body, key) => {
   return structuredClone(body[key]);
 };
 const jsonValue = (body, key) => { if (!Array.isArray(body[key])) fail('AGENT_MUTATION_INVALID', `${key} 必须是 JSON 数组`); return structuredClone(body[key]); };
+const customData = (body, key) => {
+  if (typeof body[key] !== 'string') fail('AGENT_MUTATION_INVALID', `${key} 必须是字符串`);
+  if (body[key].length > 16000) fail('AGENT_MUTATION_INVALID', `${key} 不能超过 16000 字`);
+  return body[key];
+};
 const conceptById = (workspace, id) => workspace.definitions.nodes.find(node => node.id === id);
 const mechanicById = (workspace, id) => workspace.mechanics.find(mechanic => mechanic.id === id);
 
@@ -52,8 +57,8 @@ function externalConceptReferences(workspace, id) {
 function mutateConcept(workspace, body) {
   const actions = new Set(['create', 'update', 'delete']);
   if (!actions.has(body.action)) fail('AGENT_MUTATION_INVALID', 'concept action 必须是 create、update 或 delete');
-  const fields = body.action === 'create' ? ['id', 'label', 'description', 'aliases', 'tags']
-    : body.action === 'update' ? ['id', 'label', 'description', 'aliases', 'tags'] : ['id'];
+  const fields = body.action === 'create' ? ['id', 'label', 'description', 'aliases', 'tags', 'customData']
+    : body.action === 'update' ? ['id', 'label', 'description', 'aliases', 'tags', 'customData'] : ['id'];
   allowed(body, fields); assertRevision(workspace, body, 'definitions');
   const id = requiredString(body, 'id');
   try { assertSemanticId(id, '概念 ID '); } catch (error) { fail('INVALID_SEMANTIC_ID', error.message); }
@@ -63,14 +68,19 @@ function mutateConcept(workspace, body) {
     const node = { id, label: requiredString(body, 'label'), description: requiredString(body, 'description'), agentLocked: false };
     if (has(body, 'aliases')) node.aliases = stringArray(body, 'aliases');
     if (has(body, 'tags')) node.tags = stringArray(body, 'tags');
+    if (has(body, 'customData') && customData(body, 'customData')) node.customData = customData(body, 'customData');
     workspace.definitions.nodes.push(node);
   } else {
     if (!existing) fail('NODE_NOT_FOUND', `概念不存在：${id}`);
     if (existing.agentLocked) fail('CONCEPT_AGENT_LOCKED', `概念 ${id} 已被用户冻结，Agent 不能修改或删除`);
     if (body.action === 'update') {
-      const changed = ['label', 'description', 'aliases', 'tags'].filter(key => has(body, key));
+      const changed = ['label', 'description', 'aliases', 'tags', 'customData'].filter(key => has(body, key));
       if (!changed.length) fail('AGENT_MUTATION_INVALID', 'concept update 至少需要一个可编辑字段');
-      for (const key of changed) existing[key] = ['aliases', 'tags'].includes(key) ? stringArray(body, key) : requiredString(body, key);
+      for (const key of changed) {
+        if (['aliases', 'tags'].includes(key)) existing[key] = stringArray(body, key);
+        else if (key === 'customData') { const value = customData(body, key); if (value) existing[key] = value; else delete existing[key]; }
+        else existing[key] = requiredString(body, key);
+      }
     } else {
       const references = externalConceptReferences(workspace, id);
       // 机制节点和视图布局都只是对概念的可回收展示引用；删除概念时与定义原子提交，
@@ -98,8 +108,9 @@ function finalEdge(previous, body) {
     id: semanticRuleId(body.source, body.target, new Set()), source: body.source, target: body.target,
     relation: body.relation, ruleText: body.ruleText ?? '',
   };
-  for (const key of ['relation', 'sign', 'ruleText', 'inheritance', 'sourceQualifiers', 'targetQualifiers']) if (has(body, key) && body[key] !== undefined) {
+  for (const key of ['relation', 'sign', 'ruleText', 'inheritance', 'sourceQualifiers', 'targetQualifiers', 'customData']) if (has(body, key) && body[key] !== undefined) {
     if ((key === 'sourceQualifiers' || key === 'targetQualifiers') && body[key].length === 0) delete edge[key];
+    else if (key === 'customData' && !customData(body, key)) delete edge[key];
     else edge[key] = body[key];
   }
   if (edge.relation === 'specializes' && has(body, 'sign')) fail('AGENT_MUTATION_INVALID', 'specializes 规则不能提供 sign');
@@ -140,7 +151,7 @@ function mutateRule(workspace, body) {
   const actions = new Set(['add', 'update', 'delete']);
   if (!actions.has(body.action)) fail('AGENT_MUTATION_INVALID', 'rule action 必须是 add、update 或 delete');
   const writable = body.action === 'delete' ? ['mechanic', 'source', 'target', 'sourceQualifiers', 'targetQualifiers']
-    : ['mechanic', 'source', 'target', 'relation', 'sign', 'ruleText', 'inheritance', 'sourceQualifiers', 'targetQualifiers'];
+    : ['mechanic', 'source', 'target', 'relation', 'sign', 'ruleText', 'inheritance', 'sourceQualifiers', 'targetQualifiers', 'customData'];
   allowed(body, writable);
   const mechanicId = requiredString(body, 'mechanic');
   const mechanic = mechanicById(workspace, mechanicId);
@@ -162,7 +173,7 @@ function mutateRule(workspace, body) {
     if (!current) fail('RULE_NOT_FOUND', `机制 ${mechanicId} 中不存在 ${source} 到 ${target} 的规则`);
     const previousEdges = [current];
     if (body.action === 'update') {
-      const changed = ['relation', 'sign', 'ruleText', 'inheritance', 'sourceQualifiers', 'targetQualifiers'].filter(key => has(body, key));
+      const changed = ['relation', 'sign', 'ruleText', 'inheritance', 'sourceQualifiers', 'targetQualifiers', 'customData'].filter(key => has(body, key));
       if (!changed.length) fail('AGENT_MUTATION_INVALID', 'rule update 至少需要一个可编辑字段');
       mechanic.edges[mechanic.edges.indexOf(current)] = finalEdge(current, body);
     } else mechanic.edges = mechanic.edges.filter(edge => edge !== current);

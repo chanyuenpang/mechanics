@@ -857,6 +857,29 @@ test('自动排版预置的同步平移路线直接用于下一次绘制', () =>
   assert.equal(canvas.routed, routes);
   assert.deepEqual(draws, [{ reroute: false }]);
 });
+
+test('局部计算期间及失败后不把穿过新落点的旧线当作完成结果，外围仍可见', async () => {
+  const { canvas } = harness(), errors = [];
+  const graph = { nodes: ['a', 'b', 'c', 'd', 'z'].map(id => ({ id })),
+    edges: [{ id: 'a-b', source: 'a', target: 'b' }, { id: 'c-d', source: 'c', target: 'd' }] };
+  const positions = { a: { x: 0, y: 0 }, b: { x: 600, y: 0 }, c: { x: 0, y: 500 }, d: { x: 600, y: 500 }, z: { x: 300, y: 0 } };
+  const fixed = { points: [{ x: 166, y: 531 }, { x: 600, y: 531 }] };
+  canvas.routed = new Map([['a-b', { points: [{ x: 166, y: 31 }, { x: 600, y: 31 }] }], ['c-d', fixed]]);
+  let reject;
+  canvas.callbacks.computeGraph = () => new Promise((resolve, fail) => { reject = fail; });
+  canvas.callbacks.routeError = error => errors.push(error.message);
+  const pending = canvas.update(graph, positions, null, null, false);
+  assert.deepEqual([...canvas.unsettledRouteIds], ['a-b']);
+  reject(new Error('没有可行路线'));
+  assert.equal(await pending, false);
+  assert.deepEqual(errors, ['没有可行路线']);
+  assert.deepEqual([...canvas.unsettledRouteIds], ['a-b']);
+  assert.equal(canvas.routed.get('c-d'), fixed);
+  const restored = { ...positions, z: { x: 300, y: 300 } };
+  canvas.primeRoutes(graph, restored, canvas.routed);
+  await canvas.update(graph, restored, null, null, false);
+  assert.equal(canvas.unsettledRouteIds.size, 0);
+});
 test('打开阶段立即返回，后台路由固定已保存的节点坐标', async () => {
   const { canvas } = harness(); let requests = 0;
   const graph = { nodes: [{ id: 'a' }, { id: 'b' }], edges: [{ id: 'a-b', source: 'a', target: 'b', sign: 1 }] };

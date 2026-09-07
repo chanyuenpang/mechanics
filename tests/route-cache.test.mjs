@@ -29,5 +29,6 @@ test('算法升级后拒绝同坐标同拓扑的旧缓存，新结果仍可复�
   const current = createRouteCache(graph, positions, routes);
   assert.deepEqual(restoreRouteCache(graph, positions, current), routes);
   assert.equal(restoreRouteCache(graph, positions, { ...current, geometryKey: 'v1//' + legacy.geometryKey }), null);
+  assert.equal(restoreRouteCache(graph, positions, { ...current, geometryKey: 'v2//' + legacy.geometryKey }), null);
   assert.deepEqual({ legacy, positions }, before);
 });

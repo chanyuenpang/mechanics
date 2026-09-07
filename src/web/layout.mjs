@@ -1,9 +1,10 @@
 import { refineHierarchy, qualityVector, AUTO_LAYOUT_OPTIONS, MIN_ROUTE_SEGMENT, routeMeetsMinimum } from './hierarchical-layout.mjs';
-import { routeLocalGraph, routeIntersectsBox } from './local-routing.mjs';
-import { improveFlowBySubtrees, compactHorizontalRoutes } from './flow-refinement.mjs';
-import { connectedComponents } from './layout-structure.mjs';
+import { routeLocalGraph, routeIntersectsBox, routePairChannels } from './local-routing.mjs';
+import { improveFlowBySubtrees, compactHorizontalRoutes, snapLayoutToGrid } from './flow-refinement.mjs';
+import { connectedComponents, SNAP_GRID, edgeBundles } from './layout-structure.mjs';
 
 const WIDTH = 166, HEIGHT = 62;
+const snap = value => Math.round(value / SNAP_GRID) * SNAP_GRID;
 const overlaps = (a, b, clearanceA = 0, clearanceB = 0) => a.x - clearanceA < b.x + WIDTH + clearanceB
   && a.x + WIDTH + clearanceA > b.x - clearanceB
   && a.y - clearanceA < b.y + HEIGHT + clearanceB
@@ -34,7 +35,8 @@ function compactComponents(components, positions, baseline) {
     const geometry = { ...before, routes: [...before.routes],
       sizes: Object.fromEntries(graph.nodes.map(node => [node.id, { width: WIDTH, height: HEIGHT }])) };
     const compacted = compactHorizontalRoutes(graph, geometry);
-    const result = { positions: compacted.geometry.positions, routes: new Map(compacted.geometry.routes) };
+    const snapped = snapLayoutToGrid(graph, compacted.geometry);
+    const result = { positions: snapped.positions, routes: new Map(snapped.routes) };
     const points = [...Object.values(result.positions).flatMap(p => [p, { x: p.x + WIDTH, y: p.y + HEIGHT }]),
       ...[...result.routes.values()].flatMap(route => route.points)];
     const left = Math.min(...points.map(p => p.x)), top = Math.min(...points.map(p => p.y));
@@ -47,7 +49,8 @@ function compactComponents(components, positions, baseline) {
   const result = { positions: {}, routes: new Map() }; let x = 0, y = 0, rowHeight = 0;
   for (const block of blocks) {
     if (x && x + block.width > rowWidth) { x = 0; y += rowHeight + gap; rowHeight = 0; }
-    const shift = p => ({ x: p.x - block.left + origin.x + x, y: p.y - block.top + origin.y + y });
+    const dx = snap(origin.x + x - block.left), dy = snap(origin.y + y - block.top);
+    const shift = p => ({ x: p.x + dx, y: p.y + dy });
     for (const [id, p] of Object.entries(block.positions)) result.positions[id] = shift(p);
     for (const [id, route] of block.routes) result.routes.set(id, { points: route.points.map(shift) });
     x += block.width + gap; rowHeight = Math.max(rowHeight, block.height);
@@ -55,18 +58,27 @@ function compactComponents(components, positions, baseline) {
   return result;
 }
 
-async function layoutAll(graph, positions, ELK) {
+async function layoutAll(graph, positions, ELK, timings) {
   if (typeof ELK !== 'function') throw new Error('ELK 排版引擎未加载，请刷新页面后重试。');
   if (!graph.nodes.length) return { positions: {}, routes: new Map() };
   // 自环沿用画布的专用环形符号，不进入节点间的正交路径缓存。
   graph = { ...graph, edges: graph.edges.filter(edge => edge.source !== edge.target) };
-  if (graph.nodes.length === 1) return { positions: { [graph.nodes[0].id]: { ...positions[graph.nodes[0].id] } }, routes: new Map() };
+  if (graph.nodes.length === 1) {
+    const id = graph.nodes[0].id;
+    return { positions: { [id]: { x: snap(positions[id].x), y: snap(positions[id].y) } }, routes: new Map() };
+  }
+  const original = graph, bundles = edgeBundles(graph), bundled = bundles.some(edge => edge.bundleMembers.length > 1);
+  if (bundled) graph = { ...graph, edges: bundles };
+  let phaseStart = performance.now();
+  const record = phase => { const now = performance.now(); if (timings) timings[phase] = now - phaseStart; phaseStart = now; };
   const initial = await refineHierarchy(graph, { ...AUTO_LAYOUT_OPTIONS, ELK });
+  record('hierarchyMs');
   if (qualityVector(initial.metrics)[0] !== 0) throw new Error('自动整理未得到完整且无穿节点的布局，请保留当前图并反馈此案例。');
   const result = await improveFlowBySubtrees(graph, initial.geometry, { ELK });
+  record('flowMs');
   const short = result.geometry.routes.filter(([, route]) => !routeMeetsMinimum(route.points));
   if (short.length) throw new Error(`自动整理仍有连线不足 ${MIN_ROUTE_SEGMENT}px，未提交：` + short.map(([id]) => id).join('、'));
-  // 整体平移保留原区域；禁止吸附单个节点或再次路由，以免破坏联合求解的端口和路径。
+  // 先整体平移保留原区域，随后按连通区域联合吸附节点和路线。
   const dx = Math.min(...graph.nodes.map(node => positions[node.id].x)) - Math.min(...Object.values(result.geometry.positions).map(point => point.x));
   const dy = Math.min(...graph.nodes.map(node => positions[node.id].y)) - Math.min(...Object.values(result.geometry.positions).map(point => point.y));
   const shift = point => ({ x: point.x + dx, y: point.y + dy });
@@ -75,7 +87,13 @@ async function layoutAll(graph, positions, ELK) {
     routes: new Map(result.geometry.routes.map(([id, route]) => [id, { points: route.points.map(shift) }])),
   };
   const components = connectedComponents(graph);
-  return compactComponents(components, positions, arranged);
+  const compacted = compactComponents(components, positions, arranged);
+  record('compactGridMs');
+  if (!bundled) return compacted;
+  const expanded = await routePairChannels({ graph: original, positions: compacted.positions, cachedRoutes: compacted.routes,
+    edgeIds: original.edges.map(edge => edge.id) });
+  record('channelsMs');
+  return expanded;
 }
 
 async function layoutSelection(graph, positions, movableIds, ELK, cachedRoutes = []) {
@@ -124,5 +142,5 @@ export async function arrangeGraphWithRoutes(options) {
     return layoutSelection(options.graph, options.positions, selected, options.ELK ?? globalThis.ELK, options.cachedRoutes);
   }
   assertPositions(options.graph, options.positions);
-  return layoutAll(options.graph, options.positions, options.ELK ?? globalThis.ELK);
+  return layoutAll(options.graph, options.positions, options.ELK ?? globalThis.ELK, options.timings);
 }

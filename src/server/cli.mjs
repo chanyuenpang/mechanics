@@ -7,7 +7,7 @@ import { readWorkspace } from './workspace.mjs';
 import { migrateWorkspace } from './store.mjs';
 import { findProject, initProject } from './workspace-commands.mjs';
 import { startServer } from './http.mjs';
-import { runAgent, runAgentEditSession, runAgentMechanicTarget, runAgentMutation, runRecipeMigration } from './agent.mjs';
+import { runAgent, runAgentDraft, runAgentEditSession, runAgentMechanicTarget, runAgentMutation, runRecipeMigration } from './agent.mjs';
 import { publishCatalog } from './catalog.mjs';
 import { acquireWorkspaceLock } from './files.mjs';
 import { repairProjectionPositions } from './projection-position-repair.mjs';
@@ -24,16 +24,18 @@ game-graph repair projection-positions --project <项目目录> [--revision <预
 game-graph catalog [--project <项目目录>]（重建 game-mechanics Agent 机制文档）
 game-graph root [--project <项目目录>]
 game-graph references list --project <源项目目录>（列出源项目声明的参考项目及本机定位状态）
-game-graph agent guide [--format text]（无需工作区，先读语义约定）
+game-graph agent guide [--format json]（无需工作区，先读语义约定）
 game-graph agent scopes [--project <项目目录>] [--connect http://127.0.0.1:<端口>]
-game-graph agent search --query <关键词> [--mechanic <ID> | --view <ID>] [--limit 30]
-game-graph agent graph --mechanic <ID> | --view <ID>
-game-graph agent node --mechanic <ID> --id <概念ID> [--direction both] [--hops 1]
-game-graph agent impact --mechanic <ID> --from <ID> --to <ID>
+game-graph agent search --query <概念ID|完整名称|完整别名>
+game-graph agent search --from <概念键> --to <概念键>（双向直接规则）
+game-graph agent node --id <概念ID> [--direction both] [--hops 1]
+game-graph agent impact --from <概念ID> --to <概念ID>
 game-graph agent session open --project <项目目录> --mechanic <ID> [--previous-session <自己的旧会话ID>] --project-generation <当前代次> --connect http://127.0.0.1:<端口>
 game-graph agent session close --project <项目目录> --mechanic <ID> --session <open返回的会话ID> --project-generation <当前代次> --connect http://127.0.0.1:<端口>
 game-graph agent session status --project <项目目录> --session <会话ID> --project-generation <当前代次> --connect http://127.0.0.1:<端口>
 game-graph agent mechanic open --project <项目目录> --mechanic <ID> --project-generation <当前代次> --connect http://127.0.0.1:<端口>
+game-graph agent draft open --project <项目目录> --mechanic <ID> --project-generation <当前代次> --connect http://127.0.0.1:<端口>
+game-graph agent draft save --project <项目目录> --draft <open返回的草稿ID> --project-generation <当前代次> --connect http://127.0.0.1:<端口>
 game-graph agent mechanic-folder create --name <单段目录名> [--parent <已有相对目录>] --workspace-revision <工作区版本>
 game-graph agent mechanic-folder delete --folder <相对目录> --workspace-revision <工作区版本>
 game-graph agent mechanic create --id <稳定ID> --name <名称> --scope <范围> [--folder <已有相对目录>] --workspace-revision <工作区版本>
@@ -43,12 +45,11 @@ game-graph agent recipe-migration preview --project <项目目录> --manifest <�
 game-graph agent recipe-migration execute --project <项目目录> --manifest <项目内 docs/ 相对路径> --revision <preview返回的工作区版本>
 game-graph agent recipe-migration recover --project <项目目录> --manifest <项目内 docs/ 相对路径>（仅 workspace.json 丢失后的受限恢复）
 game-graph agent view delete --view <ID> --workspace-revision <工作区版本>
-game-graph agent concept create --id <概念ID> --label <名称> --description <定义> --revision <资源版本>
+game-graph agent concept create --id <概念ID> --label <名称> --description <定义> [--custom-data <文本>] --revision <资源版本>
 game-graph agent concept update|delete --concept <概念ID> --revision <资源版本>
-game-graph agent rule add|update|delete --mechanic <ID> --source <概念ID> --target <概念ID> [--source-qualifiers <JSON数组>] [--target-qualifiers <JSON数组>] [--text <规则>] --revision <资源版本>
+game-graph agent rule add|update|delete --mechanic <ID> --source <概念ID> --target <概念ID> [--source-qualifiers <JSON数组>] [--target-qualifiers <JSON数组>] [--text <规则>] [--custom-data <文本>] --revision <资源版本>
   agent 通用：--project <项目目录> 或 --connect http://127.0.0.1:<端口>
-  --format json|text；图：--max-nodes 500 --max-edges 2000
-  影响：--max-paths 50 --max-depth 16 --max-expansions 10000 --evidence-limit 10
+    查询只输出 JSON；路径：--max-paths 50 --max-depth 16 --max-expansions 10000
   Agent 的 --project 只定位后台项目上下文，不切换网页当前标签。mechanic open 只解析目标：缺失时返回 create-required，不产生编辑会话；session open 仅会在提供 --previous-session 时异步关闭该旧会话；session close 会异步自动整理并回读，返回 jobId 后无需等待。新建机制文件夹和空机制图是容器准备操作，不需要 session；其余在线写入必须提供 session open 返回的 --session
   mechanic update/arrange、concept/rule mutation 的 --revision 必须取 scopes.resourceRevisions；容器创建的 --workspace-revision 必须取 scopes.revision；在线写入还须 --project-generation
   当前关系：influence 需 sign 与 inheritance；端点限定词只属于 influence 规则；specializes 为无 sign/inheritance/限定词的具体概念 → 上位概念 DAG
@@ -65,14 +66,17 @@ try {
   const { positionals, values } = parseArgs({ options: {
     project: { type: 'string' }, port: { type: 'string' }, name: { type: 'string' }, id: { type: 'string' }, from: { type: 'string' }, to: { type: 'string' }, execute: { type: 'boolean' },
     help: { type: 'boolean', short: 'h' }, version: { type: 'boolean', short: 'v' },
-    ...Object.fromEntries(['connect', 'format', 'mechanic', 'view', 'revision', 'direction', 'hops', 'query', 'limit', 'from', 'to', 'max-paths', 'max-depth', 'max-expansions', 'max-nodes', 'max-edges', 'evidence-limit',
-      'label', 'description', 'aliases', 'tags', 'concept', 'source', 'target', 'source-qualifiers', 'target-qualifiers', 'relation', 'sign', 'text', 'inheritance', 'project-generation', 'session', 'previous-session', 'include-inherited', 'workspace-revision', 'parent', 'scope', 'folder', 'remove-isolated-concepts', 'manifest', 'library', 'entry', 'workspace-id'].map(key => [key, { type: 'string' }])),
+      ...Object.fromEntries(['connect', 'format', 'mechanic', 'view', 'revision', 'direction', 'hops', 'query', 'from', 'to', 'max-paths', 'max-depth', 'max-expansions',
+      'label', 'description', 'aliases', 'tags', 'custom-data', 'concept', 'source', 'target', 'source-qualifiers', 'target-qualifiers', 'relation', 'sign', 'text', 'inheritance', 'project-generation', 'session', 'previous-session', 'include-inherited', 'workspace-revision', 'parent', 'scope', 'folder', 'remove-isolated-concepts', 'manifest', 'library', 'entry', 'workspace-id', 'draft'].map(key => [key, { type: 'string' }])),
   }, allowPositionals: true });
   const [command, target] = positionals;
   if (values.help || (!command && !Object.keys(values).length)) console.log(usage);
   else if (values.version && !command && Object.keys(values).length === 1) console.log(metadata.version);
   else if (command === 'agent') {
-    if (target === 'session') {
+    if (target === 'draft') {
+      if (positionals.length !== 3) throw Object.assign(new Error('draft 需要动作子命令'), { code: 'AGENT_DRAFT_INVALID' });
+      console.log(await runAgentDraft(positionals[2], values));
+    } else if (target === 'session') {
       if (positionals.length !== 3) throw Object.assign(new Error('session 需要动作子命令'), { code: 'AGENT_EDIT_SESSION_INVALID' });
       console.log(await runAgentEditSession(positionals[2], values));
     } else if (target === 'recipe-migration') {
@@ -103,7 +107,8 @@ try {
       const projectRoot = values.project !== undefined ? await realpath(resolve(values.project))
         : command === 'web' ? null : await findProject();
       const context = projectRoot ? ['migrate', 'repair'].includes(command) ? { projectRoot, workspaceRoot: resolve(projectRoot, '.game-graph') }
-        : await projectContext(projectRoot, { createExportRoot: command === 'catalog' }) : null;
+        : await projectContext(projectRoot, command === 'catalog' ? { createExportRoot: true }
+          : { allowMissingExport: true, allowUnavailableExport: true }) : null;
       if (command === 'repair') {
         if (target !== 'projection-positions') throw Object.assign(new Error('repair 仅支持 projection-positions'), { code: 'REPAIR_UNSUPPORTED' });
         console.log(JSON.stringify(await repairProjectionPositions(context.workspaceRoot, { revision: values.revision, execute: values.execute === true }), null, 2));

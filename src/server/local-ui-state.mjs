@@ -11,7 +11,7 @@ const RECENT_LIMIT = 8;
 const MAX_IGNORE_BYTES = 256 * 1024;
 
 const fail = (code, message) => { throw new ContractError(code, message); };
-const emptyState = () => ({ version: VERSION, recentViews: [], recentMechanics: [], openTabs: [] });
+const emptyState = () => ({ version: VERSION, lastOpened: null, recentViews: [], recentMechanics: [], openTabs: [] });
 
 function recentIds(value, field) {
   if (!Array.isArray(value) || value.length > RECENT_LIMIT || value.some(id => typeof id !== 'string' || !id)) {
@@ -23,14 +23,16 @@ function recentIds(value, field) {
 
 function validateState(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || value.version !== VERSION
-    || Object.keys(value).some(key => !['version', 'recentViews', 'recentMechanics', 'openTabs'].includes(key))) {
+    || Object.keys(value).some(key => !['version', 'lastOpened', 'recentViews', 'recentMechanics', 'openTabs'].includes(key))) {
     fail('LOCAL_UI_STATE_INVALID', '本地界面状态文件格式无效，请修复或删除 .game-graph/.ui-state.json');
   }
   const rawOpenTabs = Array.isArray(value.openTabs) ? value.openTabs : [];
   if (rawOpenTabs.some(tab => !tab || !['view', 'mechanic'].includes(tab.kind) || typeof tab.id !== 'string' || !tab.id)) fail('LOCAL_UI_STATE_INVALID', 'openTabs 必须是有效资源标签数组');
+  const lastOpened = value.lastOpened ?? null;
+  if (lastOpened !== null && (!lastOpened || !['view', 'mechanic'].includes(lastOpened.kind) || typeof lastOpened.id !== 'string' || !lastOpened.id)) fail('LOCAL_UI_STATE_INVALID', 'lastOpened 必须是有效资源标识或 null');
   // 旧版本允许保留更多标签；收敛为最新的 10 个，避免升级后把本地状态误判为损坏。
   const openTabs = rawOpenTabs.slice(-10);
-  return { version: VERSION, recentViews: recentIds(value.recentViews, 'recentViews'), recentMechanics: recentIds(value.recentMechanics, 'recentMechanics'), openTabs };
+  return { version: VERSION, lastOpened, recentViews: recentIds(value.recentViews, 'recentViews'), recentMechanics: recentIds(value.recentMechanics, 'recentMechanics'), openTabs };
 }
 
 async function replaceText(root, file, text, { create = false } = {}) {

@@ -39,7 +39,7 @@ const pairs = graph => {
   for (const edge of graph.edges) {
     if (edge.source === edge.target) continue;
     const key = JSON.stringify([edge.source, edge.target].sort());
-    weights.set(key, (weights.get(key) ?? 0) + 1);
+    weights.set(key, (weights.get(key) ?? 0) + (edge.bundleMembers?.length ?? 1));
   }
   return [...weights].map(([key, weight]) => ({ ids: JSON.parse(key), weight }));
 };
@@ -164,8 +164,10 @@ export function measureGeometry(graph, geometry) {
     sharedEndpointCrossings: 0, overlaps: 0, nearParallel: 0, bends: 0, length: 0, area: 0, width: 0, height: 0 };
   const lines = [];
   const boxes = graph.nodes.map(node => ({ id: node.id, ...positions[node.id], width: sizes[node.id]?.width, height: sizes[node.id]?.height }));
+  const edgeIds = new Set(graph.edges.map(edge => edge.id)), boxById = new Map();
+  for (const box of boxes) if (!boxById.has(box.id)) boxById.set(box.id, box);
   for (const box of boxes) if (![box.x, box.y, box.width, box.height].every(Number.isFinite) || box.width <= 0 || box.height <= 0) metrics.invalid++;
-  if (routes.size !== geometry.routes.length || [...routes.keys()].some(id => !graph.edges.some(edge => edge.id === id))) metrics.invalid++;
+  if (routes.size !== geometry.routes.length || [...routes.keys()].some(id => !edgeIds.has(id))) metrics.invalid++;
   const onBoundary = (point, box) => point && box && (Math.abs(point.x - box.x) < EPS || Math.abs(point.x - box.x - box.width) < EPS)
     && point.y >= box.y - EPS && point.y <= box.y + box.height + EPS || point && box && (Math.abs(point.y - box.y) < EPS || Math.abs(point.y - box.y - box.height) < EPS)
     && point.x >= box.x - EPS && point.x <= box.x + box.width + EPS;
@@ -176,14 +178,15 @@ export function measureGeometry(graph, geometry) {
   for (const edge of graph.edges) {
     const points = routes.get(edge.id)?.points;
     if (!points || points.length < 2) { metrics.missing++; continue; }
-    if (!onBoundary(points[0], boxes.find(box => box.id === edge.source)) || !onBoundary(points.at(-1), boxes.find(box => box.id === edge.target))) metrics.invalid++;
+    if (!onBoundary(points[0], boxById.get(edge.source)) || !onBoundary(points.at(-1), boxById.get(edge.target))) metrics.invalid++;
     metrics.bends += Math.max(0, points.length - 2);
     for (let i = 1; i < points.length; i++) {
       const a = points[i - 1], b = points[i], vertical = Math.abs(a.x - b.x) < EPS;
       if (![a.x, a.y, b.x, b.y].every(Number.isFinite) || !vertical && Math.abs(a.y - b.y) > EPS) { metrics.invalid++; continue; }
       if (equal(a, b)) { metrics.invalid++; continue; }
       metrics.length += Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
-      const line = { edge, a, b, vertical, index: i }; lines.push(line);
+      const line = { edge, a, b, vertical, index: i, left: Math.min(a.x, b.x), right: Math.max(a.x, b.x),
+        top: Math.min(a.y, b.y), bottom: Math.max(a.y, b.y) }; lines.push(line);
       for (const box of boxes) {
         const hit = vertical ? inOpen(a.x, box.x, box.x + box.width) && overlap(a.y, b.y, box.y, box.y + box.height) > EPS
           : inOpen(a.y, box.y, box.y + box.height) && overlap(a.x, b.x, box.x, box.x + box.width) > EPS;
@@ -191,8 +194,22 @@ export function measureGeometry(graph, geometry) {
       }
     }
   }
-  const crossings = new Set(), contacts = new Set(), incidentCrossings = new Set();
-  for (let i = 0; i < lines.length; i++) for (let j = i + 1; j < lines.length; j++) {
+  const crossings = new Set(), contacts = new Set(), incidentCrossings = new Set(), crossingWeights = new Map();
+  // 横向扫描只留下外框相距不足 12px 的候选段对，再按原始索引顺序做精确审计。
+  // 保留原累加顺序，避免浮点舍入影响候选排序；碰撞与近邻阈值均不变。
+  const starts = lines.map((line, index) => ({ ...line, index })).sort((a, b) => a.left - b.left || a.index - b.index);
+  const ends = [...starts].sort((a, b) => a.right - b.right || a.index - b.index);
+  const active = new Set(), candidates = lines.map(() => []); let expired = 0;
+  for (const line of starts) {
+    while (expired < ends.length && ends[expired].right < line.left - 12 - EPS) active.delete(ends[expired++]);
+    for (const other of active) {
+      if (other.bottom < line.top - 12 - EPS || line.bottom < other.top - 12 - EPS) continue;
+      const first = Math.min(line.index, other.index), last = Math.max(line.index, other.index);
+      candidates[first].push(last);
+    }
+    active.add(line);
+  }
+  for (let i = 0; i < lines.length; i++) for (const j of candidates[i].sort((a, b) => a - b)) {
     const a = lines[i], b = lines[j];
     const same = a.edge.id === b.edge.id;
     if (same && Math.abs(a.index - b.index) <= 1) {
@@ -204,22 +221,28 @@ export function measureGeometry(graph, geometry) {
     }
     if (a.vertical === b.vertical) {
       const distance = Math.abs(a.vertical ? a.a.x - b.a.x : a.a.y - b.a.y);
-      const shared = a.vertical ? overlap(a.a.y, a.b.y, b.a.y, b.b.y) : overlap(a.a.x, a.b.x, b.a.x, b.b.x);
+      // 超过邻近阈值的平行段没有交叉、重合或拥挤贡献，避免为它们反复计算投影区间。
+      if (distance >= 12) continue;
+      const shared = a.vertical ? Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top))
+        : Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
       if (distance < EPS) { metrics.overlaps += shared; if (same && shared > EPS) metrics.selfCrossings++; }
       else if (distance < 12 && shared > EPS) metrics.nearParallel += shared * (12 - distance);
       continue;
     }
     const v = a.vertical ? a : b, h = a.vertical ? b : a, p = { x: v.a.x, y: h.a.y };
-    if (p.x < Math.min(h.a.x, h.b.x) - EPS || p.x > Math.max(h.a.x, h.b.x) + EPS || p.y < Math.min(v.a.y, v.b.y) - EPS || p.y > Math.max(v.a.y, v.b.y) + EPS) continue;
+    if (p.x < h.left - EPS || p.x > h.right + EPS || p.y < v.top - EPS || p.y > v.bottom + EPS) continue;
     if (same) { metrics.selfCrossings++; continue; }
     const key = JSON.stringify([[a.edge.id, b.edge.id].sort(), Number(p.x.toFixed(4)), Number(p.y.toFixed(4))]);
+    // 中心通道相交会让每条成员线都相交；候选评价必须计入实际条数，不能把宽通道当成零宽单线。
+    crossingWeights.set(key, (a.edge.bundleMembers?.length ?? 1) * (b.edge.bundleMembers?.length ?? 1));
     if (inOpen(p.x, h.a.x, h.b.x) && inOpen(p.y, v.a.y, v.b.y)) {
       crossings.add(key);
       if ([a.edge.source, a.edge.target].some(id => id === b.edge.source || id === b.edge.target)) incidentCrossings.add(key);
     } else contacts.add(key);
   }
-  metrics.crossings = crossings.size; metrics.contacts = [...contacts].filter(key => !crossings.has(key)).length;
-  metrics.sharedEndpointCrossings = incidentCrossings.size;
+  const countCrossings = keys => [...keys].reduce((sum, key) => sum + crossingWeights.get(key), 0);
+  metrics.crossings = countCrossings(crossings); metrics.contacts = countCrossings([...contacts].filter(key => !crossings.has(key)));
+  metrics.sharedEndpointCrossings = countCrossings(incidentCrossings);
   const all = boxes.flatMap(box => [{ x: box.x, y: box.y }, { x: box.x + box.width, y: box.y + box.height }]).concat([...routes.values()].flatMap(route => route.points));
   if (all.length) {
     metrics.width = Math.max(...all.map(p => p.x)) - Math.min(...all.map(p => p.x));

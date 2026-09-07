@@ -34,7 +34,7 @@ async function fixture(t) {
 }
 async function snapshot(root, files) { return Object.fromEntries(await Promise.all(files.map(async file => [file, await readFile(join(root, file), 'utf8')]))); }
 
-test('v7 到 v8 预览后显式提交：关系改名、inheritance 显式化且不生成派生', async t => {
+test('逐版本迁移必须显式提交：关系改名、限定词收回端点且不生成派生', async t => {
   const { workspace, files } = await fixture(t);
   const legacyPath = join(workspace, 'mechanics', 'hand.mechanic.json');
   const legacy = JSON.parse(await readFile(legacyPath, 'utf8')); legacy.edges[0].relation = 'belongsTo'; delete legacy.edges[0].sign; await writeFile(legacyPath, JSON.stringify(legacy));
@@ -46,10 +46,17 @@ test('v7 到 v8 预览后显式提交：关系改名、inheritance 显式化且�
   assert.equal(migratedViewPlan.structuralPresentation, 'line');
   const outcome = await migrateWorkspace(workspace, { revision: plan.revision, execute: true });
   assert.equal(outcome.migrated, true); assert.equal(outcome.derivedRulesCreated, 0); assert.equal(outcome.renamedRelations, 1);
+  await assert.rejects(readWorkspace(workspace), { code: 'WORKSPACE_VERSION_UNSUPPORTED' });
+  const v8ToV9 = await migrateWorkspace(workspace, { from: 8, to: 9 });
+  assert.equal(v8ToV9.preview, true);
+  await migrateWorkspace(workspace, { from: 8, to: 9, revision: v8ToV9.revision, execute: true });
+  const v9ToV10 = await migrateWorkspace(workspace, { from: 9, to: 10 });
+  assert.equal(v9ToV10.preview, true);
+  await migrateWorkspace(workspace, { from: 9, to: 10, revision: v9ToV10.revision, execute: true });
   const migrated = await readWorkspace(workspace);
-  assert.equal(migrated.manifest.schemaVersion, 8);
-  assert.equal(migrated.definitions.schemaVersion, 4);
-  assert.ok(migrated.mechanics.every(item => item.schemaVersion === 4));
+  assert.equal(migrated.manifest.schemaVersion, 10);
+  assert.equal(migrated.definitions.schemaVersion, 5);
+  assert.ok(migrated.mechanics.every(item => item.schemaVersion === 6));
   assert.ok(migrated.views.every(item => item.schemaVersion === 3 && item.structuralPresentation === 'line'));
   assert.ok(migrated.mechanics.flatMap(item => item.edges).filter(item => item.relation === 'influence').every(item => item.inheritance.mode === 'none'));
   assert.equal(migrated.mechanics.find(item => item.id === 'hand').edges[0].relation, 'specializes');

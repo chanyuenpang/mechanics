@@ -33,7 +33,7 @@ test('侧栏关联项目区直接列出项目，并提供折叠和添加操作',
   assert.match(html, /id="references"/);
   assert.match(html, /id="project-tabs" class="project-tabs" aria-label="关联项目列表"/);
   assert.doesNotMatch(html, /id="current-context"/);
-  assert.match(app, /const entries = \[\.\.\.projectTabs, \.\.\.referenceProjects\.filter/);
+  assert.match(app, /const entries = \[sourceProject && \{ projectRoot: sourceProject\.projectRoot/);
   assert.match(app, /await enterReference\(reference\.id\)/);
   assert.match(app, /let sourceProject = null/);
   assert.match(app, /function apiAsSource\(path, body = \{\}\)/);
@@ -57,7 +57,7 @@ test('操作控件使用统一 SVG 图标，关系记号仍作为领域信息保
   assert.match(html, /id="dismiss-error"[\s\S]*?<svg class="ui-icon"/);
   assert.match(app, /resourceIcon\.append\(icon\(kind === 'view' \? 'view' : 'mechanic'\)\)/);
   assert.match(app, /projectIcon\.append\(icon\(item\.pinned \? 'pin' : 'project'\)\)/);
-  assert.match(html, /＋ 正向影响/);
+  assert.match(html, /id="positive-tool"[^>]*>＋→<\/button>/);
 });
 
 test('资源标签双击关闭，当前草稿仍通过既有确认流程处理', () => {

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -39,6 +39,50 @@ test('工作区暴露定义与逐机制 resource revision，Agent mutation 不�
   assert.deepEqual(Object.keys(workspace.resourceRevisions.mechanics).sort(), workspace.mechanics.map(item => item.id).sort());
   for (const mechanic of workspace.mechanics) assert.match(mechanicRevision(workspace, mechanic.id), /^[a-f0-9]{64}$/u);
   assert.notEqual(definitionsRevision(workspace), workspace.revision);
+});
+
+test('draft open 保存旧草稿后才切换，并在 save 时自动排版和导出', async t => {
+  const { projectRoot, root } = await fixture(t);
+  const server = await startServer({ projectRoot, port: 0 });
+  t.after(() => server.close());
+  const scopes = await (await fetch(server.origin + '/api/agent?command=scopes&projectRoot=' + encodeURIComponent(projectRoot))).json();
+  const first = json(await call(['draft', 'open', '--project', projectRoot, '--mechanic', 'basic-rules', '--project-generation', String(scopes.projectGeneration), '--connect', server.origin]));
+  const mechanic = JSON.parse(await readFile(first.mechanicPath, 'utf8'));
+  mechanic.name = '草稿修改后的基础规则';
+  await writeFile(first.mechanicPath, JSON.stringify(mechanic, null, 2));
+  const second = json(await call(['draft', 'open', '--project', projectRoot, '--mechanic', 'hand', '--project-generation', String(scopes.projectGeneration), '--connect', server.origin]));
+  assert.notEqual(first.draftId, second.draftId);
+  assert.equal((await readWorkspace(root)).mechanics.find(item => item.id === 'basic-rules').name, '草稿修改后的基础规则');
+  const saved = json(await call(['draft', 'save', '--project', projectRoot, '--draft', second.draftId, '--project-generation', String(scopes.projectGeneration), '--connect', server.origin]));
+  assert.equal(saved.canonicalCommitted, true);
+  assert.ok((await readWorkspace(root)).mechanics.find(item => item.id === 'hand').routeCache);
+});
+
+test('draft open 在旧草稿无法保存时拒绝切换并保留旧草稿', async t => {
+  const { projectRoot } = await fixture(t);
+  const server = await startServer({ projectRoot, port: 0 });
+  t.after(() => server.close());
+  const scopes = await (await fetch(server.origin + '/api/agent?command=scopes&projectRoot=' + encodeURIComponent(projectRoot))).json();
+  const first = json(await call(['draft', 'open', '--project', projectRoot, '--mechanic', 'basic-rules', '--project-generation', String(scopes.projectGeneration), '--connect', server.origin]));
+  await writeFile(first.mechanicPath, '{ not json');
+  const failed = await failure(call(['draft', 'open', '--project', projectRoot, '--mechanic', 'hand', '--project-generation', String(scopes.projectGeneration), '--connect', server.origin]));
+  assert.equal(failed.body.error, 'AGENT_DRAFT_INVALID');
+  await assert.doesNotReject(readFile(first.mechanicPath, 'utf8'));
+});
+
+test('draft open 清理超过 24 小时的遗留临时草稿', async t => {
+  const { projectRoot } = await fixture(t);
+  const firstServer = await startServer({ projectRoot, port: 0 });
+  const scopes = await (await fetch(firstServer.origin + '/api/agent?command=scopes&projectRoot=' + encodeURIComponent(projectRoot))).json();
+  const first = json(await call(['draft', 'open', '--project', projectRoot, '--mechanic', 'basic-rules', '--project-generation', String(scopes.projectGeneration), '--connect', firstServer.origin]));
+  await firstServer.close();
+  const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
+  await utimes(first.draftPath, old, old);
+  const secondServer = await startServer({ projectRoot, port: 0 });
+  t.after(() => secondServer.close());
+  const nextScopes = await (await fetch(secondServer.origin + '/api/agent?command=scopes&projectRoot=' + encodeURIComponent(projectRoot))).json();
+  await call(['draft', 'open', '--project', projectRoot, '--mechanic', 'hand', '--project-generation', String(nextScopes.projectGeneration), '--connect', secondServer.origin]);
+  await assert.rejects(stat(first.draftPath), { code: 'ENOENT' });
 });
 
 test('Agent 只能在既有目录中创建受约束的机制容器，并返回工作区与资源版本', async t => {
@@ -143,13 +187,13 @@ test('Agent 自动排版仅保存网页同算法生成的整图坐标，并受�
 test('三级 CLI 创建概念；update 是字段 patch，JSON 数组可清空且禁止修改 ID 与锁', async t => {
   const { projectRoot, root } = await fixture(t), before = await readWorkspace(root);
   const created = json(await offline(projectRoot, ['concept', 'create', '--id', 'focus', '--label', '专注', '--description', '可投入行动的专注。',
-    '--aliases', '["集中"]', '--tags', '["资源"]', '--revision', definitionsRevision(before)]));
+    '--aliases', '["集中"]', '--tags', '["资源"]', '--custom-data', '来源：设计草案', '--revision', definitionsRevision(before)]));
   assert.equal(created.canonicalCommitted, true);
   assert.equal(created.workspaceId, before.manifest.id);
   assert.match(created.resourceRevision, /^[a-f0-9]{64}$/u);
   assert.notEqual(created.resourceRevision, definitionsRevision(before));
   let workspace = await readWorkspace(root), concept = workspace.definitions.nodes.find(node => node.id === 'focus');
-  assert.deepEqual(concept, { id: 'focus', label: '专注', description: '可投入行动的专注。', aliases: ['集中'], tags: ['资源'], agentLocked: false });
+  assert.deepEqual(concept, { id: 'focus', label: '专注', description: '可投入行动的专注。', aliases: ['集中'], tags: ['资源'], customData: '来源：设计草案', agentLocked: false });
 
   const updated = json(await offline(projectRoot, ['concept', 'update', '--concept', 'focus', '--description', '用于维持复杂行动。',
     '--aliases', '[]', '--tags', '[]', '--revision', created.resourceRevision]));
@@ -157,7 +201,11 @@ test('三级 CLI 创建概念；update 是字段 patch，JSON 数组可清空且
   assert.equal(concept.label, '专注');
   assert.equal(concept.description, '用于维持复杂行动。');
   assert.deepEqual(concept.aliases, []); assert.deepEqual(concept.tags, []);
-  assert.notEqual(updated.resourceRevision, created.resourceRevision);
+  assert.equal(concept.customData, '来源：设计草案');
+  const clearedCustomData = json(await offline(projectRoot, ['concept', 'update', '--concept', 'focus', '--custom-data', '', '--revision', updated.resourceRevision]));
+  workspace = await readWorkspace(root); concept = workspace.definitions.nodes.find(node => node.id === 'focus');
+  assert.equal(Object.hasOwn(concept, 'customData'), false);
+  assert.notEqual(clearedCustomData.resourceRevision, created.resourceRevision);
 
   for (const args of [
     ['--id', 'renamed'], ['--agent-locked', 'true'], ['--aliases', '不是 JSON'], ['--tags', '{}'],
@@ -197,10 +245,11 @@ test('rule add 必须指定机制、拒绝端点 upsert、自动补节点；upda
   assert.equal(missingMechanic.body.error, 'AGENT_MUTATION_INVALID');
 
   const added = json(await offline(projectRoot, ['rule', 'add', '--mechanic', 'basic-rules', '--source', 'armor', '--target', 'evade',
-    '--relation', 'influence', '--sign', 'positive',
+    '--relation', 'influence', '--sign', 'positive', '--custom-data', '来源：规则设计记录',
     '--revision', mechanicRevision(before, 'basic-rules')]));
   let workspace = await readWorkspace(root), mechanic = workspace.mechanics.find(item => item.id === 'basic-rules');
   assert.ok(mechanic.nodeIds.includes('armor')); assert.ok(mechanic.nodeIds.includes('evade'));
+  assert.equal(mechanic.edges.find(edge => edge.id === 'armor-2-evade').customData, '来源：规则设计记录');
   assert.equal(mechanic.positions.armor, undefined); assert.equal(mechanic.positions.evade, undefined);
   const duplicate = await failure(offline(projectRoot, ['rule', 'add', '--mechanic', 'basic-rules', '--source', 'armor', '--target', 'evade',
     '--relation', 'specializes', '--revision', added.resourceRevision]));
@@ -360,15 +409,16 @@ test('Agent 以项目目录定位后台上下文，不切换网页当前标签',
   } finally { await server.close(); }
 });
 
-test('catalog 发布失败返回 canonicalCommitted=true，CLI 不自动重试 canonical mutation', async t => {
+test('catalog 发布失败仍返回 canonicalCommitted=true 与明确的导出失败状态，CLI 不重试 canonical mutation', async t => {
   const { projectRoot, root } = await fixture(t), before = await readWorkspace(root);
   await writeFile(join(projectRoot, 'game-mechanics', 'user-owned.txt'), '不能由生成器清理');
-  const rejected = await failure(offline(projectRoot, ['concept', 'create', '--id', 'focus', '--label', '专注', '--description', '可投入行动的专注。',
+  const accepted = json(await offline(projectRoot, ['concept', 'create', '--id', 'focus', '--label', '专注', '--description', '可投入行动的专注。',
     '--aliases', '[]', '--tags', '[]', '--revision', definitionsRevision(before)]));
-  assert.equal(rejected.body.error, 'AGENT_EXPORT_FAILED');
-  assert.equal(rejected.body.canonicalCommitted, true);
-  assert.equal(rejected.body.workspaceId, before.manifest.id);
-  assert.match(rejected.body.resourceRevision, /^[a-f0-9]{64}$/u);
+  assert.equal(accepted.canonicalCommitted, true);
+  assert.equal(accepted.workspaceId, before.manifest.id);
+  assert.match(accepted.resourceRevision, /^[a-f0-9]{64}$/u);
+  assert.equal(accepted.exportPublication.state, 'failed');
+  assert.equal(accepted.exportPublication.code, 'EXPORT_ROOT_NOT_EMPTY');
   const definitions = JSON.parse(await readFile(join(root, before.manifest.definitions), 'utf8'));
   assert.equal(definitions.nodes.filter(node => node.id === 'focus').length, 1);
   assert.ok((await readdir(join(projectRoot, 'game-mechanics'))).includes('user-owned.txt'));

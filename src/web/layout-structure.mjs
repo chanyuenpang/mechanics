@@ -1,4 +1,21 @@
 // 布局结构完全独立于机制文件归属，不改变原图节点和边的身份。
+export const SNAP_GRID = 20;
+
+// 无向节点对是规划单位；成员仍保留各自端点、符号和身份。
+export function edgeBundles(graph) {
+  const groups = new Map();
+  for (const edge of graph.edges) {
+    if (edge.source === edge.target) continue;
+    const key = JSON.stringify([edge.source, edge.target].sort());
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(edge);
+  }
+  return [...groups.values()].map(members => {
+    members.sort((a, b) => a.id.localeCompare(b.id));
+    return { ...members[0], bundleMembers: members };
+  });
+}
+
 // 仅用于左右布局：负面影响按反向计算；规则端点和绘制方向仍由原始边拥有。
 export function layoutDirection(edge) {
   return edge.sign === -1 ? { source: edge.target, target: edge.source }
@@ -73,10 +90,11 @@ export function groupBoundary(graph, members) {
 // 只在当前相邻组之间尝试正模块度增益的合并。它是实验用贪心分组，
 // 不承诺找到最佳社区，也不把固定数量的大组作为正确性的条件。
 export function modularHierarchy(graph) {
-  const leaves = leafHierarchy(graph), count = graph.edges.filter(edge => edge.source !== edge.target).length;
+  const weightOf = edge => edge.bundleMembers?.length ?? 1;
+  const leaves = leafHierarchy(graph), count = graph.edges.filter(edge => edge.source !== edge.target).reduce((sum, edge) => sum + weightOf(edge), 0);
   const degree = new Map(graph.nodes.map(node => [node.id, 0]));
   for (const edge of graph.edges) if (edge.source !== edge.target) {
-    degree.set(edge.source, degree.get(edge.source) + 1); degree.set(edge.target, degree.get(edge.target) + 1);
+    degree.set(edge.source, degree.get(edge.source) + weightOf(edge)); degree.set(edge.target, degree.get(edge.target) + weightOf(edge));
   }
   const groups = new Map(leaves.roots.map(group => [group.id, { ...group, volume: group.members.reduce((sum, id) => sum + degree.get(id), 0) }]));
   const merges = []; let serial = 0;
@@ -84,7 +102,7 @@ export function modularHierarchy(graph) {
     const owner = new Map([...groups.values()].flatMap(group => group.members.map(id => [id, group.id]))), links = new Map();
     for (const edge of graph.edges) {
       const a = owner.get(edge.source), b = owner.get(edge.target); if (a === b) continue;
-      const key = JSON.stringify([a, b].sort()); links.set(key, (links.get(key) ?? 0) + 1);
+      const key = JSON.stringify([a, b].sort()); links.set(key, (links.get(key) ?? 0) + weightOf(edge));
     }
     let best;
     for (const [key, weight] of links) {
