@@ -132,7 +132,7 @@ export function createProjectManager({ onActivated = null } = {}) {
       const reference = (await listProjectReferences(source.context.projectRoot)).find(item => item.id === body.referenceId);
       if (!reference) fail('REFERENCE_NOT_DECLARED', `源项目未声明关联项目：${body.referenceId}`);
       if (reference.status !== 'ready') fail('REFERENCE_UNAVAILABLE', `关联项目“${reference.name}”当前不可进入：${reference.status}`);
-      return openStore({ projectRoot: reference.projectRoot, intent: 'existing' }, { activate: false, recordHistory: false, syncSkills: false });
+      return openStore({ projectRoot: reference.projectRoot, intent: 'existing' }, { activate: false, recordHistory: false, syncSkills: true });
     }),
     read: token => enqueue(async () => { const session = current(token); return attach(await session.store.read(), session); }),
     readForQuery: token => enqueue(async () => { const session = current(token); return attach(await session.store.readForQuery(), session); }),

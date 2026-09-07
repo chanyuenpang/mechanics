@@ -902,21 +902,30 @@ function routePairContribution(edgeA, pointsA, edgeB, pointsB) {
   return [conflict[1], conflict[0], bendCrowdingBetween(pointsA, pointsB), conflict[2]];
 }
 
+// 同一条边对的候选组合共享“其余边”的最大拐点，以及当前路线对的贡献。
+// 这些量不随候选变化，不能在每个笛卡尔积组合里重复扫描整图。
+function pairScoreContext(edges, state, left, right) {
+  return {
+    untouchedMaxBends: edges.reduce((maximum, edge) => edge === left || edge === right ? maximum
+      : Math.max(maximum, routeBends(state.routes.get(edge.id) ?? [])), 0),
+    oldPair: routePairContribution(left, state.routes.get(left.id), right, state.routes.get(right.id)),
+  };
+}
+
 // 两条边的候选笛卡尔积共享各自相对固定全图的一次增量评分；
 // 每个组合只补算两条候选之间的关系，避免 36×36 次重复扫描其余边。
 function scoreTwoRouteChanges(graph, positions, edges, state, left, right, leftRoute, rightRoute,
-  leftScore, rightScore) {
+  leftScore, rightScore, context = pairScoreContext(edges, state, left, right), leftPair = null, rightPair = null) {
   const score = state.score.map((value, index) => index === ROUTING_QUALITY.maxBends
     ? 0 : leftScore[index] + rightScore[index] - value);
-  const oldPair = routePairContribution(left, state.routes.get(left.id), right, state.routes.get(right.id));
-  const leftPair = routePairContribution(left, leftRoute, right, state.routes.get(right.id));
-  const rightPair = routePairContribution(left, state.routes.get(left.id), right, rightRoute);
+  const oldPair = context.oldPair;
+  leftPair ??= routePairContribution(left, leftRoute, right, state.routes.get(right.id));
+  rightPair ??= routePairContribution(left, state.routes.get(left.id), right, rightRoute);
   const nextPair = routePairContribution(left, leftRoute, right, rightRoute);
   for (const [scoreIndex, pairIndex] of [[ROUTING_QUALITY.collinearOverlap, 0], [ROUTING_QUALITY.crossings, 1],
     [ROUTING_QUALITY.bendCrowding, 2], [ROUTING_QUALITY.nearParallel, 3]])
     score[scoreIndex] += oldPair[pairIndex] + nextPair[pairIndex] - leftPair[pairIndex] - rightPair[pairIndex];
-  score[ROUTING_QUALITY.maxBends] = edges.reduce((maximum, edge) => Math.max(maximum, routeBends(
-    edge.id === left.id ? leftRoute : edge.id === right.id ? rightRoute : state.routes.get(edge.id) ?? [])), 0);
+  score[ROUTING_QUALITY.maxBends] = Math.max(context.untouchedMaxBends, routeBends(leftRoute), routeBends(rightRoute));
   for (const index of [ROUTING_QUALITY.collinearOverlap, ROUTING_QUALITY.nearParallel, ROUTING_QUALITY.length])
     score[index] = rounded(score[index]);
   return score;
@@ -1402,10 +1411,16 @@ function optimizeConflictPairs(graph, positions, edges, candidates, state, polic
         state.routes, state.score, new Map([[left.id, route]]))]));
       const rightScores = new Map(rightRoutes.map(route => [route, routeScoreAfterChanges(graph, positions, edges,
         state.routes, state.score, new Map([[right.id, route]]))]));
+      const pairContext = pairScoreContext(edges, state, left, right);
+      const leftPairs = new Map(leftRoutes.map(route => [route,
+        routePairContribution(left, route, right, state.routes.get(right.id))]));
+      const rightPairs = new Map(rightRoutes.map(route => [route,
+        routePairContribution(left, state.routes.get(left.id), right, route)]));
       let best = null;
       for (const leftRoute of leftRoutes) for (const rightRoute of rightRoutes) {
         const score = scoreTwoRouteChanges(graph, positions, edges, state, left, right, leftRoute, rightRoute,
-          leftScores.get(leftRoute), rightScores.get(rightRoute));
+          leftScores.get(leftRoute), rightScores.get(rightRoute), pairContext,
+          leftPairs.get(leftRoute), rightPairs.get(rightRoute));
         if (!best || compareTuple(score, best.score) < 0) best = { leftRoute, rightRoute, score };
       }
       if (best && compareTuple(best.score, state.score) < 0) {
@@ -1743,10 +1758,16 @@ function optimizePortSwaps(graph, positions, edges, assignments, axes, candidate
         state.routes, state.score, new Map([[left.edge.id, route]]))]));
       const rightScores = new Map(rightRoutes.map(route => [route, routeScoreAfterChanges(graph, positions, edges,
         state.routes, state.score, new Map([[right.edge.id, route]]))]));
+      const pairContext = pairScoreContext(edges, state, left.edge, right.edge);
+      const leftPairs = new Map(leftRoutes.map(route => [route,
+        routePairContribution(left.edge, route, right.edge, state.routes.get(right.edge.id))]));
+      const rightPairs = new Map(rightRoutes.map(route => [route,
+        routePairContribution(left.edge, state.routes.get(left.edge.id), right.edge, route)]));
       let best = null;
       for (const leftRoute of leftRoutes) for (const rightRoute of rightRoutes) {
         const score = scoreTwoRouteChanges(graph, positions, edges, state, left.edge, right.edge, leftRoute, rightRoute,
-          leftScores.get(leftRoute), rightScores.get(rightRoute));
+          leftScores.get(leftRoute), rightScores.get(rightRoute), pairContext,
+          leftPairs.get(leftRoute), rightPairs.get(rightRoute));
         if (!best || compareTuple(score, best.score) < 0) best = { leftRoute, rightRoute, score };
       }
       if (best && compareTuple(best.score, state.score) < 0) {
@@ -1787,12 +1808,18 @@ function optimizeCrossingNeighborhoods(graph, positions, edges, assignments, axe
       state.routes, state.score, new Map([[left.id, points]]))]));
     const rightScores = new Map(rightRoutes.map(points => [points, routeScoreAfterChanges(graph, positions, edges,
       state.routes, state.score, new Map([[right.id, points]]))]));
+    const pairContext = pairScoreContext(edges, state, left, right);
+    const leftPairs = new Map(leftRoutes.map(route => [route,
+      routePairContribution(left, route, right, state.routes.get(right.id))]));
+    const rightPairs = new Map(rightRoutes.map(route => [route,
+      routePairContribution(left, state.routes.get(left.id), right, route)]));
     const proposals = [];
     for (const leftRoute of leftRoutes) for (const rightRoute of rightRoutes) proposals.push({ leftRoute, rightRoute,
       local: [...pairConflict(left, leftRoute, right, rightRoute).slice(0, 2),
         routeBends(leftRoute) + routeBends(rightRoute), routeLength(leftRoute) + routeLength(rightRoute)],
       score: scoreTwoRouteChanges(graph, positions, edges, state, left, right, leftRoute, rightRoute,
-        leftScores.get(leftRoute), rightScores.get(rightRoute)) });
+        leftScores.get(leftRoute), rightScores.get(rightRoute), pairContext,
+        leftPairs.get(leftRoute), rightPairs.get(rightRoute)) });
     proposals.sort((a, b) => compareTuple(a.score, b.score));
     // 同时保留局部最简单的提案，不能在修复邻线前就因临时重叠将它剪掉。
     const selectedProposals = [...new Set([...proposals.slice(0, 2),

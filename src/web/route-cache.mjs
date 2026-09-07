@@ -2,7 +2,7 @@ const sameIds = (left, right) => left.length === right.length && left.every((id,
 const routeEdgeIds = graph => graph.edges.filter(edge => edge.source !== edge.target).map(edge => edge.id).sort();
 const validPoint = point => point && Number.isFinite(point.x) && Number.isFinite(point.y);
 // 路由算法改变时递增，避免坐标与拓扑未变的文件永久复用旧算法路线。
-const ROUTE_CACHE_VERSION = 3;
+const ROUTE_CACHE_VERSION = 4;
 
 // 几何快照的身份同时覆盖算法版本、可见节点位置和连线拓扑。路径只是这份快照的派生物，
 // 任一项变化都不能复用旧路径。

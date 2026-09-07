@@ -2,7 +2,7 @@
 name: game-mechanic-modeling
 description: 使用项目内 JSON 草稿工具修改 Game-Graph 概念与规则；仅在用户明确要求写入或建模时使用，不用于网页布局、视图或文档发布。
 metadata:
-  game_graph_skill_version: "2026.09.07.3"
+  game_graph_skill_version: "2026.09.07.6"
 ---
 
 # 游戏机制建模
@@ -11,10 +11,13 @@ metadata:
 
 ## JSON 草稿流程
 
-1. 用 `scopes` 读取现有机制与 revision；用 `search/node/impact` 查稳定 ID 和已有关系。
-2. `draft open --mechanic <机制ID>` 返回 definitions 与 mechanic 草稿路径。只编辑返回的 JSON 草稿，绝不直接编辑 canonical。
-3. `draft save --draft <draftId>` 会检查草稿身份和 definitions/mechanic 的 base revision，获取短锁并原子提交两份 JSON。冲突、非法 JSON 或身份不一致时保留草稿且零写入。
-4. 保存成功只表示 JSON 已提交；网页校验、排版、连线路由、视图更新和文档导出均未执行，不能声称已完成这些派生操作。
+1. 先运行 `guide`，以脚本返回的概念、影响规则与 is-a 规则模板为唯一草稿字段合同；不要凭记忆编造 JSON 字段。
+2. 用 `scopes` 读取现有机制、文件夹与 revision；用 `search/node/impact` 查稳定 ID 和已有关系。
+3. `draft open --mechanic <机制ID>` 是唯一编辑入口。目标已存在时，它返回 definitions 与 mechanic 草稿路径；目标不存在时，必须额外提供 `--name <名称> --scope <范围>`，它只在草稿中准备空机制，绝不提前写入 canonical。若需要放入已有文件夹，可追加 `--folder <scopes.folders 中的已有目录>`。
+4. 草稿会移除坐标与路径缓存；只编辑返回的结构 JSON，绝不直接编辑 canonical，也不要自行写回几何字段。
+5. 编辑后先运行 `draft validate --draft <draftId>`。它校验两份草稿的结构、概念/规则 ID、端点引用、限定词、全工作区重复有向端点和 is-a 环；失败时草稿保留、canonical 零写入。通过后才继续。
+6. `draft save --draft <draftId>` 会再次校验草稿身份和 definitions/mechanic 的 base revision，并以可回滚的两文件事务提交；对于新机制，只有此步骤成功后才会创建正式文件。冲突、非法 JSON、语义校验或回读失败都会保留草稿且不会保留部分写入。保存时保留仍有效的既有节点位置、清除过期路径缓存。
+7. 保存成功只表示 JSON 已提交；网页校验、自动排版、视图更新和文档导出均未执行，不能声称已完成这些派生操作。
 
 ## 建模准则
 
@@ -25,4 +28,4 @@ metadata:
 - 同一有向基础端点对只保留一条规则；将多个条件、例外和结算细节合并在该规则文字中。
 - 缺边或未找到路径只表示模型证据不足，不得据此虚构、删除或宣称运行时事实。
 
-脚本不提供容器创建、迁移、修复、网页视图或文档发布；这些属于网页/工具维护职责，不能通过本 skill 绕过。
+脚本只提供受限的空机制容器创建、查询、草稿校验和 JSON 草稿编辑；不提供迁移、修复、网页视图或文档发布，不能通过本 skill 绕过这些边界。

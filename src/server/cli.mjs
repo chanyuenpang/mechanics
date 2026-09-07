@@ -13,10 +13,12 @@ import { acquireWorkspaceLock } from './files.mjs';
 import { repairProjectionPositions } from './projection-position-repair.mjs';
 import { projectContext } from './project-context.mjs';
 import { listProjectReferences } from './project-references.mjs';
+import { registerProjectSkills } from './project-skills.mjs';
 
 const usage = `Game-Graph ${metadata.version} · 本地 JSON 工作区
 
 game-graph init <项目目录> [--name <名称>] [--id <稳定ID>]
+game-graph sync [--project <项目目录>]（同步项目内受管 skill 与 JSON 工具）
 game-graph web [--project <项目目录>] [--port 4319]
 game-graph validate [--project <项目目录>]
 game-graph migrate --from 7 --to 8 | --from 8 --to 9 | --from 9 --to 10 | --from 9 --to 9（悬空节点修复） --project <项目目录> [--revision <预览版本>] [--execute]（默认仅预览）
@@ -98,7 +100,7 @@ try {
     console.log(JSON.stringify(await listProjectReferences(await realpath(resolve(values.project))), null, 2));
   }
   else {
-    const allowed = { init: ['name', 'id'], web: ['project', 'port'], validate: ['project'], migrate: ['project', 'from', 'to', 'revision', 'execute'], repair: ['project', 'revision', 'execute'], catalog: ['project'], root: ['project'] };
+    const allowed = { init: ['name', 'id'], sync: ['project'], web: ['project', 'port'], validate: ['project'], migrate: ['project', 'from', 'to', 'revision', 'execute'], repair: ['project', 'revision', 'execute'], catalog: ['project'], root: ['project'] };
     if (!allowed[command] || positionals.length !== (command === 'init' || command === 'repair' ? 2 : 1)) throw new Error('命令或参数数量无效，请运行 --help。');
     for (const option of Object.keys(values)) if (!allowed[command].includes(option)) throw new Error(command + ' 不支持 --' + option);
     if (command === 'init') console.log(JSON.stringify(await initProject(target, { name: values.name, id: values.id }), null, 2));
@@ -106,10 +108,13 @@ try {
       if (values.project === '') throw new Error('--project 不能为空');
       const projectRoot = values.project !== undefined ? await realpath(resolve(values.project))
         : command === 'web' ? null : await findProject();
-      const context = projectRoot ? ['migrate', 'repair'].includes(command) ? { projectRoot, workspaceRoot: resolve(projectRoot, '.game-graph') }
+      const context = projectRoot && command !== 'sync' ? ['migrate', 'repair'].includes(command) ? { projectRoot, workspaceRoot: resolve(projectRoot, '.game-graph') }
         : await projectContext(projectRoot, command === 'catalog' ? { createExportRoot: true }
           : { allowMissingExport: true, allowUnavailableExport: true }) : null;
-      if (command === 'repair') {
+      if (command === 'sync') {
+        const verifiedProjectRoot = await findProject(projectRoot);
+        console.log(JSON.stringify({ ok: true, projectRoot: verifiedProjectRoot, ...await registerProjectSkills(verifiedProjectRoot) }, null, 2));
+      } else if (command === 'repair') {
         if (target !== 'projection-positions') throw Object.assign(new Error('repair 仅支持 projection-positions'), { code: 'REPAIR_UNSUPPORTED' });
         console.log(JSON.stringify(await repairProjectionPositions(context.workspaceRoot, { revision: values.revision, execute: values.execute === true }), null, 2));
       } else if (command === 'migrate') {
