@@ -6,7 +6,11 @@ import { ContractError } from '../domain/validate.mjs';
 import { projectContext } from './project-context.mjs';
 import { readQuerySnapshot } from './query-snapshot.mjs';
 
-const CONFIG_FILE = 'game-graph.references.json';
+// 关联声明是 Game-Graph 工作区元数据，不能污染宿主项目根目录。
+// 旧版本曾将它保存为项目根目录的 game-graph.references.json；只在迁移时读取它。
+const CONFIG_FILE = 'references.json';
+const LEGACY_CONFIG_FILE = 'game-graph.references.json';
+const WORKSPACE_DIRECTORY = '.game-graph';
 const fail = (code, message) => { throw new ContractError(code, message); };
 const appData = () => process.env.APPDATA || resolve(homedir(), 'AppData', 'Roaming');
 const bindingsPath = () => resolve(appData(), 'game-graph', 'project-reference-bindings.json');
@@ -31,15 +35,35 @@ function validateBindings(value) {
 }
 
 export async function readProjectReferences(sourceRoot) {
-  try { return validateReferences(JSON.parse(await readFile(resolve(sourceRoot, CONFIG_FILE), 'utf8'))); }
-  catch (error) { if (error.code === 'ENOENT') return { version: 1, references: [] }; throw error; }
+  const canonicalPath = referencesPath(sourceRoot);
+  try { return validateReferences(JSON.parse(await readFile(canonicalPath, 'utf8'))); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+
+  // 迁移必须在读取时完成：否则仅查看关联项目的用户会长期留下根目录污染文件。
+  const legacyPath = resolve(sourceRoot, LEGACY_CONFIG_FILE);
+  try {
+    const legacy = validateReferences(JSON.parse(await readFile(legacyPath, 'utf8')));
+    await saveProjectReferences(sourceRoot, legacy);
+    await unlink(legacyPath);
+    return legacy;
+  } catch (error) {
+    if (error.code === 'ENOENT') return { version: 1, references: [] };
+    throw error;
+  }
 }
 
 async function saveProjectReferences(sourceRoot, value) {
   validateReferences(value);
-  const path = resolve(sourceRoot, CONFIG_FILE), temporary = `${path}.${randomUUID()}.tmp`;
+  const path = referencesPath(sourceRoot), temporary = `${path}.${randomUUID()}.tmp`;
+  await mkdir(dirname(path), { recursive: true });
   try { await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx' }); await rename(temporary, path); }
   catch (error) { try { await unlink(temporary); } catch {} throw error; }
+}
+
+function referencesPath(sourceRoot) {
+  return resolve(sourceRoot, WORKSPACE_DIRECTORY, CONFIG_FILE);
 }
 
 async function readBindings(path = bindingsPath()) {

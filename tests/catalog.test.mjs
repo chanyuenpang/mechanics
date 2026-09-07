@@ -94,23 +94,23 @@ test('导出清单将文件夹聚合为一篇，单机制图保持独立且不�
   assert.throws(() => validateWorkspace(workspace), { code: 'DOCUMENT_EXPORT_CONFLICT' });
 });
 
-test('保存导出清单不生成文档，显式生成使用已保存的范围', async t => {
+test('保存导出清单在后台生成文档，显式生成只复用当前 canonical 范围', async t => {
   const { root, exportRoot, workspace } = await fixture(t);
   const store = await createWorkspaceStore(root);
   try {
     const mechanic = workspace.mechanics[0];
     const saved = await store.setDocumentExport({ revision: workspace.revision, selections: [{ kind: 'mechanic', mechanicId: mechanic.id }] });
     assert.deepEqual(saved.manifest.exportSelections, [{ kind: 'mechanic', mechanicId: mechanic.id }]);
-    await assert.rejects(access(join(exportRoot, `mechanics/${mechanic.id}.md`)), { code: 'ENOENT' });
     const generated = await store.generateDocumentExport({ revision: saved.revision });
     assert.equal(generated.revision, saved.revision);
-    assert.ok(generated.documentRevision); assert.equal(generated.documentCount, 1);
-    assert.match(await readFile(join(exportRoot, `mechanics/${mechanic.id}.md`), 'utf8'), /→/);
-    await assert.rejects(access(join(exportRoot, `mechanics/${workspace.mechanics[1].id}.md`)), { code: 'ENOENT' });
+    assert.ok(['pending', 'current'].includes(generated.exportPublication.state));
     const structure = await store.documentExportStructure();
     assert.equal(structure.revision, saved.revision);
     assert.equal(structure.mechanics.find(item => item.id === mechanic.id).selected, true);
     await assert.rejects(store.setDocumentExport({ revision: workspace.revision, selections: [] }), { code: 'REVISION_CONFLICT' });
+    await store.close();
+    assert.match(await readFile(join(exportRoot, `mechanics/${mechanic.id}.md`), 'utf8'), /→/);
+    await assert.rejects(access(join(exportRoot, `mechanics/${workspace.mechanics[1].id}.md`)), { code: 'ENOENT' });
   } finally { await store.close(); }
 });
 
@@ -154,6 +154,7 @@ test('发布转换旧逐概念文档、保存刷新词典，浏览器从磁盘�
     const definitions = structuredClone(workspace.definitions);
     definitions.nodes.find(node => node.id === 'health').label = '生命值';
     await store.save({ revision: workspace.revision, kind: 'definitions', document: definitions });
+    await store.close();
     assert.match(await readFile(join(exportRoot, 'concepts.md'), 'utf8'), /生命值/);
   } finally { await store.close(); }
   const current = await readWorkspace(root);

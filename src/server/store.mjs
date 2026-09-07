@@ -8,7 +8,7 @@ import { assertDocument, validateWorkspace, ContractError } from '../domain/vali
 import { composeView } from '../domain/view.mjs';
 import { documentExportStructure } from '../domain/document-export.mjs';
 import { readQuerySnapshot } from './query-snapshot.mjs';
-import { assertCatalogRemovable, inspectCatalogPublication, publishCatalog, removeCatalog } from './catalog.mjs';
+import { assertCatalogRemovable, buildCatalog, inspectCatalogPublication, publishCatalog, removeCatalog } from './catalog.mjs';
 import { projectContext } from './project-context.mjs';
 import { applyAgentMutation } from './agent-mutation.mjs';
 import { semanticRuleId } from '../domain/identity.mjs';
@@ -23,6 +23,9 @@ const fail = (code, message, details = {}) => { throw Object.assign(new Contract
 export async function createWorkspaceStore(workspaceRoot) {
   const root = await realpath(resolve(workspaceRoot));
   let queue = Promise.resolve(), closed = false;
+  // 文档是 canonical 的派生物：最多只保留一份正在发布的工作和最新一份待发布快照。
+  // 它不进入写入队列，绝不能让磁盘导出拖慢图编辑、项目打开或 Agent mutation。
+  let publicationWorker = null, pendingPublication = null, publication = null;
   const enqueue = operation => {
     if (closed) return Promise.reject(new ContractError('STORE_CLOSED', '工作区已关闭'));
     const result = queue.then(operation);
@@ -70,17 +73,57 @@ export async function createWorkspaceStore(workspaceRoot) {
     return inspected.state === 'current' ? declared : { ...declared, ...inspected, path: workspace.agentExportRoot,
       actions: ['republish', 'choose-path'] };
   };
-  const publishAfterCommit = async workspace => {
-    const baseline = await verified();
-    const unavailable = exportPublication(baseline);
-    if (unavailable.state !== 'current') return withExportPublication(baseline, unavailable);
-    try { await publishCatalog(baseline.agentExportRoot, baseline); }
-    catch (error) { return withExportPublication(baseline, exportPublication(baseline, error)); }
-    return withExportPublication(await verified(), exportPublication(baseline));
+  // 路由快照、坐标等不进入导出语义；它们保存后不能触发无意义的文档重写。
+  const publicationKey = workspace => `${workspace.manifest.id}\u0000${workspace.manifest.agentExportPath ?? ''}\u0000${buildCatalog(workspace).documentRevision}`;
+  const publicationPending = workspace => ({ state: 'pending', code: 'CATALOG_PENDING', path: workspace.agentExportRoot,
+    message: '正在后台生成 Agent 机制文档。', actions: ['republish', 'choose-path'] });
+  const schedulePublication = workspace => {
+    const declared = exportPublication(workspace);
+    if (declared.state === 'unconfigured' || declared.state === 'unavailable') return declared;
+    const key = publicationKey(workspace);
+    if (publication?.key === key && publication.state === 'current') return declared;
+    if (publication?.key === key && ['pending', 'running'].includes(publication.state)) return publicationPending(workspace);
+    pendingPublication = { key, workspace };
+    publication = { key, state: 'pending' };
+    if (!publicationWorker) {
+      publicationWorker = Promise.resolve().then(async () => {
+        while (pendingPublication && !closed) {
+          const target = pendingPublication; pendingPublication = null;
+          publication = { key: target.key, state: 'running' };
+          try {
+            // 缺失的已配置目录可安全创建；非受管目录仍由 publishCatalog 拒绝覆盖。
+            const context = await projectContext(target.workspace.projectRoot, { manifest: target.workspace.manifest, createExportRoot: true });
+            const candidate = { ...target.workspace, agentExportRoot: context.exportRoot, agentExportStatus: 'available' };
+            await publishCatalog(context.exportRoot, candidate);
+            const latest = await readWorkspace(root);
+            if (publicationKey(latest) === target.key) publication = { key: target.key, state: 'current' };
+            else pendingPublication ??= { key: publicationKey(latest), workspace: latest };
+          } catch (error) {
+            publication = { key: target.key, state: 'failed', error };
+          }
+        }
+      }).finally(() => {
+        publicationWorker = null;
+        // worker 退出边界与新的保存可能交错；重新调度，不能遗失最新快照。
+        if (pendingPublication && !closed) schedulePublication(pendingPublication.workspace);
+      });
+    }
+    return publicationPending(workspace);
+  };
+  const publicationForRead = async workspace => {
+    const declared = exportPublication(workspace);
+    if (declared.state === 'unconfigured' || declared.state === 'unavailable') return declared;
+    const key = publicationKey(workspace);
+    if (publication?.key === key) {
+      if (publication.state === 'failed') return exportPublication(workspace, publication.error);
+      if (publication.state === 'pending' || publication.state === 'running') return publicationPending(workspace);
+      if (publication.state === 'current') return declared;
+    }
+    return inspectExportPublication(workspace);
   };
   const refreshCatalog = async () => {
-    const canonical = await readWorkspace(root);
-    return publishAfterCommit(canonical);
+    const canonical = await verified();
+    return withExportPublication(canonical, schedulePublication(canonical));
   };
   const mechanicFolder = value => {
     if (typeof value !== 'string') fail('UNSAFE_PATH', '机制文件夹必须是字符串');
@@ -106,7 +149,7 @@ export async function createWorkspaceStore(workspaceRoot) {
     const directory = mechanicDirectory(folder);
     if (workspace.directories.includes(directory)) fail('FILE_EXISTS', '机制文件夹已存在：' + folder);
     await ensureWorkspaceDirectory(root, directory);
-    return verified();
+    return refreshCatalog();
   });
   const agentMechanicFolder = async body => {
     if (body.action !== 'create' || typeof body.name !== 'string') fail('AGENT_MUTATION_INVALID', 'Agent 只能创建机制文件夹，且必须提供 --name');
@@ -178,7 +221,7 @@ export async function createWorkspaceStore(workspaceRoot) {
     const actual = dirname(path), entries = await readdir(actual);
     if (entries.length) fail('FOLDER_NOT_EMPTY', '机制文件夹非空；请先移出机制图或子文件夹：' + folder);
     await rmdir(actual);
-    return verified();
+    return refreshCatalog();
   });
   const deleteMechanic = body => write(async () => {
     const workspace = await current(body.revision);
@@ -220,7 +263,7 @@ export async function createWorkspaceStore(workspaceRoot) {
     await ensureWorkspaceDirectory(root, parent === '.' ? '' : parent);
     try { await commitFile(root, file, text, { create: true }); }
     catch (error) { error.message += '；目标：' + file + '。父目录可能已创建，请重新读取目录。'; throw error; }
-    return kind === 'mechanic' ? refreshCatalog() : verified();
+    return kind === 'mechanic' || kind === 'view' ? refreshCatalog() : verified();
   });
   const agentMechanic = async body => {
     if (body.action !== 'create') fail('AGENT_MUTATION_INVALID', 'Agent 只能创建空白机制图');
@@ -462,6 +505,9 @@ export async function createWorkspaceStore(workspaceRoot) {
       await commitFile(root, 'workspace.json', encode(manifest));
       return refreshCatalog();
     }
+    // 不能在后台发布正在写旧目录时迁移导出根；先让该派生任务完整结束，
+    // 再按既有 ownership 规则验证和清理，避免把半成品误判为用户文件。
+    await publicationWorker;
     await assertCatalogRemovable(workspace.agentExportRoot, workspace.manifest.id);
     context = await projectContext(workspace.projectRoot, { manifest, createExportRoot: true });
     const candidate = { ...workspace, manifest, agentExportRoot: context.exportRoot };
@@ -488,22 +534,13 @@ export async function createWorkspaceStore(workspaceRoot) {
     workspace.manifest = manifest; validateWorkspace(workspace);
     await commitFile(root, 'workspace.json', encode(manifest));
     const committed = await verified();
-    return withExportPublication(committed, await inspectExportPublication(committed));
+    return withExportPublication(committed, schedulePublication(committed));
   });
-  // 导出设置和生成是两个显式动作：重建文档只读取已保存的 canonical 范围，绝不借机改写 manifest。
+  // 显式生成只是把最新 canonical 快照排入后台；它不借机改写 manifest，也不阻塞界面。
   const generateDocumentExport = body => write(async () => {
     const workspace = await current(body?.revision);
     if (!workspace.manifest.agentExportPath) fail('EXPORT_ROOT_UNCONFIGURED', '尚未配置 Agent 机制文档导出目录；请先在项目设置中选择目录。');
-    try {
-      // 这是用户明确的恢复/生成动作，才允许创建缺失目录。
-      const context = await projectContext(workspace.projectRoot, { manifest: workspace.manifest, createExportRoot: true });
-      const candidate = { ...workspace, agentExportRoot: context.exportRoot, agentExportStatus: 'available' };
-      const catalog = await publishCatalog(context.exportRoot, candidate);
-      return { ...candidate, exportPublication: { state: 'current', path: context.exportRoot }, documentRevision: catalog.documentRevision,
-        documentCount: catalog.folders.length + catalog.mechanics.length + catalog.views.length };
-    } catch (error) {
-      fail('DOCUMENT_EXPORT_FAILED', '机制文档生成失败：' + error.message);
-    }
+    return withExportPublication(workspace, schedulePublication(workspace));
   });
   const mutateAgent = body => {
     if (body?.resource === 'mechanic-folder' && body.action === 'delete') return agentMechanicFolderDelete(body);
@@ -532,8 +569,7 @@ export async function createWorkspaceStore(workspaceRoot) {
       : committed.resourceRevisions.mechanics[target.id];
     const envelope = { canonicalCommitted: true, workspaceId: committed.manifest.id, revision: committed.revision,
       resourceRevision, resource: body.resource, action: body.action, ...(target.id ? { id: target.id } : {}) };
-    const published = await publishAfterCommit(committed);
-    return { ...envelope, exportPublication: published.exportPublication };
+    return { ...envelope, exportPublication: schedulePublication(committed) };
     });
   };
   // Agent 草稿只能在此处进入 canonical：它没有坐标，保存时必须重新校验、排版并一次提交定义与机制。
@@ -569,13 +605,18 @@ export async function createWorkspaceStore(workspaceRoot) {
     const committed = await verified();
     const envelope = { canonicalCommitted: true, workspaceId: committed.manifest.id, revision: committed.revision,
       definitionsRevision: committed.resourceRevisions.definitions, mechanicRevision: committed.resourceRevisions.mechanics[mechanic.id], mechanic: mechanic.id };
-    const published = await publishAfterCommit(committed);
-    return { ...envelope, exportPublication: published.exportPublication };
+    return { ...envelope, exportPublication: schedulePublication(committed) };
   });
   return {
     read: () => enqueue(async () => {
       const workspace = await readWorkspace(root);
-      return withExportPublication(workspace, await inspectExportPublication(workspace));
+      return withExportPublication(workspace, await publicationForRead(workspace));
+    }),
+    // 只有真实项目会话在打开时才调度派生文档；底层 store 的纯读取必须无副作用，
+    // 以便查询、校验和临时测试目录不会意外启动后台写入。
+    ensurePublication: () => enqueue(async () => {
+      const workspace = await readWorkspace(root);
+      return withExportPublication(workspace, schedulePublication(workspace));
     }),
     readForQuery: () => enqueue(() => readQuerySnapshot(root)),
     save: body => write(async () => {
@@ -600,7 +641,7 @@ export async function createWorkspaceStore(workspaceRoot) {
       validateWorkspace(workspace);
       if (kind === 'view') composeView(workspace, document);
       await commitFile(root, file, encode(document));
-      return kind === 'definitions' || kind === 'mechanic' ? refreshCatalog() : verified();
+      return kind === 'definitions' || kind === 'mechanic' || kind === 'view' ? refreshCatalog() : verified();
     }),
     createMechanic: body => create('mechanic', body),
     createMechanicFolder,
@@ -623,7 +664,15 @@ export async function createWorkspaceStore(workspaceRoot) {
       const workspace = await current(body.revision);
       return applyProjectSettings({ ...body, name: workspace.manifest.name });
     }),
-    close: async () => { if (closed) return; closed = true; await queue; },
+    // 仅供服务关停与集成测试在直接读取或处理导出目录前等待派生发布完成。
+    flushPublication: async () => { await publicationWorker; },
+    close: async () => {
+      if (closed) return;
+      closed = true;
+      await queue;
+      // 服务关闭后测试或用户可立即处理项目目录，不能留下仍在写入的派生文档任务。
+      await publicationWorker;
+    },
   };
 }
 

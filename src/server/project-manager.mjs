@@ -97,7 +97,7 @@ export function createProjectManager({ onActivated = null } = {}) {
     if (syncSkills) await registerProjectSkills(requested);
     const context = await projectContext(requested, { allowMissingExport: true, allowUnavailableExport: true }), store = await createWorkspaceStore(context.workspaceRoot);
     let workspace;
-    try { workspace = await store.read(); } catch (error) { await store.close(); throw error; }
+    try { workspace = await store.ensurePublication(); } catch (error) { await store.close(); throw error; }
     const session = { token: randomUUID(), generation: ++generation, context, store, workspaceId: workspace.manifest.id,
       localUiState: createLocalUiState(context.workspaceRoot), agentEdit: { records: new Map(), queue: Promise.resolve() }, agentDraft: null };
     sessions.set(session.token, session); roots.set(rootKey(context.projectRoot), session); if (activate) activeToken = session.token;

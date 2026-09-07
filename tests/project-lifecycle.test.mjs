@@ -18,6 +18,15 @@ async function post(origin, path, body, headers = {}) {
   return { response, data: await response.json() };
 }
 
+async function waitForPublication(origin, token, attempts = 40) {
+  for (let index = 0; index < attempts; index++) {
+    const workspace = await (await fetch(origin + '/api/workspace?projectSessionToken=' + encodeURIComponent(token))).json();
+    if (workspace.exportPublication?.state === 'current' || workspace.exportPublication?.state === 'failed') return workspace;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error('后台文档发布未在预期时间内结束');
+}
+
 async function openProject(origin, projectRoot, metadata = {}, headers = {}) {
   const preflight = await post(origin, '/api/project/preflight', { projectRoot }, headers);
   assert.equal(preflight.response.status, 200);
@@ -149,16 +158,15 @@ test('文档导出设置与生成文档分别提交，并允许用未改动的�
   });
   assert.equal(saved.response.status, 200);
   assert.notEqual(saved.data.revision, settings.revision);
-  assert.equal(saved.data.exportPublication.state, 'stale');
-  const stale = await fetch(server.origin + '/api/concept-docs?projectSessionToken=' + encodeURIComponent(saved.data.projectSessionToken));
-  assert.equal(stale.status, 422); assert.equal((await stale.json()).error, 'CATALOG_STALE');
+  assert.equal(saved.data.exportPublication.state, 'pending');
   const generated = await post(server.origin, '/api/document-export/generate', {
     projectSessionToken: saved.data.projectSessionToken, projectGeneration: saved.data.projectGeneration, revision: saved.data.revision,
   });
-  assert.equal(generated.response.status, 200);
+  assert.equal(generated.response.status, 200, JSON.stringify(generated.data));
   assert.equal(generated.data.revision, saved.data.revision);
-  assert.equal(generated.data.exportPublication.state, 'current');
-  assert.ok(generated.data.documentRevision); assert.equal(generated.data.documentCount, 1);
+  assert.equal(generated.data.exportPublication.state, 'pending');
+  const published = await waitForPublication(server.origin, generated.data.projectSessionToken);
+  assert.equal(published.exportPublication.state, 'current');
   const docs = await (await fetch(server.origin + '/api/concept-docs?projectSessionToken=' + encodeURIComponent(generated.data.projectSessionToken))).json();
   assert.deepEqual(docs.documents.map(item => item.id), [mechanicId]);
   const refreshed = await (await fetch(server.origin + '/api/document-export/settings?projectSessionToken=' + encodeURIComponent(saved.data.projectSessionToken))).json();

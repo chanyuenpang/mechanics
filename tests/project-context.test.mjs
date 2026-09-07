@@ -142,7 +142,7 @@ test('Agent 导出不会接管已有普通目录', async t => {
   assert.equal(await readFile(join(occupied, 'notes.md'), 'utf8'), '用户文件');
 });
 
-test('导出目录缺失或不可用不阻止 canonical 打开、保存，并只能由显式生成恢复', async t => {
+test('导出目录缺失或不可用不阻止 canonical 打开、保存，并在后台自动恢复', async t => {
   const parent = await mkdtemp(join(tmpdir(), 'game-graph-export-resilience-'));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const projectRoot = join(parent, 'resilient-project'); await mkdir(projectRoot);
@@ -152,14 +152,21 @@ test('导出目录缺失或不可用不阻止 canonical 打开、保存，并只
   assert.equal(preflight.status, 'existing');
   const manager = createProjectManager(); t.after(() => manager.close());
   const opened = await manager.open({ projectRoot, intent: 'existing' });
-  assert.equal(opened.exportPublication.state, 'missing');
+  assert.equal(opened.exportPublication.state, 'pending');
   const saved = await manager.save({ projectSessionToken: opened.projectSessionToken, projectGeneration: opened.projectGeneration,
     revision: opened.revision, kind: 'definitions', document: opened.definitions });
-  assert.equal(saved.exportPublication.state, 'missing');
+  assert.equal(saved.exportPublication.state, 'pending');
   assert.equal((await readWorkspace(join(projectRoot, '.game-graph'))).manifest.name, '导出韧性');
   const generated = await manager.generateDocumentExport({ projectSessionToken: opened.projectSessionToken, projectGeneration: opened.projectGeneration,
     revision: saved.revision });
-  assert.equal(generated.exportPublication.state, 'current');
+  assert.ok(['pending', 'current'].includes(generated.exportPublication.state));
+  let published;
+  for (let index = 0; index < 40; index++) {
+    published = await manager.read(opened.projectSessionToken);
+    if (published.exportPublication.state !== 'pending') break;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  assert.equal(published.exportPublication.state, 'current');
   await access(join(projectRoot, 'game-mechanics', 'README.md'));
   assert.equal((await manager.open({ projectRoot, intent: 'existing' })).exportPublication.state, 'current');
 

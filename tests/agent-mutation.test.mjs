@@ -22,6 +22,9 @@ async function fixture(t) {
   return { projectRoot, root: join(projectRoot, '.game-graph') };
 }
 
+const startFixtureServer = (projectRoot, options = {}) => startServer({ projectRoot, port: 0,
+  projectHistoryPath: join(projectRoot, '.test-projects.json'), ...options });
+
 const call = (args, env = process.env) => exec(process.execPath, [cli, 'agent', ...args], { env, timeout: 15000 });
 const offline = (projectRoot, args) => call([...args, '--project', projectRoot]);
 const json = result => JSON.parse(result.stdout);
@@ -43,7 +46,7 @@ test('工作区暴露定义与逐机制 resource revision，Agent mutation 不�
 
 test('draft open 保存旧草稿后才切换，并在 save 时自动排版和导出', async t => {
   const { projectRoot, root } = await fixture(t);
-  const server = await startServer({ projectRoot, port: 0 });
+  const server = await startFixtureServer(projectRoot);
   t.after(() => server.close());
   const scopes = await (await fetch(server.origin + '/api/agent?command=scopes&projectRoot=' + encodeURIComponent(projectRoot))).json();
   const first = json(await call(['draft', 'open', '--project', projectRoot, '--mechanic', 'basic-rules', '--project-generation', String(scopes.projectGeneration), '--connect', server.origin]));
@@ -60,7 +63,7 @@ test('draft open 保存旧草稿后才切换，并在 save 时自动排版和导
 
 test('draft open 在旧草稿无法保存时拒绝切换并保留旧草稿', async t => {
   const { projectRoot } = await fixture(t);
-  const server = await startServer({ projectRoot, port: 0 });
+  const server = await startFixtureServer(projectRoot);
   t.after(() => server.close());
   const scopes = await (await fetch(server.origin + '/api/agent?command=scopes&projectRoot=' + encodeURIComponent(projectRoot))).json();
   const first = json(await call(['draft', 'open', '--project', projectRoot, '--mechanic', 'basic-rules', '--project-generation', String(scopes.projectGeneration), '--connect', server.origin]));
@@ -72,13 +75,13 @@ test('draft open 在旧草稿无法保存时拒绝切换并保留旧草稿', asy
 
 test('draft open 清理超过 24 小时的遗留临时草稿', async t => {
   const { projectRoot } = await fixture(t);
-  const firstServer = await startServer({ projectRoot, port: 0 });
+  const firstServer = await startFixtureServer(projectRoot);
   const scopes = await (await fetch(firstServer.origin + '/api/agent?command=scopes&projectRoot=' + encodeURIComponent(projectRoot))).json();
   const first = json(await call(['draft', 'open', '--project', projectRoot, '--mechanic', 'basic-rules', '--project-generation', String(scopes.projectGeneration), '--connect', firstServer.origin]));
   await firstServer.close();
   const old = new Date(Date.now() - 25 * 60 * 60 * 1000);
   await utimes(first.draftPath, old, old);
-  const secondServer = await startServer({ projectRoot, port: 0 });
+  const secondServer = await startFixtureServer(projectRoot);
   t.after(() => secondServer.close());
   const nextScopes = await (await fetch(secondServer.origin + '/api/agent?command=scopes&projectRoot=' + encodeURIComponent(projectRoot))).json();
   await call(['draft', 'open', '--project', projectRoot, '--mechanic', 'hand', '--project-generation', String(nextScopes.projectGeneration), '--connect', secondServer.origin]);
@@ -409,7 +412,7 @@ test('Agent 以项目目录定位后台上下文，不切换网页当前标签',
   } finally { await server.close(); }
 });
 
-test('catalog 发布失败仍返回 canonicalCommitted=true 与明确的导出失败状态，CLI 不重试 canonical mutation', async t => {
+test('catalog 后台发布不阻塞 canonical mutation，CLI 不重试已提交的规则', async t => {
   const { projectRoot, root } = await fixture(t), before = await readWorkspace(root);
   await writeFile(join(projectRoot, 'game-mechanics', 'user-owned.txt'), '不能由生成器清理');
   const accepted = json(await offline(projectRoot, ['concept', 'create', '--id', 'focus', '--label', '专注', '--description', '可投入行动的专注。',
@@ -417,8 +420,8 @@ test('catalog 发布失败仍返回 canonicalCommitted=true 与明确的导出�
   assert.equal(accepted.canonicalCommitted, true);
   assert.equal(accepted.workspaceId, before.manifest.id);
   assert.match(accepted.resourceRevision, /^[a-f0-9]{64}$/u);
-  assert.equal(accepted.exportPublication.state, 'failed');
-  assert.equal(accepted.exportPublication.code, 'EXPORT_ROOT_NOT_EMPTY');
+  assert.equal(accepted.exportPublication.state, 'pending');
+  assert.equal(accepted.exportPublication.code, 'CATALOG_PENDING');
   const definitions = JSON.parse(await readFile(join(root, before.manifest.definitions), 'utf8'));
   assert.equal(definitions.nodes.filter(node => node.id === 'focus').length, 1);
   assert.ok((await readdir(join(projectRoot, 'game-mechanics'))).includes('user-owned.txt'));

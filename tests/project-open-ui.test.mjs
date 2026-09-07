@@ -17,6 +17,13 @@ test('打开项目默认先展示最近项目，不隐式唤起原生目录选�
   assert.match(openProject, /else root\.append\(folderPicker\(\{ initialPath: workspace\?\.projectRoot \?\? ''/);
 });
 
+test('重新读取按左侧浏览项目的会话强制刷新磁盘目录，关联项目不替换当前画布', () => {
+  assert.match(app, /async function refreshProjectFromDisk\(\)[\s\S]*?const browsing = browserWorkspace \?\? workspace/);
+  assert.match(app, /const sameProject = browsing\.projectSessionToken === workspace\?\.projectSessionToken/);
+  assert.match(app, /const latest = await apiForProject\(browsing, '\/api\/workspace'\);[\s\S]*?renderSidebar\(\); renderProjectTabs\(\)/);
+  assert.match(app, /\$\('reload'\)\.onclick = \(\) => refreshProjectFromDisk\(\)/);
+});
+
 test('关联项目可从最近打开项目中选择，且排除当前与已关联项目', () => {
   assert.match(manageReferences, /project-references\?projectSessionToken=\$\{encodeURIComponent\(source\.projectSessionToken\)\}/);
   assert.match(manageReferences, /最近打开项目/);

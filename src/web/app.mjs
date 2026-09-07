@@ -579,8 +579,18 @@ async function openDocs() {
   updateStatus();
   try { await docsPage.open(); }
   catch (error) {
-    // 旧导出目录可能与新清单不匹配；不强制跳进设置页，避免“返回文档”形成循环。
-    if (error.code === 'CATALOG_STALE') { docsPage.renderStale(workspace.projectSessionToken); return; }
+    // 后台发布期间保留文档页，并允许用户主动刷新；真正失效才进入设置入口。
+    if (error.code === 'CATALOG_STALE') {
+      if (workspace.exportPublication?.state === 'pending') {
+        const retryDocumentOpen = async () => {
+          workspace = await api('/api/workspace');
+          if (workspace.exportPublication?.state === 'pending') return docsPage.renderPublishing(retryDocumentOpen);
+          return docsPage.open();
+        };
+        docsPage.renderPublishing(retryDocumentOpen);
+      } else docsPage.renderStale(workspace.projectSessionToken);
+      return;
+    }
     screen = 'mechanic'; $('concept-docs').hidden = true; $('stage').hidden = false; updateStatus(); throw error;
   }
 }
@@ -804,16 +814,9 @@ function renderSidebar() {
   $('workspace-path').textContent = primary.projectRoot.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1) || '本地项目';
   $('workspace-name').title = primary.manifest.name + '\n项目：' + primary.projectRoot
     + '\n工作区：' + primary.workspaceRoot + '\nAgent 机制文档：' + primary.agentExportRoot;
-  const exportStatus = $('export-publication-status'), publication = browsing.exportPublication;
-  exportStatus.replaceChildren(); exportStatus.hidden = !publication || publication.state === 'current';
-  if (!exportStatus.hidden) {
-    exportStatus.append(el('span', publication.message ?? '机制文档尚未发布。'));
-    const recover = button(publication.state === 'unconfigured' || publication.state === 'unavailable' ? '打开项目设置' : '打开导出设置并生成', async () => {
-      if (publication.state === 'unconfigured' || publication.state === 'unavailable') return configureProject();
-      await openDocs();
-    });
-    exportStatus.append(recover);
-  }
+  // 导出是后台派生物；项目侧栏不以它的短暂状态打断浏览。
+  const exportStatus = $('export-publication-status');
+  exportStatus.replaceChildren(); exportStatus.hidden = true;
   const sameProject = browsing.projectRoot.toLowerCase() === workspace?.projectRoot?.toLowerCase();
   const draftWorkspace = { ...browsing, mechanics: browsing.mechanics.map(item => sameProject && item.id === activeId && draft && !definitionMode() ? draft : item) };
   const currentViewId = sameProject ? viewId : null, currentMechanicId = sameProject && !definitionMode() ? activeId : null;
@@ -1722,6 +1725,9 @@ async function load(requestedId, { reload = false, allowLegacy = false, project 
     const candidate = await readOpening((path, body) => apiForProject(project, path, body), requestedId, sameProject ? workspace : null);
     if (!first) rememberCamera();
     workspace = candidate.workspace; viewId = candidate.viewId; legacy = candidate.legacy;
+    // 当前编辑项目也是左侧浏览项目时，重新读取必须同步替换目录快照。
+    // 否则 Agent 新建的文件虽然已在磁盘上，却仍被旧 browserWorkspace 隐藏。
+    if (browserWorkspace?.projectSessionToken === project?.projectSessionToken) browserWorkspace = candidate.workspace;
     $('concept-docs').hidden = true; $('stage').hidden = false;
     assignLayer(candidate.activeId); assignSnapshot(candidate.snapshot); graphHistory = null;
     sidebarState.lastOpened = viewId !== null ? { kind: 'view', id: viewId }
@@ -1736,6 +1742,25 @@ async function load(requestedId, { reload = false, allowLegacy = false, project 
     if (workspace) error.message = '打开失败；仍保留原画面和草稿，内容未刷新。\n' + error.message;
     showError(error);
     return false;
+  } finally { opening = false; updateStatus(); }
+}
+
+async function refreshProjectFromDisk() {
+  const browsing = browserWorkspace ?? workspace;
+  if (!browsing || opening) return false;
+  const sameProject = browsing.projectSessionToken === workspace?.projectSessionToken;
+  // 刷新当前画布前仍沿用草稿守卫；只刷新关联项目目录时不触碰画布草稿。
+  if (sameProject && !await guard({ reload: true })) return false;
+  if (sameProject) {
+    const requestedId = viewId ?? (legacy ? undefined : { kind: 'mechanic', id: activeId });
+    return load(requestedId, { reload: true, project: browsing });
+  }
+  opening = true; updateStatus();
+  try {
+    const latest = await apiForProject(browsing, '/api/workspace');
+    browserWorkspace = latest;
+    renderSidebar(); renderProjectTabs(); $('error').hidden = true;
+    return true;
   } finally { opening = false; updateStatus(); }
 }
 async function newView({ fromLegacy = false } = {}) {
@@ -1863,7 +1888,7 @@ $('copy-file-path').onclick = () => copyFilePath().catch(showError);
 $('delete-mechanic').onclick = () => deleteMechanicDialog().catch(showError);
 $('add-node').onclick = () => addNode().catch(showError);
 $('empty-add').onclick = () => (activeId === null ? newGraph() : addNode()).catch(showError);
-$('reload').onclick = () => load(viewId ?? (legacy ? undefined : { kind: 'mechanic', id: activeId }), { reload: true }).catch(showError);
+$('reload').onclick = () => refreshProjectFromDisk().catch(showError);
 $('reload-error').onclick = $('reload').onclick;
 $('undo').onclick = () => undo(); $('redo').onclick = () => undo(true);
 $('fit').onclick = () => canvas.fit();

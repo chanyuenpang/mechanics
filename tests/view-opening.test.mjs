@@ -23,9 +23,11 @@ async function fixture(t) {
 }
 
 test('重新打开同一个视图也读取最新规则；失败不会返回部分候选或修改原对象', async t => {
-  const { root, api } = await fixture(t);
+  const { root, store, api } = await fixture(t);
   const initial = await api('/api/workspace');
   await createAndRememberView(api, initial.revision, view, 'test.view.json');
+  // 创建视图会异步刷新派生文档；接下来此测试直接操作导出目录，先等待避免两个发布者竞争。
+  await store.flushPublication();
   const first = await readOpening(api, view.id);
   assert.equal(first.snapshot.structuralPresentation, 'line');
   assert.equal(first.graph.structuralPresentation, 'line');

@@ -1,6 +1,6 @@
 {
   "name": "game-graph",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "private": false,
   "description": "独立的游戏规则因果与包含关系图分析工具",
   "type": "module",

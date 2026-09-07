@@ -77,6 +77,13 @@ export class ConceptDocsPage {
     const settings = text('button', '打开导出设置', 'primary'); settings.type = 'button'; settings.onclick = () => this.openSettings(projectSessionToken).catch(this.report); article.append(settings);
     this.root.append(article);
   }
+  renderPublishing(retry) {
+    this.root.replaceChildren();
+    const article = document.createElement('article'); article.className = 'concept-doc-article';
+    article.append(text('h1', '正在生成文档'), text('p', '规则资料已保存，文档正在后台同步；完成后可直接打开。', 'note'));
+    const refresh = text('button', '刷新文档', 'primary'); refresh.type = 'button'; refresh.onclick = () => retry().catch(this.report);
+    article.append(refresh); this.root.append(article);
+  }
   renderSettings(data, draft) {
     this.root.replaceChildren();
     const aside = document.createElement('aside'); aside.className = 'concept-doc-tree export-source-tree';
@@ -158,8 +165,16 @@ export class ConceptDocsPage {
           const saved = await this.api('/api/document-export/settings', { revision: data.revision, selections: draft, projectSessionToken: data.projectSessionToken, projectGeneration: data.projectGeneration });
           revision = saved.revision; data.revision = saved.revision; data.selections = structuredClone(draft);
         }
-        await this.api('/api/document-export/generate', { revision, projectSessionToken: data.projectSessionToken, projectGeneration: data.projectGeneration });
-        await this.open();
+        const generated = await this.api('/api/document-export/generate', { revision, projectSessionToken: data.projectSessionToken, projectGeneration: data.projectGeneration });
+        if (generated.exportPublication?.state === 'pending') {
+          const retry = async () => {
+            const workspace = await this.api('/api/workspace');
+            if (workspace.exportPublication?.state === 'pending') return this.renderPublishing(retry);
+            return this.open();
+          };
+          this.renderPublishing(retry);
+        }
+        else await this.open();
       } catch (error) { this.report(error); }
       finally { generate.disabled = false; save.disabled = !dirty; }
     }; actions.append(cancel, save, generate); summary.append(actions); this.root.append(aside, article, preview, summary);
