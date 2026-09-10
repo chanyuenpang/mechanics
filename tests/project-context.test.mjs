@@ -12,6 +12,7 @@ import { readWorkspace } from '../src/server/workspace.mjs';
 import { publishCatalog } from '../src/server/catalog.mjs';
 import { createProjectManager } from '../src/server/project-manager.mjs';
 import { createProjectPreflight } from '../src/server/local-projects.mjs';
+import { copyExampleFixture } from './example-fixture.mjs';
 
 const exec = promisify(execFile);
 const runWorkspaceTool = async (projectRoot, args) => JSON.parse((await exec(process.execPath,
@@ -98,6 +99,26 @@ test('注入的离线工具可在空工作区创建机制并完成草稿保存�
   assert.equal(saved.saved, true);
   const final = await runWorkspaceTool(projectRoot, ['scopes']);
   assert.deepEqual(final.mechanics.map(item => item.id), ['core-loop']);
+});
+
+test('注入的离线工具将上游查询按规则声明方向序列化', async t => {
+  const parent = await mkdtemp(join(tmpdir(), 'game-graph-offline-query-direction-'));
+  t.after(() => rm(parent, { recursive: true, force: true }));
+  const projectRoot = join(parent, 'query-project');
+  await copyExampleFixture(projectRoot);
+  const manager = createProjectManager();
+  t.after(() => manager.close());
+  await manager.open({ projectRoot, intent: 'existing' });
+  const result = await runWorkspaceTool(projectRoot, ['node', '--id', 'health', '--direction', 'upstream', '--hops', '2']);
+  const [direct, indirect] = result.paths.upstream;
+  assert.equal(direct.chain, 'damage -> health');
+  assert.deepEqual(direct.steps.map(step => [step.from, step.to, step.operator]), [['damage', 'health', '->']]);
+  assert.equal(indirect.chain, 'melee +> damage -> health');
+  assert.deepEqual(indirect.steps.map(step => [step.from, step.to, step.operator]), [['melee', 'damage', '+>'], ['damage', 'health', '->']]);
+  assert.equal(indirect.effect, 'negative');
+  for (const path of result.paths.upstream) {
+    assert.ok(path.steps.every((step, index) => step.from === path.nodes[index].id && step.to === path.nodes[index + 1].id));
+  }
 });
 
 test('离线草稿先校验语义，失败时 canonical 完整保留', async t => {

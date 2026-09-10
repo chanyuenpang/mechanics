@@ -21,13 +21,13 @@ async function snapshot() { const manifest = await parse(join(workspace, 'worksp
   return { manifest, definitions, mechanics, folders: await readFolders(mechanicsRoot), nodes, edges, revision, nodeMap: new Map(nodes.map(node => [node.id, node])) }; }
 const operator = edge => edge.relation === 'specializes' ? 'is-a>' : edge.sign === 1 ? '+>' : edge.sign === -1 ? '->' : '?>';
 const guide = () => ({
-  contractVersion: 1,
+  contractVersion: 2,
   commands: ['scopes', 'search', 'node', 'impact', 'draft open', 'draft validate', 'draft save'],
   workflow: ['scopes', 'draft open（目标不存在时携带名称与范围）', '编辑两份草稿 JSON', 'draft validate', 'draft save'],
   conceptTemplate: { id: 'stable-concept-id', label: '概念名称', description: '概念定义。', agentLocked: false },
   influenceRuleTemplate: { id: 'source-concept-2-target-concept', source: 'source-concept', target: 'target-concept', relation: 'influence', sign: 1, inheritance: { mode: 'none' }, ruleText: '源概念如何影响目标概念。' },
   specializesRuleTemplate: { id: 'subtype-concept-2-supertype-concept', source: 'subtype-concept', target: 'supertype-concept', relation: 'specializes' },
-  constraints: ['所有持久化 ID 使用英文小写 kebab-case', '规则 ID 固定为 source-2-target', '同一有向端点对在全工作区只能有一条规则', '限定词只属于 influence 规则端点', '草稿不允许 positions、projectionPositions 或 routeCache', 'save 前必须 validate；save 不执行自动排版或文档导出'],
+  constraints: ['所有持久化 ID 使用英文小写 kebab-case', '规则 ID 固定为 source-2-target', '同一有向端点对在全工作区只能有一条规则', '限定词只属于 influence 规则端点', 'node 的 upstream 只表示发现上游的遍历方向；paths 中的 nodes、steps、chain 与 effect 始终按规则声明的 source → target 方向返回', '草稿不允许 positions、projectionPositions 或 routeCache', 'save 前必须 validate；save 不执行自动排版或文档导出'],
 });
 const semanticId = value => typeof value === 'string' && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u.test(value);
 const text = (value, field) => {
@@ -137,7 +137,16 @@ function validateMechanic(document, workspaceId, nodes, otherMechanics) {
 }
 function resolveNode(nodes, key) { const norm = key.trim().toLowerCase(); const id = nodes.find(node => node.id.toLowerCase() === norm); if (id) return { status: 'resolved', node: id, matchedBy: 'id' }; const candidates = nodes.filter(node => node.label?.trim().toLowerCase() === norm || (node.aliases ?? []).some(alias => alias.trim().toLowerCase() === norm)); if (candidates.length === 1) return { status: 'resolved', node: candidates[0], matchedBy: candidates[0].label?.trim().toLowerCase() === norm ? 'label' : 'alias' }; return candidates.length ? { status: 'ambiguous', candidates: candidates.map(node => ({ id: node.id, label: node.label })) } : { status: 'not_found' }; }
 function paths(edges, from, to, maxDepth = 16) { const out = new Map(); for (const edge of edges) (out.get(edge.source) ?? out.set(edge.source, []).get(edge.source)).push(edge); const queue = [{ ids: [from], steps: [] }], result = []; for (let i = 0; i < queue.length; i++) { const current = queue[i]; if (current.ids.at(-1) === to && current.steps.length) { result.push(current); continue; } if (current.steps.length >= maxDepth) continue; for (const edge of out.get(current.ids.at(-1)) ?? []) if (!current.ids.includes(edge.target)) queue.push({ ids: [...current.ids, edge.target], steps: [...current.steps, edge] }); } return result.sort((a,b) => a.steps.length - b.steps.length || a.ids.join('\0').localeCompare(b.ids.join('\0'))); }
-function compact(path, map) { const steps = path.steps.map(edge => ({ from: edge.source, to: edge.target, operator: operator(edge), origin: edge.origin })); const taxonomy = path.steps.some(edge => edge.relation === 'specializes'); let sign = 1; for (const edge of path.steps) if (edge.relation === 'influence') sign = sign === 'random' || edge.sign === 'random' ? 'random' : sign * edge.sign; return { length: steps.length, nodes: path.ids.map(id => ({ id, label: map.get(id)?.label ?? id })), steps, chain: path.ids.map((id, i) => i ? `${steps[i - 1].operator} ${id}` : id).join(' '), kind: taxonomy ? (path.steps.every(edge => edge.relation === 'specializes') ? 'taxonomy' : 'mixed') : 'influence', effect: taxonomy ? null : sign === 1 ? 'positive' : sign === -1 ? 'negative' : 'random' }; }
+function compact(path, map) {
+  const steps = path.steps.map(edge => ({ from: edge.source, to: edge.target, operator: operator(edge), origin: edge.origin }));
+  if (path.ids.length !== steps.length + 1 || steps.some((step, index) => step.from !== path.ids[index] || step.to !== path.ids[index + 1])) {
+    fail('QUERY_PATH_DIRECTION_INVALID', '查询路径的节点顺序必须与规则声明方向一致');
+  }
+  const taxonomy = path.steps.some(edge => edge.relation === 'specializes');
+  let sign = 1;
+  for (const edge of path.steps) if (edge.relation === 'influence') sign = sign === 'random' || edge.sign === 'random' ? 'random' : sign * edge.sign;
+  return { length: steps.length, nodes: path.ids.map(id => ({ id, label: map.get(id)?.label ?? id })), steps, chain: path.ids.map((id, i) => i ? `${steps[i - 1].operator} ${id}` : id).join(' '), kind: taxonomy ? (path.steps.every(edge => edge.relation === 'specializes') ? 'taxonomy' : 'mixed') : 'influence', effect: taxonomy ? null : sign === 1 ? 'positive' : sign === -1 ? 'negative' : 'random' };
+}
 async function withLock(fn) { try { await writeFile(lock, String(process.pid), { flag: 'wx' }); } catch { fail('WORKSPACE_LOCKED', '已有 JSON 工具正在写入工作区'); } try { return await fn(); } finally { await rm(lock, { force: true }); } }
 const structuralCopy = value => {
   const copy = structuredClone(value);
@@ -208,7 +217,28 @@ async function main() { const { positionals, options } = args(process.argv.slice
   if (command === 'scopes') return { workspaceId: data.manifest.value.id, revision: data.revision, folders: data.folders, mechanics: data.mechanics.map(item => ({ id: item.value.id, name: item.value.name, file: relative(root, item.path) })) };
   if (command === 'search') { if (options.query) { const r = resolveNode(data.nodes, options.query); return r.status === 'resolved' ? { revision: data.revision, concept: r.node, matchedBy: r.matchedBy } : { revision: data.revision, resolution: r }; } if (!options.from || !options.to) fail('TOOL_INVALID', 'search 需要 --query 或 --from --to'); const a = resolveNode(data.nodes, options.from), b = resolveNode(data.nodes, options.to); if (a.status !== 'resolved' || b.status !== 'resolved') return { revision: data.revision, from: a, to: b, rules: null }; const direct = (x,y) => data.edges.filter(edge => edge.source === x.id && edge.target === y.id).map(edge => ({ id: edge.id, operator: operator(edge), ruleText: edge.ruleText ?? '', origin: edge.origin })); return { revision: data.revision, from: a.node, to: b.node, rules: { forward: direct(a.node,b.node), reverse: direct(b.node,a.node) } }; }
   if (command === 'impact') { if (!options.from || !options.to || !data.nodeMap.has(options.from) || !data.nodeMap.has(options.to)) fail('NODE_NOT_FOUND', 'impact 需要已有 --from 与 --to'); const result = paths(data.edges, options.from, options.to, Number(options['max-depth'] ?? 16)).map(path => compact(path, data.nodeMap)); return { revision: data.revision, counts: { returned: result.length }, paths: result }; }
-  if (command === 'node') { if (!options.id || !data.nodeMap.has(options.id)) fail('NODE_NOT_FOUND', 'node 需要已有 --id'); const hops = Number(options.hops ?? 1), direction = options.direction ?? 'both', inbound = data.edges.map(edge => ({ ...edge, source: edge.target, target: edge.source })), pick = edges => paths(edges, options.id, '__never__', hops); const collect = edges => { const out = []; const walk = (id, depth, seen, steps) => { if (depth >= hops) return; for (const edge of edges.filter(item => item.source === id)) if (!seen.has(edge.target)) { const next = [...steps, edge]; out.push({ ids: [options.id, ...next.map(item => item.target)], steps: next }); walk(edge.target, depth + 1, new Set([...seen, edge.target]), next); } }; walk(options.id, 0, new Set([options.id]), []); return out.map(path => compact(path, data.nodeMap)); }; return { revision: data.revision, center: data.nodeMap.get(options.id), direction, paths: { ...(direction !== 'downstream' ? { upstream: collect(inbound) } : {}), ...(direction !== 'upstream' ? { downstream: collect(data.edges) } : {}) } }; }
+  if (command === 'node') {
+    if (!options.id || !data.nodeMap.has(options.id)) fail('NODE_NOT_FOUND', 'node 需要已有 --id');
+    const hops = Number(options.hops ?? 1), direction = options.direction ?? 'both';
+    const collect = reverse => {
+      const out = [];
+      const walk = (id, depth, seen, ids, steps) => {
+        if (depth >= hops) return;
+        for (const edge of data.edges) {
+          if ((reverse ? edge.target : edge.source) !== id) continue;
+          const nextId = reverse ? edge.source : edge.target;
+          if (seen.has(nextId)) continue;
+          const nextIds = reverse ? [nextId, ...ids] : [...ids, nextId];
+          const nextSteps = reverse ? [edge, ...steps] : [...steps, edge];
+          out.push({ ids: nextIds, steps: nextSteps });
+          walk(nextId, depth + 1, new Set([...seen, nextId]), nextIds, nextSteps);
+        }
+      };
+      walk(options.id, 0, new Set([options.id]), [options.id], []);
+      return out.map(path => compact(path, data.nodeMap));
+    };
+    return { revision: data.revision, center: data.nodeMap.get(options.id), direction, paths: { ...(direction !== 'downstream' ? { upstream: collect(true) } : {}), ...(direction !== 'upstream' ? { downstream: collect(false) } : {}) } };
+  }
   if (command === 'draft' && action === 'open') { if (!options.mechanic) fail('TOOL_INVALID', 'draft open 需要 --mechanic'); return openDraft(options.mechanic, options); }
   if (command === 'draft' && action === 'save') { if (!options.draft) fail('TOOL_INVALID', 'draft save 需要 --draft'); return saveDraft(options.draft); }
   if (command === 'draft' && action === 'validate') { if (!options.draft) fail('TOOL_INVALID', 'draft validate 需要 --draft'); return saveDraft(options.draft, true); }

@@ -16,7 +16,7 @@ game-graph agent impact --project ./my-game --from stamina --to failure
 
 `search --query` 只接受稳定 ID、完整名称或完整别名：唯一命中返回概念详情；同名或同别名返回候选，调用方必须再使用其中稳定 ID。`search --from/--to` 同时返回 A→B 与 B→A 的直接规则。
 
-`node` 和 `impact` 只返回紧凑结构路径，按短到长排序。路径使用 `+>`（正向影响）、`->`（负向影响）、`?>`（随机影响）与 `is-a>`（分类）。全影响链给出 positive/negative/random；含 `is-a>` 的混合链不推导影响结果。`counts`、`completeWithinBounds`、`truncationReasons` 明确本轮的条数和预算截断，不能据无路径断言游戏中不存在机制。
+`node` 和 `impact` 只返回紧凑结构路径，按短到长排序。路径使用 `+>`（正向影响）、`->`（负向影响）、`?>`（随机影响）与 `is-a>`（分类）。即使 `node --direction upstream` 为寻找入边而反向遍历，返回的 `nodes`、`steps`、`chain` 与 `effect` 也始终保持已声明规则的 source → target 方向；可直接按 `chain` 阅读。全影响链给出 positive/negative/random；含 `is-a>` 的混合链不推导影响结果。`counts`、`completeWithinBounds`、`truncationReasons` 明确本轮的条数和预算截断，不能据无路径断言游戏中不存在机制。
 
 完整 `readingContract` 只在 `guide` 返回，其他结果仅带版本。规则文字与概念描述是模型数据，不会被自动求值或当作工具指令。
 
