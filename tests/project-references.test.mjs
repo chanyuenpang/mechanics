@@ -4,7 +4,7 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { copyExampleFixture } from './example-fixture.mjs';
-import { bindProjectReference, declareProjectReference, readProjectReferences } from '../src/server/project-references.mjs';
+import { bindProjectReference, declareProjectReference, projectReferenceState, readProjectReferences, removeProjectReference } from '../src/server/project-references.mjs';
 import { initProject } from '../src/server/workspace-commands.mjs';
 
 test('源项目声明参考项目，目录绑定只存本机并可供定位', async t => {
@@ -54,4 +54,37 @@ test('项目根目录的旧关联声明不再作为运行时兼容输入读取',
   assert.deepEqual(await readProjectReferences(source), { version: 1, references: [] });
   await assert.rejects(access(join(source, '.mechanics', 'references.json')), { code: 'ENOENT' });
   assert.equal(JSON.parse(await readFile(join(source, 'game-graph.references.json'), 'utf8')).references[0].id, 'sample-card-game');
+});
+
+test('移除关联只修改源声明与本机绑定，不触碰目标项目', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'mechanics-project-reference-remove-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = join(root, 'source'), target = join(root, 'target'), bindingsFile = join(root, 'project-reference-bindings.json');
+  await copyExampleFixture(source); await copyExampleFixture(target);
+  await declareProjectReference(source, { projectRoot: target }, { bindingsFile });
+  const before = await projectReferenceState(source, { bindingsFile });
+  const targetDefinitions = await readFile(join(target, '.mechanics', 'definitions.json'), 'utf8');
+
+  const removed = await removeProjectReference(source, { referenceId: 'sample-card-game', referencesRevision: before.referencesRevision }, { bindingsFile });
+
+  assert.equal(removed.removedReferenceId, 'sample-card-game');
+  assert.deepEqual(removed.references, []);
+  assert.deepEqual(await readProjectReferences(source), { version: 1, references: [] });
+  assert.deepEqual(JSON.parse(await readFile(bindingsFile, 'utf8')), { version: 1, bindings: [] });
+  assert.equal(await readFile(join(target, '.mechanics', 'definitions.json'), 'utf8'), targetDefinitions);
+});
+
+test('旧关联版本或未知关联条目不能写入源项目', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'mechanics-project-reference-conflict-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const source = join(root, 'source'), target = join(root, 'target'), bindingsFile = join(root, 'project-reference-bindings.json');
+  await copyExampleFixture(source); await copyExampleFixture(target);
+  await declareProjectReference(source, { projectRoot: target }, { bindingsFile });
+  const state = await projectReferenceState(source, { bindingsFile });
+  const declarationPath = join(source, '.mechanics', 'references.json');
+  const before = await readFile(declarationPath, 'utf8');
+
+  await assert.rejects(() => removeProjectReference(source, { referenceId: 'sample-card-game', referencesRevision: 'outdated' }, { bindingsFile }), { code: 'REFERENCE_REVISION_CONFLICT' });
+  await assert.rejects(() => removeProjectReference(source, { referenceId: 'missing', referencesRevision: state.referencesRevision }, { bindingsFile }), { code: 'REFERENCE_NOT_DECLARED' });
+  assert.equal(await readFile(declarationPath, 'utf8'), before);
 });

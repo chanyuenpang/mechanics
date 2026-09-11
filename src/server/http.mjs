@@ -113,7 +113,7 @@ export async function startServer({ projectRoot = null, workspaceRoot = null, po
         }
         if (request.method === 'GET' && url.pathname === '/api/preferences') { send(200, await preferences.read()); return; }
         if (request.method === 'POST' && ['/api/directories/pick', '/api/project/open', '/api/project/select', '/api/project/reference-enter', '/api/project/preflight', '/api/project/settings', '/api/project/export-path', '/api/document-export/settings', '/api/document-export/generate', '/api/projects/pin',
-          '/api/projects/remove', '/api/save', '/api/rules-and-mechanic', '/api/rules/delete', '/api/local-ui-state', '/api/project-references/bind', '/api/project-references/declare', '/api/mechanics', '/api/mechanic-folders', '/api/mechanic-folder-move', '/api/mechanic-folder-delete', '/api/mechanic-move', '/api/mechanic-delete', '/api/views', '/api/preferences', '/api/agent/session', '/api/agent/mutation', '/api/agent/draft'].includes(url.pathname)) {
+          '/api/projects/remove', '/api/save', '/api/rules-and-mechanic', '/api/rules/delete', '/api/local-ui-state', '/api/project-references/bind', '/api/project-references/declare', '/api/project-references/remove', '/api/mechanics', '/api/mechanic-folders', '/api/mechanic-folder-move', '/api/mechanic-folder-delete', '/api/mechanic-move', '/api/mechanic-delete', '/api/views', '/api/preferences', '/api/agent/session', '/api/agent/mutation', '/api/agent/draft'].includes(url.pathname)) {
           if (!(request.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
             send(415, { error: 'JSON_REQUIRED', message: '写入必须使用 application/json' }); return;
           }
@@ -133,6 +133,7 @@ export async function startServer({ projectRoot = null, workspaceRoot = null, po
           if (url.pathname === '/api/local-ui-state') { send(200, await projects.saveLocalUiState(body)); return; }
           if (url.pathname === '/api/project-references/bind') { send(200, await projects.bindProjectReference(body)); return; }
           if (url.pathname === '/api/project-references/declare') { send(200, await projects.declareProjectReference(body)); return; }
+          if (url.pathname === '/api/project-references/remove') { send(200, await projects.removeProjectReference(body)); return; }
           if (url.pathname === '/api/project/select') { send(200, await projects.select(body.projectSessionToken)); return; }
           if (url.pathname === '/api/project/reference-enter') { send(200, await projects.enterReference(body)); return; }
           if (url.pathname === '/api/project/preflight') { send(200, await projectPreflight.inspect(body)); return; }
@@ -171,10 +172,10 @@ export async function startServer({ projectRoot = null, workspaceRoot = null, po
       send(200, await readFile(asset[0]), asset[1]);
     } catch (error) {
       // 不返回部分工作区，不把失败替换为空数据或内置示例。
-      const status = ['REVISION_CONFLICT', 'FILE_EXISTS', 'DUPLICATE_ID', 'WORKSPACE_LOCKED', 'PROJECT_REQUIRED', 'PROJECT_CHANGED',
+      const status = ['REVISION_CONFLICT', 'REFERENCE_REVISION_CONFLICT', 'FILE_EXISTS', 'DUPLICATE_ID', 'WORKSPACE_LOCKED', 'PROJECT_REQUIRED', 'PROJECT_CHANGED',
         'PROJECT_PREFLIGHT_STALE', 'PROJECT_INTENT_MISMATCH', 'DIRECTORY_PICKER_BUSY'].includes(error.code) ? 409
-        : ['SAVE_UNCERTAIN', 'CREATE_PARTIAL', 'PROJECT_SWITCH_PARTIAL', 'AGENT_EXPORT_FAILED', 'REFERENCE_DECLARATION_PARTIAL'].includes(error.code) ? 500 : 422;
-      const detailKeys = ['canonicalCommitted', 'workspaceId', 'revision', 'resourceRevision', 'resource', 'action', 'id', 'references', 'referenceDeclared', 'reference'];
+        : ['SAVE_UNCERTAIN', 'CREATE_PARTIAL', 'PROJECT_SWITCH_PARTIAL', 'AGENT_EXPORT_FAILED', 'REFERENCE_DECLARATION_PARTIAL', 'REFERENCE_REMOVAL_PARTIAL', 'REFERENCE_REMOVAL_UNCERTAIN'].includes(error.code) ? 500 : 422;
+      const detailKeys = ['canonicalCommitted', 'workspaceId', 'revision', 'resourceRevision', 'resource', 'action', 'id', 'references', 'referenceDeclared', 'reference', 'referenceRemoved', 'referenceId', 'referencesRevision', 'referencesPath'];
       const details = Object.fromEntries(detailKeys.filter(key => Object.hasOwn(error, key)).map(key => [key, error[key]]));
       send(status, { error: error.code ?? 'REQUEST_FAILED', message: error.message, ...details });
     }

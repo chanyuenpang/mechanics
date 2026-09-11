@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 const app = await readFile(new URL('../src/web/app.mjs', import.meta.url), 'utf8');
 const html = await readFile(new URL('../src/web/index.html', import.meta.url), 'utf8');
 const icons = await readFile(new URL('../src/web/icons.mjs', import.meta.url), 'utf8');
+const style = await readFile(new URL('../src/web/style.css', import.meta.url), 'utf8');
 const openProject = app.slice(app.indexOf('async function openProject()'), app.indexOf('async function configureProject()'));
 const manageReferences = app.slice(app.indexOf('async function manageReferences()'), app.indexOf("$('new-graph').onclick"));
 
@@ -45,6 +46,17 @@ test('侧栏关联项目区直接列出项目，并提供折叠和添加操作',
   assert.match(app, /let sourceProject = null/);
   assert.match(app, /function apiAsSource\(path, body = \{\}\)/);
   assert.match(app, /referencesCollapsed = !referencesCollapsed/);
+});
+
+test('关联项目悬浮后显示删除图标，并经二次确认只从源项目移除', () => {
+  const renderReferences = app.slice(app.indexOf('function renderProjectTabs()'), app.indexOf('function apiForProject'));
+  const removeReference = app.slice(app.indexOf('async function removeProjectReference'), app.indexOf("$('new-graph').onclick"));
+  assert.match(renderReferences, /iconAction\('trash', \(\) => removeProjectReference\(reference\), 'reference-remove'\)/);
+  assert.match(renderReferences, /if \(entry\.primary\) \{ root\.append\(item\); continue; \}/);
+  assert.match(removeReference, /这只会移除当前项目的关联入口，不会删除对方项目/);
+  assert.match(removeReference, /apiAsSource\('\/api\/project-references\/remove', \{ referenceId: reference\.id, referencesRevision: referenceProjectsRevision \}\)/);
+  assert.match(removeReference, /await returnToSourceProject\(\)/);
+  assert.match(style, /\.project-tab-row:hover \.reference-remove,\.project-tab-row:focus-within \.reference-remove\{opacity:1;pointer-events:auto\}/);
 });
 
 test('项目浏览与文件标签导航解耦', () => {

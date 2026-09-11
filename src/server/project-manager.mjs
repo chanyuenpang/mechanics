@@ -7,7 +7,7 @@ import { projectContext, WORKSPACE_DIRECTORY } from './project-context.mjs';
 import { readCatalogBrowser } from './catalog-browser.mjs';
 import { createLocalUiState } from './local-ui-state.mjs';
 import { ContractError } from '../domain/validate.mjs';
-import { bindProjectReference, declareProjectReference, listProjectReferences } from './project-references.mjs';
+import { bindProjectReference, declareProjectReference, listProjectReferences, projectReferenceState, removeProjectReference } from './project-references.mjs';
 import { registerProjectSkills } from './project-skills.mjs';
 import { openAgentDraft, readAgentDraft, removeAgentDraft } from './agent-draft.mjs';
 
@@ -170,9 +170,14 @@ export function createProjectManager({ onActivated = null } = {}) {
     }),
     readLocalUiState: token => enqueue(async () => { const session = current(token); return { ...await session.localUiState.read(), projectGeneration: session.generation, projectSessionToken: session.token }; }),
     saveLocalUiState: body => enqueue(async () => { const session = current(body?.projectSessionToken, body?.projectGeneration); return { ...await session.localUiState.save({ version: 1, lastOpened: body?.lastOpened, recentViews: body?.recentViews, recentMechanics: body?.recentMechanics, openTabs: body?.openTabs }), projectGeneration: session.generation, projectSessionToken: session.token }; }),
-    listProjectReferences: token => enqueue(async () => { const session = current(token); return { projectRoot: session.context.projectRoot, projectGeneration: session.generation, projectSessionToken: session.token, references: await listProjectReferences(session.context.projectRoot) }; }),
+    listProjectReferences: token => enqueue(async () => { const session = current(token); return { projectRoot: session.context.projectRoot, projectGeneration: session.generation, projectSessionToken: session.token, ...await projectReferenceState(session.context.projectRoot) }; }),
     bindProjectReference: body => enqueue(async () => { const session = current(body?.projectSessionToken, body?.projectGeneration); if (typeof body?.referenceId !== 'string' || typeof body?.projectRoot !== 'string' || !isAbsolute(body.projectRoot)) fail('REFERENCE_BINDING_INVALID', '参考目录绑定必须提供 referenceId 与绝对 projectRoot'); return { projectRoot: session.context.projectRoot, projectGeneration: session.generation, projectSessionToken: session.token, references: await bindProjectReference(session.context.projectRoot, body.referenceId, body.projectRoot) }; }),
     declareProjectReference: body => enqueue(async () => { const session = current(body?.projectSessionToken, body?.projectGeneration); return { projectRoot: session.context.projectRoot, projectGeneration: session.generation, projectSessionToken: session.token, references: await declareProjectReference(session.context.projectRoot, body) }; }),
+    removeProjectReference: body => enqueue(async () => {
+      const session = current(body?.projectSessionToken, body?.projectGeneration);
+      const removed = await removeProjectReference(session.context.projectRoot, body);
+      return { projectRoot: session.context.projectRoot, projectGeneration: session.generation, projectSessionToken: session.token, ...removed };
+    }),
     readConceptDocs: (conceptId, token) => enqueue(async () => { const session = current(token); return attach(await readCatalogBrowser(session.context, await session.store.read(), conceptId), session); }),
     readDocumentExport: token => enqueue(async () => { const session = current(token); return attach(await session.store.documentExportStructure(), session); }),
     save: body => call(body, store => store.save(body)), saveRulesAndMechanic: body => call(body, store => store.saveRulesAndMechanic(body)), deleteGlobalRule: body => call(body, store => store.deleteGlobalRule(body)), createMechanic: body => call(body, store => store.createMechanic(body)), createMechanicFolder: body => call(body, store => store.createMechanicFolder(body)), moveMechanic: body => call(body, store => store.moveMechanic(body)), moveMechanicFolder: body => call(body, store => store.moveMechanicFolder(body)), deleteMechanicFolder: body => call(body, store => store.deleteMechanicFolder(body)), deleteMechanic: body => call(body, store => store.deleteMechanic(body)), createView: body => call(body, store => store.createView(body)),

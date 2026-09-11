@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { ContractError } from '../domain/validate.mjs';
 import { projectContext, WORKSPACE_DIRECTORY } from './project-context.mjs';
@@ -12,6 +12,7 @@ const fail = (code, message) => { throw new ContractError(code, message); };
 const appData = () => process.env.APPDATA || resolve(homedir(), 'AppData', 'Roaming');
 const bindingsPath = () => resolve(appData(), 'mechanics', 'project-reference-bindings.json');
 const safeId = value => typeof value === 'string' && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(value);
+const referencesRevision = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 function validateReferences(value) {
   if (!value || value.version !== 1 || !Array.isArray(value.references) || Object.keys(value).some(key => !['version', 'references'].includes(key))) fail('REFERENCE_CONFIG_INVALID', `${CONFIG_FILE} 格式无效`);
@@ -41,7 +42,11 @@ async function saveProjectReferences(sourceRoot, value) {
   validateReferences(value);
   const path = referencesPath(sourceRoot), temporary = `${path}.${randomUUID()}.tmp`;
   await mkdir(dirname(path), { recursive: true });
-  try { await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx' }); await rename(temporary, path); }
+  try {
+    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { flag: 'wx' });
+    await rename(temporary, path);
+    return validateReferences(JSON.parse(await readFile(path, 'utf8')));
+  }
   catch (error) { try { await unlink(temporary); } catch {} throw error; }
 }
 
@@ -61,8 +66,8 @@ async function saveBindings(value, path = bindingsPath()) {
   catch (error) { try { await unlink(temporary); } catch {} throw error; }
 }
 
-export async function listProjectReferences(sourceRoot, { bindingsFile } = {}) {
-  const declaration = await readProjectReferences(sourceRoot), bindings = await readBindings(bindingsFile);
+export async function listProjectReferences(sourceRoot, { bindingsFile, declaration: suppliedDeclaration = null } = {}) {
+  const declaration = suppliedDeclaration ?? await readProjectReferences(sourceRoot), bindings = await readBindings(bindingsFile);
   return Promise.all(declaration.references.map(async item => {
     const bound = bindings.bindings.find(candidate => candidate.sourceRoot.toLowerCase() === sourceRoot.toLowerCase() && candidate.referenceId === item.id);
     const projectRoot = bound?.projectRoot ?? (item.relativePath ? resolve(sourceRoot, item.relativePath) : null);
@@ -74,6 +79,14 @@ export async function listProjectReferences(sourceRoot, { bindingsFile } = {}) {
       return { ...item, projectRoot: context.projectRoot, status: 'ready', actualName: workspace.manifest.name };
     } catch (error) { return { ...item, projectRoot, status: 'unavailable', message: error.message }; }
   }));
+}
+
+export async function projectReferenceState(sourceRoot, { bindingsFile } = {}) {
+  const declaration = await readProjectReferences(sourceRoot);
+  return {
+    references: await listProjectReferences(sourceRoot, { bindingsFile, declaration }),
+    referencesRevision: referencesRevision(declaration),
+  };
 }
 
 export async function bindProjectReference(sourceRoot, referenceId, projectRoot, { bindingsFile } = {}) {
@@ -105,4 +118,38 @@ export async function declareProjectReference(sourceRoot, { projectRoot }, { bin
     throw partial;
   }
   return listProjectReferences(sourceRoot, { bindingsFile });
+}
+
+export async function removeProjectReference(sourceRoot, { referenceId, referencesRevision: expectedRevision }, { bindingsFile } = {}) {
+  if (!safeId(referenceId)) fail('REFERENCE_REMOVAL_INVALID', '移除关联项目必须提供有效的关联条目 ID');
+  if (typeof expectedRevision !== 'string' || !expectedRevision) fail('REFERENCE_REVISION_REQUIRED', '移除关联项目必须提供当前关联版本');
+  const declaration = await readProjectReferences(sourceRoot);
+  if (referencesRevision(declaration) !== expectedRevision) fail('REFERENCE_REVISION_CONFLICT', '关联项目列表已变化，请重新读取后再移除');
+  if (!declaration.references.some(item => item.id === referenceId)) fail('REFERENCE_NOT_DECLARED', `当前项目未声明参考：${referenceId}`);
+
+  const nextDeclaration = { ...declaration, references: declaration.references.filter(item => item.id !== referenceId) };
+  let persisted;
+  try {
+    persisted = await saveProjectReferences(sourceRoot, nextDeclaration);
+  } catch (error) {
+    const uncertain = new ContractError('REFERENCE_REMOVAL_UNCERTAIN', `关联项目移除结果待确认：${error.message}`);
+    Object.assign(uncertain, { referenceId, referencesPath: referencesPath(sourceRoot) });
+    throw uncertain;
+  }
+  if (persisted.references.some(item => item.id === referenceId)) {
+    const uncertain = new ContractError('REFERENCE_REMOVAL_UNCERTAIN', '关联项目移除后回读仍包含该条目');
+    Object.assign(uncertain, { referenceId, referencesPath: referencesPath(sourceRoot) });
+    throw uncertain;
+  }
+
+  try {
+    const bindings = await readBindings(bindingsFile);
+    const nextBindings = { ...bindings, bindings: bindings.bindings.filter(item => !(item.sourceRoot.toLowerCase() === sourceRoot.toLowerCase() && item.referenceId === referenceId)) };
+    if (nextBindings.bindings.length !== bindings.bindings.length) await saveBindings(nextBindings, bindingsFile);
+  } catch (error) {
+    const partial = new ContractError('REFERENCE_REMOVAL_PARTIAL', `关联已移除，但本机目录缓存未清理：${error.message}`);
+    Object.assign(partial, { referenceRemoved: true, referenceId, referencesRevision: referencesRevision(persisted) });
+    throw partial;
+  }
+  return { references: await listProjectReferences(sourceRoot, { bindingsFile }), referencesRevision: referencesRevision(persisted), removedReferenceId: referenceId };
 }

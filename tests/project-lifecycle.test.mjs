@@ -121,6 +121,34 @@ test('进入关联项目保留源项目 active 会话，并返回可写的目标
   assert.notEqual((await readWorkspace(join(source, '.mechanics'))).manifest.name, '关联项目已写入');
 });
 
+test('关联删除接口只以源项目会话移除声明，并拒绝旧关联版本', async t => {
+  const temp = await mkdtemp(join(tmpdir(), 'mechanics-remove-reference-http-'));
+  const source = join(temp, 'source-project'), reference = join(temp, 'reference-project');
+  await copyExampleFixture(source); await copyExampleFixture(reference);
+  const server = await startServer({ projectRoot: source, port: 0, projectHistoryPath: join(temp, 'user', 'projects.json') });
+  t.after(async () => { await server.close(); await rm(temp, { recursive: true, force: true }); });
+  const sourceWorkspace = await (await fetch(server.origin + '/api/workspace')).json();
+  const declared = await post(server.origin, '/api/project-references/declare', {
+    projectSessionToken: sourceWorkspace.projectSessionToken, projectGeneration: sourceWorkspace.projectGeneration, projectRoot: reference,
+  });
+  assert.equal(declared.response.status, 200, JSON.stringify(declared.data));
+  const state = await (await fetch(server.origin + '/api/project-references?projectSessionToken=' + encodeURIComponent(sourceWorkspace.projectSessionToken))).json();
+  const targetBefore = await readFile(join(reference, '.mechanics', 'definitions.json'), 'utf8');
+  const stale = await post(server.origin, '/api/project-references/remove', {
+    projectSessionToken: sourceWorkspace.projectSessionToken, projectGeneration: sourceWorkspace.projectGeneration,
+    referenceId: state.references[0].id, referencesRevision: 'outdated',
+  });
+  assert.equal(stale.response.status, 409);
+  const removed = await post(server.origin, '/api/project-references/remove', {
+    projectSessionToken: sourceWorkspace.projectSessionToken, projectGeneration: sourceWorkspace.projectGeneration,
+    referenceId: state.references[0].id, referencesRevision: state.referencesRevision,
+  });
+  assert.equal(removed.response.status, 200, JSON.stringify(removed.data));
+  assert.equal(removed.data.removedReferenceId, state.references[0].id);
+  assert.deepEqual(removed.data.references, []);
+  assert.equal(await readFile(join(reference, '.mechanics', 'definitions.json'), 'utf8'), targetBefore);
+});
+
 test('概念文档接口只读取完整导出，拒绝篡改与任意路径', async t => {
   const temp = await mkdtemp(join(tmpdir(), 'game-graph-concept-docs-'));
   const projectRoot = join(temp, 'project'); await copyExampleFixture(projectRoot);

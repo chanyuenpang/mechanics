@@ -46,6 +46,7 @@ let sourceProject = null;
 let browserWorkspace = null;
 const EDITOR_TAB_LIMIT = 10;
 let referenceProjects = [];
+let referenceProjectsRevision = null;
 const editorTabs = [];
 let autoCloseEditorTabs = false;
 let draggingMechanicId = null, dropPreview = null;
@@ -140,7 +141,15 @@ function renderProjectTabs() {
       if (reference) { await enterReference(reference.id); return; }
       throw new Error('关联项目入口已失效，请重新读取主项目的关联项目设置');
     }, 'project-tab' + (active ? ' is-active' : ''));
-    item.title = entry.projectRoot; item.setAttribute('aria-pressed', String(active)); root.append(item);
+    item.title = entry.projectRoot; item.setAttribute('aria-pressed', String(active));
+    if (entry.primary) { root.append(item); continue; }
+    const reference = referenceProjects.find(candidate => candidate.status === 'ready' && candidate.projectRoot?.toLowerCase() === rootKey);
+    if (!reference) { root.append(item); continue; }
+    const row = el('div', undefined, 'project-tab-row');
+    const remove = iconAction('trash', () => removeProjectReference(reference), 'reference-remove');
+    remove.title = `移除关联项目：${reference.name}`;
+    remove.setAttribute('aria-label', remove.title);
+    row.append(item, remove); root.append(row);
   }
 }
 function apiForProject(project, path, body = undefined) {
@@ -153,6 +162,7 @@ async function refreshReferenceProjects() {
   if (!source?.projectSessionToken) return;
   const state = await api(`/api/project-references?projectSessionToken=${encodeURIComponent(source.projectSessionToken)}`);
   referenceProjects = state.references;
+  referenceProjectsRevision = state.referencesRevision;
   renderProjectTabs();
 }
 function apiAsSource(path, body = {}) {
@@ -278,7 +288,7 @@ async function api(path, body) {
     const failure = new Error(body ? '连接中断或响应无法解析，写入结果待确认。草稿已保留，请重新读取磁盘核实后再操作。' : '无法读取本地服务：' + error.message);
     failure.code = body ? 'SAVE_UNCERTAIN' : 'CONNECTION_FAILED'; throw failure;
   }
-  if (!response.ok) { const error = new Error(data.error + '：' + data.message); error.code = data.error; throw error; }
+  if (!response.ok) { const error = Object.assign(new Error(data.error + '：' + data.message), data); error.code = data.error; throw error; }
   return data;
 }
 // 所有页面写入串行执行，revision 只随已确认的自身提交更新。
@@ -1880,6 +1890,46 @@ async function manageReferences() {
     await apiAsSource('/api/project-references/declare', { projectRoot: selectedPath }); return true;
   }, '添加关联');
   await refreshReferenceProjects();
+}
+
+async function removeProjectReference(reference) {
+  const source = sourceProject ?? workspace;
+  if (!source?.projectSessionToken) throw new Error('当前没有可用的源项目会话');
+  if (!referenceProjectsRevision) throw new Error('关联项目列表尚未读取完成，请稍后重试');
+  if (!await guard()) return false;
+  const confirmed = await dialog('移除关联项目', container => {
+    container.append(el('p', `确定从当前项目移除“${reference.name}”吗？`, 'note'));
+    container.append(el('p', '这只会移除当前项目的关联入口，不会删除对方项目、其中的机制、概念、规则、视图或历史记录。', 'note'));
+  }, () => true, '确认移除');
+  if (!confirmed) return false;
+
+  const targetRoot = reference.projectRoot?.toLowerCase();
+  const removeTabs = () => {
+    if (!targetRoot) return;
+    for (let index = editorTabs.length - 1; index >= 0; index--) {
+      if (editorTabs[index].projectRoot?.toLowerCase() === targetRoot) editorTabs.splice(index, 1);
+    }
+    persistTabState(); renderEditorTabs();
+  };
+  const reflectRemoval = async revision => {
+    referenceProjects = referenceProjects.filter(item => item.id !== reference.id);
+    referenceProjectsRevision = revision ?? referenceProjectsRevision;
+    removeTabs(); renderProjectTabs();
+    if (targetRoot && workspace?.projectRoot?.toLowerCase() === targetRoot) await returnToSourceProject();
+  };
+  try {
+    const result = await apiAsSource('/api/project-references/remove', { referenceId: reference.id, referencesRevision: referenceProjectsRevision });
+    referenceProjects = result.references;
+    referenceProjectsRevision = result.referencesRevision;
+    removeTabs(); renderProjectTabs();
+    if (targetRoot && workspace?.projectRoot?.toLowerCase() === targetRoot) await returnToSourceProject();
+    return true;
+  } catch (error) {
+    if (!error.referenceRemoved) throw error;
+    await reflectRemoval(error.referencesRevision);
+    showError(error);
+    return false;
+  }
 }
 $('new-graph').onclick = () => newGraph().catch(showError);
 $('open-project').onclick = () => openProject().catch(showError);
