@@ -26,7 +26,7 @@ test('单文件保存真实落盘，读服务不持锁，写入冲突不覆盖',
   const pathOf = id => workspace.files.find(file => file.kind === 'mechanic' && file.id === id).path;
   const before = await readFile(join(directory, pathOf(workspace.mechanics[1].id)), 'utf8');
   const document = structuredClone(workspace.mechanics[0]);
-  document.positions.draw = { x: 123, y: 456 }; document.edges[0].sign = -1;
+  document.positions.draw = { x: 123, y: 456 };
   const saved = await store.save({ revision: workspace.revision, kind: 'mechanic', id: document.id, document });
   assert.notEqual(saved.revision, workspace.revision);
   assert.deepEqual(JSON.parse(await readFile(join(directory, pathOf(document.id)), 'utf8')), document);
@@ -51,6 +51,7 @@ test('外部修改与同时旧版本写入不会被覆盖；失败后草稿可�
   await assert.rejects(store.save({ revision: workspace.revision, kind: 'definitions', document: workspace.definitions }), { code: 'REVISION_CONFLICT' });
   assert.equal(JSON.parse(await readFile(file, 'utf8')).nodes[0].label, '外部修改');
   const canonical = await readWorkspace(directory, { verifyGeneratedCatalog: false });
+  await mkdir(canonical.agentExportRoot, { recursive: true });
   await publishCatalog(canonical.agentExportRoot, canonical);
   const fresh = await store.read();
   const one = structuredClone(external), two = structuredClone(external); one.nodes[0].label = '页面一'; two.nodes[0].label = '页面二';
@@ -68,14 +69,14 @@ test('删除被其他图层引用的定义、非法文件登记和非法边失�
   assert.equal(await readFile(join(directory, workspace.manifest.definitions), 'utf8'), before);
   const manifest = structuredClone(workspace.manifest); manifest.definitions = 'different.json';
   await assert.rejects(store.save({ revision: workspace.revision, kind: 'workspace', document: manifest }), { code: 'MANIFEST_PROTECTED' });
-  const graph = structuredClone(workspace.mechanics[0]); graph.edges[0].sign = 0;
-  await assert.rejects(store.save({ revision: workspace.revision, kind: 'mechanic', id: graph.id, document: graph }), { code: 'INVALID_DOCUMENT' });
+  const rules = structuredClone(workspace.rules); rules.rules[0].sign = 0;
+  await assert.rejects(store.save({ revision: workspace.revision, kind: 'rules', document: rules }), { code: 'INVALID_DOCUMENT' });
   assert.equal((await store.read()).revision, workspace.revision);
 });
 
 test('新建嵌套机制文件自然发现，不改配置；同名文件绝不覆盖', async t => {
   const { directory, store, workspace } = await fixture(t);
-  const document = { schemaVersion: 4, kind: 'mechanic', workspaceId: workspace.manifest.id, id: 'new-layer', name: '新图层', scope: '抽象规则', nodeIds: ['enemy', 'damage'], edges: [{ id: 'enemy-2-damage', source: 'enemy', target: 'damage', relation: 'influence', sign: 1, inheritance: { mode: 'none' } }], positions: {} };
+  const document = { schemaVersion: 7, kind: 'mechanic', workspaceId: workspace.manifest.id, id: 'new-layer', name: '新图层', scope: '抽象规则', focusNodeIds: ['enemy', 'damage'], pinnedRuleIds: [], positions: {} };
   const before = await readFile(join(directory, 'workspace.json'), 'utf8');
   const occupied = workspace.files.find(item => item.kind === 'mechanic').path;
   const occupiedBefore = await readFile(join(directory, occupied), 'utf8');
@@ -95,15 +96,16 @@ test('最近叠加视图保存图层引用，重开时基于源文件最新内�
   const document = structuredClone(workspace.manifest);
   document.lastView = { graphIds: ['basic-rules', 'hand'], activeLayerId: 'hand', collapsedNodeIds: ['repel'], positions: {} };
   await store.save({ revision: workspace.revision, kind: 'workspace', document });
-  const hand = structuredClone(workspace.mechanics.find(graph => graph.id === 'hand')); hand.edges[0].sign = -1;
-  const path = workspace.files.find(file => file.kind === 'mechanic' && file.id === 'hand').path;
-  await writeFile(join(directory, path), JSON.stringify(hand));
+  const hand = workspace.mechanics.find(graph => graph.id === 'hand');
+  const ruleId = hand.pinnedRuleIds[0], rules = structuredClone(workspace.rules);
+  rules.rules.find(rule => rule.id === ruleId).sign = -1;
+  await writeFile(join(directory, workspace.manifest.rules), JSON.stringify(rules));
   const canonical = await readWorkspace(directory, { verifyGeneratedCatalog: false });
   await publishCatalog(canonical.agentExportRoot, canonical);
   const reopened = await readWorkspace(directory);
   assert.deepEqual(reopened.manifest.lastView, document.lastView);
   const projection = compose(reopened, reopened.manifest.lastView.graphIds);
-  assert.equal(projection.edges.find(edge => edge.steps[0].graphId === 'hand' && edge.steps[0].edgeId === hand.edges[0].id).sign, -1);
+  assert.equal(projection.edges.find(edge => edge.id === ruleId).sign, -1);
   const invalid = structuredClone(document); invalid.lastView.activeLayerId = 'encounter';
   await assert.rejects(store.save({ revision: reopened.revision, kind: 'workspace', document: invalid }), { code: 'HIDDEN_ACTIVE_LAYER' });
 });
