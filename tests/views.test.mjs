@@ -74,6 +74,8 @@ test('视图和机制移动仍按 ID 恢复，外部视图字节修改触发整�
     await mkdir(join(root, '移动'));
     await rename(join(root, 'main.view.json'), join(root, '移动/视图.view.json'));
     await rename(join(root, 'mechanics/hand.mechanic.json'), join(root, '移动/手牌.mechanic.json'));
+    // 前面的保存会异步刷新受管文档；直接调用发布器前先收束同一 store 的写入者。
+    await store.flushPublication();
     const canonical = await readWorkspace(root, { verifyGeneratedCatalog: false });
     await publishCatalog(canonical.agentExportRoot, canonical);
     const moved = await store.read(); assert.deepEqual(moved.manifest.lastView, { viewId: 'hand' });

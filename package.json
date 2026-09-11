@@ -1,6 +1,6 @@
 {
   "name": "@veewo/mechanics",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "private": false,
   "description": "Mechanics：规则、概念与关系解释工具",
   "type": "module",
