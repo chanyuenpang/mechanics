@@ -19,7 +19,7 @@ async function fixture(t) {
   const root = join(projectRoot, '.mechanics');
   return root;
 }
-const view = (id = 'hand', structuralPresentation = 'line') => ({ schemaVersion: 3, kind: 'view', workspaceId: 'sample-card-game', id, name: '规则叠加', mechanicRegistrations: [{ mechanicId: 'basic-rules', visible: true }, { mechanicId: 'hand', visible: true }], collapsedNodeIds: [], positions: {}, structuralPresentation });
+const view = (id = 'hand', structuralPresentation = 'line') => ({ schemaVersion: 4, kind: 'view', workspaceId: 'sample-card-game', id, name: '规则叠加', mechanicRegistrations: [{ mechanicId: 'basic-rules', visible: true }, { mechanicId: 'hand', visible: true }], focusNodeIds: [], pinnedRuleIds: [], collapsedNodeIds: [], positions: {}, structuralPresentation });
 const json = async (root, path) => JSON.parse(await readFile(join(root, path), 'utf8'));
 
 test('真实视图混排发现、按类型区分同 ID，保存只改视图且最近记录仅存引用', async t => {
@@ -49,7 +49,7 @@ test('view v3 强制结构展示值，保存重开保持 badge 且不改变语�
   const root = await fixture(t), store = await createWorkspaceStore(root);
   try {
     let data = await store.read();
-    const definitionsBefore = await readFile(join(root, 'definitions.graph.json'), 'utf8');
+    const definitionsBefore = await readFile(join(root, 'definitions.json'), 'utf8');
     const mechanicsBefore = await Promise.all(data.files.filter(item => item.kind === 'mechanic')
       .map(item => readFile(join(root, item.path), 'utf8')));
     const { structuralPresentation: _missing, ...missing } = view('missing');
@@ -59,7 +59,7 @@ test('view v3 强制结构展示值，保存重开保持 badge 且不改变语�
     assert.equal(data.views.find(item => item.id === 'badge-view').structuralPresentation, 'badge');
     const reopened = await store.read();
     assert.equal(reopened.views.find(item => item.id === 'badge-view').structuralPresentation, 'badge');
-    assert.equal(await readFile(join(root, 'definitions.graph.json'), 'utf8'), definitionsBefore);
+    assert.equal(await readFile(join(root, 'definitions.json'), 'utf8'), definitionsBefore);
     assert.deepEqual(await Promise.all(reopened.files.filter(item => item.kind === 'mechanic')
       .map(item => readFile(join(root, item.path), 'utf8'))), mechanicsBefore);
   } finally { await store.close(); }

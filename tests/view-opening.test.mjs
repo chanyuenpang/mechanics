@@ -10,7 +10,7 @@ import { publishCatalog } from '../src/server/catalog.mjs';
 import { ViewAutosave, readOpening, prepareOpening, createAndRememberView, viewSaveRequest, graphPositions, changeViewVisibility, moveViewMechanic, registerViewMechanic, removeViewMechanic } from '../src/web/view-files.mjs';
 import { copyExampleFixture } from './example-fixture.mjs';
 
-const view = { schemaVersion: 3, kind: 'view', workspaceId: 'sample-card-game', id: 'test-view', name: '测试视图', mechanicRegistrations: [{ mechanicId: 'hand', visible: true }], collapsedNodeIds: [], positions: {}, structuralPresentation: 'line' };
+const view = { schemaVersion: 4, kind: 'view', workspaceId: 'sample-card-game', id: 'test-view', name: '测试视图', mechanicRegistrations: [{ mechanicId: 'hand', visible: true }], focusNodeIds: [], pinnedRuleIds: [], collapsedNodeIds: [], positions: {}, structuralPresentation: 'line' };
 async function fixture(t) {
   const projectRoot = await mkdtemp(join(tmpdir(), 'rule-view-opening-'));
   const root = join(projectRoot, '.mechanics');
@@ -67,7 +67,7 @@ test('同一项目内切换机制复用已验证快照，不读取或写入工�
 test('打开 badge 视图携带结构展示设置，保存后重新打开仍保持且源文件字节不变', async t => {
   const { root, api } = await fixture(t);
   const initial = await api('/api/workspace');
-  const definitionsBefore = await readFile(join(root, 'definitions.graph.json'), 'utf8');
+  const definitionsBefore = await readFile(join(root, 'definitions.json'), 'utf8');
   const mechanicBefore = await readFile(join(root, 'mechanics/hand.mechanic.json'), 'utf8');
   await createAndRememberView(api, initial.revision, { ...view, id: 'badge-view', structuralPresentation: 'badge' }, 'badge.view.json');
   let opened = await readOpening(api, 'badge-view');
@@ -76,7 +76,7 @@ test('打开 badge 视图携带结构展示设置，保存后重新打开仍保�
   const saved = await api('/api/save', { revision: opened.workspace.revision, ...viewSaveRequest(opened.workspace, 'badge-view', opened.snapshot) });
   opened = await readOpening(async path => path === '/api/workspace' ? saved : api(path), 'badge-view');
   assert.equal(opened.snapshot.structuralPresentation, 'badge');
-  assert.equal(await readFile(join(root, 'definitions.graph.json'), 'utf8'), definitionsBefore);
+  assert.equal(await readFile(join(root, 'definitions.json'), 'utf8'), definitionsBefore);
   assert.equal(await readFile(join(root, 'mechanics/hand.mechanic.json'), 'utf8'), mechanicBefore);
 });
 
@@ -132,7 +132,8 @@ test('打开机制只显示自身，记录单文件最近打开，不改原视�
     const opened = await readOpening(api, { kind: 'mechanic', id });
     assert.equal(opened.viewId, null); assert.equal(opened.activeId, id); assert.equal(opened.legacy, false);
     assert.deepEqual(opened.original.graphIds, [id]);
-    assert.ok(opened.original.edges.every(edge => edge.steps.every(step => step.graphId === id)));
+    const focus = new Set(opened.workspace.mechanics.find(mechanic => mechanic.id === id).focusNodeIds);
+    assert.ok(opened.original.edges.every(edge => focus.has(edge.source) || focus.has(edge.target)));
     assert.deepEqual(opened.snapshot.graphIds, [id]);
     assert.equal(await readFile(join(root, 'saved.view.json'), 'utf8'), bytes);
   }
@@ -231,8 +232,6 @@ test('旧折叠记录不再触发修复流程或改写视图文件', async t => 
   const { api, root } = await fixture(t);
   let workspace = await api('/api/workspace');
   workspace = await createAndRememberView(api, workspace.revision, { ...view, collapsedNodeIds: ['repel'] }, 'fold.view.json');
-  const hand = workspace.mechanics.find(item => item.id === 'hand');
-  await api('/api/save', { revision: workspace.revision, kind: 'mechanic', id: hand.id, document: { ...hand, edges: [...hand.edges, { id: 'repel-2-stamina', source: 'repel', target: 'stamina', relation: 'influence', sign: -1, inheritance: { mode: 'none' } }] } });
   const before = await readFile(join(root, 'fold.view.json'), 'utf8');
   const opened = await readOpening(api, view.id);
   assert.deepEqual(opened.snapshot.collapsedNodeIds, []);
