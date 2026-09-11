@@ -53,7 +53,7 @@ test('机制文档共享单一词典，且词典只保留已导出规则涉及�
 
 test('规则只在所属机制文档声明一次，并只导出可读的端点、范围与规则文本', async () => {
   const workspace = await readWorkspace(exampleWorkspace);
-  const mechanic = workspace.mechanics[0], edge = mechanic.edges[0];
+  const mechanic = workspace.mechanics[0], edge = workspace.rules.rules.find(rule => mechanic.pinnedRuleIds.includes(rule.id));
   edge.sign = 'random'; edge.ruleText = '唯一规则文字 <script>\n下一行';
   workspace.definitions.nodes.find(node => node.id === edge.source).customData = 'refs: https://example.invalid/concept';
   edge.customData = 'refs: https://example.invalid/rule';
@@ -120,7 +120,7 @@ test('文档版本涵盖名称、scope 与路径，语义版本忽略分类，�
   moved.definitions.positions.health = { x: 999, y: 888 };
   moved.definitions.nodes[0].agentLocked = !moved.definitions.nodes[0].agentLocked;
   moved.mechanics[0].positions.health = { x: -999, y: -888 };
-  moved.views = [{ id: 'ignored-view', positions: { health: { x: 123, y: 456 } } }];
+  moved.views = structuredClone(workspace.views);
   assert.equal(catalogSemanticRevision(moved), before.semanticRevision);
   assert.deepEqual(buildCatalog(moved).files, before.files);
   assert.equal(buildCatalog(moved).documentRevision, before.documentRevision);
@@ -131,7 +131,7 @@ test('文档版本涵盖名称、scope 与路径，语义版本忽略分类，�
   assert.notEqual(after.documentRevision, before.documentRevision);
   assert.match(after.files.get(`mechanics/${moved.mechanics[0].id}.md`), /新的机制名称/);
   assert.match(after.files.get(`mechanics/${moved.mechanics[0].id}.md`), /新的范围/);
-  moved.mechanics[0].edges[0].ruleText += '（已修改）';
+  moved.rules.rules[0].ruleText += '（已修改）';
   assert.notEqual(buildCatalog(moved).semanticRevision, before.semanticRevision);
 });
 

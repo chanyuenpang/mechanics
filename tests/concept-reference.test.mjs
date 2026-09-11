@@ -61,21 +61,21 @@ test('创建并引用只保存共享定义；机制草稿保留，所有候选�
   const commit = new ReferenceCommit(plan);
   await commit.run(async document => { saves++; await store.save({ revision: workspace.revision, kind: 'definitions', document }); }, next => { edits++; applied = next; return true; });
   assert.equal(saves, 1); assert.equal(edits, 1); assert.deepEqual(draft, original);
-  assert.equal(applied.scope, draft.scope); assert.deepEqual(applied.nodeIds.slice(-2), ['aaa-new', 'bbb-new']);
+  assert.equal(applied.scope, draft.scope); assert.deepEqual(applied.focusNodeIds.slice(-2), ['aaa-new', 'bbb-new']);
   const latest = await store.read(); assert.ok(latest.definitions.nodes.some(item => item.id === 'aaa-new'));
   assert.deepEqual(await Promise.all(paths.map(path => readFile(join(root, path), 'utf8'))), before);
   await assert.rejects(commit.run(() => { saves++; }, () => true)); assert.equal(saves, 1);
 });
 test('仅引用已有概念不写定义；同名不同 ID 可并存，名称/含义/标签/ID 检索不过滤已引用项', async t => {
   const { workspace, draft, positions } = await fixture(t);
-  const existing = workspace.definitions.nodes.find(item => !draft.nodeIds.includes(item.id));
+  const existing = workspace.definitions.nodes.find(item => !draft.focusNodeIds.includes(item.id));
   const plan = prepareReference({ workspace, draft, selected: [existing.id, existing.id], candidates: [], positions, center: { x: 0, y: 0 } });
-  await new ReferenceCommit(plan).run(() => assert.fail('不应写定义'), next => { assert.equal(next.nodeIds.filter(id => id === existing.id).length, 1); return true; });
+  await new ReferenceCommit(plan).run(() => assert.fail('不应写定义'), next => { assert.equal(next.focusNodeIds.filter(id => id === existing.id).length, 1); return true; });
   const a = { ...node('name-a', '概念'), tags: ['资源'] }, b = node('name-b', ' 概念 ');
   assert.equal(sameNamedConcepts([a, b], '概念').length, 2);
   assert.deepEqual(matchingConcepts([a, b], 'name-a 定义'), [a]);
   assert.deepEqual(matchingConcepts([a, b], '资源'), [a]);
-  assert.ok(matchingConcepts(workspace.definitions.nodes, draft.nodeIds[0]).some(item => item.id === draft.nodeIds[0]));
+  assert.ok(matchingConcepts(workspace.definitions.nodes, draft.focusNodeIds[0]).some(item => item.id === draft.focusNodeIds[0]));
 });
 
 test('网页概念搜索与编辑保留自然语言别名', async t => {
