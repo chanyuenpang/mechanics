@@ -45,6 +45,13 @@
    npm publish
    ```
 
+   受 npm 2FA 保护的账号应优先使用 GitHub Actions 的 OIDC trusted publisher。仓库的
+   `.github/workflows/stage-publish.yml` 只允许 `npm stage publish`：将 npm 包设置中的
+   trusted publisher 指向 `chanyuenpang/mechanics` 与 `stage-publish.yml`，保留默认的
+   stage-only 权限。工作流完成后，维护者在 npm 的 Staged Packages 页面以 2FA 审核发布；
+   不创建 bypass-2FA token。首次发布尚不能使用 staged publishing，必须由维护者完成一次
+   交互式 2FA 发布。
+
 5. 从 registry 回读版本，并用临时 npx 安装验证实际可执行文件：
 
    ```sh
