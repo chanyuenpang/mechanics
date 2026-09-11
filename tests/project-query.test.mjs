@@ -12,12 +12,14 @@ const nodes = [
 ];
 const workspace = {
   manifest: { id: 'test' }, revision: 'r1', definitions: { nodes }, views: [],
+  rules: { rules: [
+    { id: 'soldier-is-unit', source: 'soldier', target: 'unit', relation: 'specializes' },
+    { id: 'soldier-attack', source: 'soldier', target: 'attack', relation: 'influence', sign: 1, ruleText: '士兵可以攻击' },
+    { id: 'attack-health', source: 'attack', target: 'health', relation: 'influence', sign: -1, ruleText: '攻击降低气血' },
+  ] },
   mechanics: [
-    { id: 'taxonomy', name: '分类', scope: '测试', nodeIds: ['soldier', 'unit'], edges: [{ id: 'soldier-is-unit', source: 'soldier', target: 'unit', relation: 'specializes' }] },
-    { id: 'combat', name: '战斗', scope: '测试', nodeIds: ['soldier', 'attack', 'health'], edges: [
-      { id: 'soldier-attack', source: 'soldier', target: 'attack', relation: 'influence', sign: 1, ruleText: '士兵可以攻击' },
-      { id: 'attack-health', source: 'attack', target: 'health', relation: 'influence', sign: -1, ruleText: '攻击降低气血' },
-    ] },
+    { id: 'taxonomy', name: '分类', scope: '测试', focusNodeIds: ['soldier', 'unit'], pinnedRuleIds: ['soldier-is-unit'] },
+    { id: 'combat', name: '战斗', scope: '测试', focusNodeIds: ['soldier', 'attack', 'health'], pinnedRuleIds: ['soldier-attack', 'attack-health'] },
   ],
 };
 
