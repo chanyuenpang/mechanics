@@ -101,6 +101,7 @@ test('最近叠加视图保存图层引用，重开时基于源文件最新内�
   rules.rules.find(rule => rule.id === ruleId).sign = -1;
   await writeFile(join(directory, workspace.manifest.rules), JSON.stringify(rules));
   const canonical = await readWorkspace(directory, { verifyGeneratedCatalog: false });
+  await mkdir(canonical.agentExportRoot, { recursive: true });
   await publishCatalog(canonical.agentExportRoot, canonical);
   const reopened = await readWorkspace(directory);
   assert.deepEqual(reopened.manifest.lastView, document.lastView);
