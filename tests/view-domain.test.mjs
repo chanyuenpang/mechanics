@@ -4,10 +4,11 @@ import { composeView, moveMechanic, registerMechanic, registeredMechanicIds, rem
 import { queryWorkspace } from '../src/domain/query.mjs';
 
 const node = id => ({ id, label: id, description: id, increaseMeaning: id });
-const mechanic = (id, nodeId) => ({ id, name: id, scope: '测试', nodeIds: [nodeId], edges: [], positions: {} });
+const mechanic = (id, nodeId) => ({ id, name: id, scope: '测试', focusNodeIds: [nodeId], pinnedRuleIds: [], positions: {} });
 const workspace = {
   manifest: { id: 'test' }, revision: 'one',
   definitions: { nodes: [node('a'), node('b')] },
+  rules: { rules: [] },
   mechanics: [mechanic('one', 'a'), mechanic('two', 'b')],
   files: [{ kind: 'mechanic', id: 'one', path: 'one.mechanic.json' }, { kind: 'mechanic', id: 'two', path: 'two.mechanic.json' }, { kind: 'view', id: 'battle', path: 'battle.view.json' }],
   views: [],

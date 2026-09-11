@@ -134,7 +134,7 @@ test('目录扫描发现新增、移动和空目录；稳定 ID 恢复视图，�
     assert.equal(moved.files.find(file => file.id === 'hand').path, '关卡/手牌.mechanic.json');
     assert.ok(moved.directories.includes('关卡/空目录'));
     assert.deepEqual(moved.manifest.lastView, manifest.lastView);
-    const graph = { ...moved.mechanics.find(graph => graph.id === 'hand'), id: 'external', edges: [] };
+    const graph = { ...moved.mechanics.find(graph => graph.id === 'hand'), id: 'external', focusNodeIds: [], pinnedRuleIds: [] };
     await writeFile(join(root, '关卡/外部.mechanic.json'), JSON.stringify(graph));
     canonical = await readWorkspace(root, { verifyGeneratedCatalog: false });
     await publishCatalog(canonical.agentExportRoot, canonical);

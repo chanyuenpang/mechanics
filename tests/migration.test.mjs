@@ -17,13 +17,23 @@ async function fixture(t) {
   await copyExampleFixture(root);
   const workspace = join(root, '.mechanics');
   t.after(() => rm(root, { recursive: true, force: true }));
+  // 构造真实的 v7 文件布局：当时规则仍内联在每张机制图中，definitions 文件名也尚未收敛。
+  const manifestPath = join(workspace, 'workspace.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  const definitions = JSON.parse(await readFile(join(workspace, manifest.definitions), 'utf8'));
+  const registry = JSON.parse(await readFile(join(workspace, manifest.rules), 'utf8'));
+  await rename(join(workspace, manifest.definitions), join(workspace, 'definitions.graph.json'));
+  await rm(join(workspace, manifest.rules));
   const files = ['workspace.json', 'definitions.graph.json', 'mechanics/basic-rules.mechanic.json', 'mechanics/encounter.mechanic.json', 'mechanics/hand.mechanic.json'];
-  for (const file of files) {
-    const path = join(workspace, file), document = JSON.parse(await readFile(path, 'utf8'));
-    if (document.kind === 'workspace') document.schemaVersion = 7;
-    if (document.kind === 'definitions') document.schemaVersion = 3;
-    if (document.kind === 'mechanic') { document.schemaVersion = 3; for (const edge of document.edges) delete edge.inheritance; }
-    await writeFile(path, JSON.stringify(document, null, 2) + '\n');
+  await writeFile(manifestPath, JSON.stringify({ ...manifest, schemaVersion: 7, definitions: 'definitions.graph.json', rules: undefined }, null, 2) + '\n');
+  await writeFile(join(workspace, 'definitions.graph.json'), JSON.stringify({ ...definitions, schemaVersion: 3 }, null, 2) + '\n');
+  for (const file of files.filter(path => path.endsWith('.mechanic.json'))) {
+    const path = join(workspace, file), current = JSON.parse(await readFile(path, 'utf8'));
+    const edges = registry.rules.filter(rule => current.pinnedRuleIds.includes(rule.id)).map(rule => {
+      const edge = structuredClone(rule); delete edge.inheritance; return edge;
+    });
+    const { focusNodeIds, pinnedRuleIds, ...rest } = current;
+    await writeFile(path, JSON.stringify({ ...rest, schemaVersion: 3, nodeIds: focusNodeIds, edges }, null, 2) + '\n');
   }
   const viewFile = 'migration.view.json';
   await writeFile(join(workspace, viewFile), JSON.stringify({
@@ -54,13 +64,15 @@ test('逐版本迁移必须显式提交：关系改名、限定词收回端点�
   const v9ToV10 = await migrateWorkspace(workspace, { from: 9, to: 10 });
   assert.equal(v9ToV10.preview, true);
   await migrateWorkspace(workspace, { from: 9, to: 10, revision: v9ToV10.revision, execute: true });
+  const v10ToV11 = await migrateWorkspace(workspace, { from: 10, to: 11 });
+  await migrateWorkspace(workspace, { from: 10, to: 11, revision: v10ToV11.revision, execute: true });
   const migrated = await readWorkspace(workspace);
-  assert.equal(migrated.manifest.schemaVersion, 10);
-  assert.equal(migrated.definitions.schemaVersion, 5);
-  assert.ok(migrated.mechanics.every(item => item.schemaVersion === 6));
-  assert.ok(migrated.views.every(item => item.schemaVersion === 3 && item.structuralPresentation === 'line'));
-  assert.ok(migrated.mechanics.flatMap(item => item.edges).filter(item => item.relation === 'influence').every(item => item.inheritance.mode === 'none'));
-  assert.equal(migrated.mechanics.find(item => item.id === 'hand').edges[0].relation, 'specializes');
+  assert.equal(migrated.manifest.schemaVersion, 11);
+  assert.equal(migrated.definitions.schemaVersion, 6);
+  assert.ok(migrated.mechanics.every(item => item.schemaVersion === 7));
+  assert.ok(migrated.views.every(item => item.schemaVersion === 4 && item.structuralPresentation === 'line'));
+  assert.ok(migrated.rules.rules.filter(item => item.relation === 'influence').every(item => item.inheritance.mode === 'none'));
+  assert.equal(migrated.rules.rules.find(item => item.source === 'hand' || item.id === 'evade-2-repel')?.relation, 'specializes');
   assert.equal(files.length, 6);
 });
 
@@ -134,7 +146,7 @@ test('旧项目迁移只在显式命令中识别旧根、旧技能和旧导出',
   assert.equal(result.execute, true);
   assert.equal(result.removedLegacyCatalog, exportRoot);
   const migratedManifest = JSON.parse(await readFile(join(root, '.mechanics', 'workspace.json'), 'utf8'));
-  assert.equal(migratedManifest.schemaVersion, 10);
+  assert.equal(migratedManifest.schemaVersion, 11);
   assert.equal(migratedManifest.agentExportPath, 'mechanics');
   await assert.rejects(lstat(join(root, '.game-graph')), { code: 'ENOENT' });
   await assert.rejects(lstat(join(root, '.agents', 'skills', 'game-mechanic-search')), { code: 'ENOENT' });

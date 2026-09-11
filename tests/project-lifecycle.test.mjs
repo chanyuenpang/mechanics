@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { access, cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -124,7 +124,9 @@ test('进入关联项目保留源项目 active 会话，并返回可写的目标
 test('概念文档接口只读取完整导出，拒绝篡改与任意路径', async t => {
   const temp = await mkdtemp(join(tmpdir(), 'game-graph-concept-docs-'));
   const projectRoot = join(temp, 'project'); await copyExampleFixture(projectRoot);
-  await publishCatalog(join(projectRoot, 'mechanics'), await readWorkspace(join(projectRoot, '.mechanics')));
+  const canonical = await readWorkspace(join(projectRoot, '.mechanics'));
+  await mkdir(canonical.agentExportRoot, { recursive: true });
+  await publishCatalog(canonical.agentExportRoot, canonical);
   const server = await startServer({ projectRoot, port: 0, projectHistoryPath: join(temp, 'user', 'projects.json') });
   t.after(async () => { await server.close(); await rm(temp, { recursive: true, force: true }); });
   const index = await fetch(server.origin + '/api/concept-docs');

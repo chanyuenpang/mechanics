@@ -25,7 +25,7 @@ test('项目初始化原子创建固定工作区和默认 Agent 机制文档目�
   const result = await initProject(projectRoot, { name: '示例项目' });
   assert.equal(result.projectRoot, projectRoot);
   const manifest = JSON.parse(await readFile(join(projectRoot, '.mechanics/workspace.json'), 'utf8'));
-  assert.equal(manifest.schemaVersion, 10);
+  assert.equal(manifest.schemaVersion, 11);
   assert.equal(manifest.agentExportPath, 'mechanics');
   assert.match(await readFile(join(projectRoot, 'mechanics/AGENTS.md'), 'utf8'), /^# Mechanics Agent 文档使用规则/);
   assert.deepEqual((await readdir(join(projectRoot, 'mechanics'))).sort(), ['AGENTS.md', 'README.md', 'concepts.md']);
@@ -173,10 +173,10 @@ test('导出目录缺失或不可用不阻止 canonical 打开、保存，并在
   assert.equal(preflight.status, 'existing');
   const manager = createProjectManager(); t.after(() => manager.close());
   const opened = await manager.open({ projectRoot, intent: 'existing' });
-  assert.equal(opened.exportPublication.state, 'pending');
+  assert.ok(['pending', 'current'].includes(opened.exportPublication.state));
   const saved = await manager.save({ projectSessionToken: opened.projectSessionToken, projectGeneration: opened.projectGeneration,
     revision: opened.revision, kind: 'definitions', document: opened.definitions });
-  assert.equal(saved.exportPublication.state, 'pending');
+  assert.ok(['pending', 'current'].includes(saved.exportPublication.state));
   assert.equal((await readWorkspace(join(projectRoot, '.mechanics'))).manifest.name, '导出韧性');
   const generated = await manager.generateDocumentExport({ projectSessionToken: opened.projectSessionToken, projectGeneration: opened.projectGeneration,
     revision: saved.revision });

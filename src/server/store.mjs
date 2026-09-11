@@ -825,9 +825,10 @@ export async function migrateWorkspace(workspaceRoot, options = {}) {
     const plan = await planMigration();
     if (typeof revision !== 'string' || !revision) fail('MIGRATION_REVISION_CONFLICT', '实际迁移必须提供 dry-run 返回的 revision');
     if (revision !== plan.revision) fail('MIGRATION_REVISION_CONFLICT', '工作区自预览后已改变；未写入任何文件。');
-    await commitFiles(root, plan.documents, { verify: to === 10 || to === 11 ? () => readWorkspace(root) : null });
+    // v10 仍是历史协议；只有完成规则库拆分的 v11 才能用常规读取器回读。
+    await commitFiles(root, plan.documents, { verify: to === 11 ? () => readWorkspace(root) : null });
     let migrated;
-    try { migrated = to === 10 || to === 11 ? await readWorkspace(root) : { revision: plan.revision }; }
+    try { migrated = to === 11 ? await readWorkspace(root) : { revision: plan.revision }; }
     catch (error) { fail('MIGRATION_READBACK_FAILED', `迁移提交后 v${to} 工作区回读失败：` + error.message); }
     return { ...plan.summary, from: plan.from, to: plan.to, revision: migrated.revision, preview: false, migrated: true };
   } finally { await release(); }

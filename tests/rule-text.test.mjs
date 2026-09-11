@@ -13,7 +13,7 @@ import { validateWorkspace } from '../src/domain/validate.mjs';
 import { queryWorkspace, formatQueryText } from '../src/domain/query.mjs';
 import { applyAgentMutation } from '../src/server/agent-mutation.mjs';
 import { readWorkspace } from '../src/server/workspace.mjs';
-import { planV7ToV8Migration } from '../src/server/migration.mjs';
+import { mergeRuleCondition } from '../src/server/migration.mjs';
 import { copyExampleFixture } from './example-fixture.mjs';
 
 const example = fileURLToPath(new URL('../examples/card-game/', import.meta.url));
@@ -85,14 +85,14 @@ test('Schema 与 Agent mutation 拒绝旧字段，规则空白不改变路径推
   const graph = compose(workspace, ['basic-rules', 'hand']);
   const before = tracePaths(graph, 'evade', 'failure');
   const empty = structuredClone(workspace);
-  for (const mechanic of empty.mechanics) for (const edge of mechanic.edges) delete edge.ruleText;
+  for (const rule of empty.rules.rules) delete rule.ruleText;
   validateWorkspace(empty);
   assert.deepEqual(tracePaths(compose(empty, ['basic-rules', 'hand']), 'evade', 'failure').paths.map(path => path.sign), before.paths.map(path => path.sign));
-  empty.mechanics[0].edges[0].condition = '';
+  empty.rules.rules[0].condition = '';
   assert.throws(() => validateWorkspace(empty), { code: 'INVALID_DOCUMENT' });
-  const mechanic = workspace.mechanics[0], edge = mechanic.edges[0];
+  const mechanic = workspace.mechanics[0], edge = workspace.rules.rules.find(rule => mechanic.pinnedRuleIds.includes(rule.id));
   assert.throws(() => applyAgentMutation(workspace, { resource: 'rule', action: 'update', mechanic: mechanic.id,
-    source: edge.source, target: edge.target, condition: '', revision: workspace.resourceRevisions.mechanics[mechanic.id] }), /condition/);
+    source: edge.source, target: edge.target, condition: '', revision: workspace.resourceRevisions.rules }), /condition/);
   const folded = collapse(graph, 'repel').edges.find(edge => edge.derived);
   assert.ok(folded.ruleText.includes('体力'));
   assert.equal(Object.hasOwn(folded, 'condition'), false);
@@ -106,47 +106,47 @@ test('Schema 与 Agent mutation 拒绝旧字段，规则空白不改变路径推
 
 test('Agent 清空或删除限定边时，同时移除失效的投影坐标', async () => {
   const workspace = await readWorkspace(join(example, '.mechanics'));
-  const mechanic = workspace.mechanics[0], edge = mechanic.edges[0];
+  const mechanic = workspace.mechanics[0], edge = workspace.rules.rules.find(rule => mechanic.pinnedRuleIds.includes(rule.id));
   const qualifiers = [{ key: 'faction', value: { kind: 'literal', value: 'friendly' } }];
   applyAgentMutation(workspace, { resource: 'rule', action: 'update', mechanic: mechanic.id,
     source: edge.source, target: edge.target, sourceQualifiers: qualifiers,
-    revision: workspace.resourceRevisions.mechanics[mechanic.id] });
+    revision: workspace.resourceRevisions.rules });
   const projectionId = endpointProjectionId(edge.source, qualifiers);
   mechanic.projectionPositions = { [projectionId]: { x: 120, y: 80 } };
   applyAgentMutation(workspace, { resource: 'rule', action: 'update', mechanic: mechanic.id,
     source: edge.source, target: edge.target, sourceQualifiers: [],
-    revision: workspace.resourceRevisions.mechanics[mechanic.id] });
-  assert.equal(mechanic.edges[0].sourceQualifiers, undefined);
+    revision: workspace.resourceRevisions.rules });
+  assert.equal(workspace.rules.rules.find(rule => rule.id === edge.id).sourceQualifiers, undefined);
   assert.equal(mechanic.projectionPositions[projectionId], undefined);
 
   applyAgentMutation(workspace, { resource: 'rule', action: 'update', mechanic: mechanic.id,
     source: edge.source, target: edge.target, sourceQualifiers: qualifiers,
-    revision: workspace.resourceRevisions.mechanics[mechanic.id] });
+    revision: workspace.resourceRevisions.rules });
   mechanic.projectionPositions = { [projectionId]: { x: 120, y: 80 } };
   applyAgentMutation(workspace, { resource: 'rule', action: 'delete', mechanic: mechanic.id,
-    source: edge.source, target: edge.target, revision: workspace.resourceRevisions.mechanics[mechanic.id] });
+    source: edge.source, target: edge.target, revision: workspace.resourceRevisions.rules });
   assert.equal(mechanic.projectionPositions[projectionId], undefined);
 });
 
 test('Agent 删除限定边时，同时移除组合视图中已失效的投影坐标', async () => {
   const workspace = await readWorkspace(join(example, '.mechanics'));
-  const mechanic = workspace.mechanics[0], edge = mechanic.edges[0];
+  const mechanic = workspace.mechanics[0], edge = workspace.rules.rules.find(rule => mechanic.pinnedRuleIds.includes(rule.id));
   const qualifiers = [{ key: 'faction', value: { kind: 'literal', value: 'friendly' } }];
   applyAgentMutation(workspace, { resource: 'rule', action: 'update', mechanic: mechanic.id,
     source: edge.source, target: edge.target, sourceQualifiers: qualifiers,
-    revision: workspace.resourceRevisions.mechanics[mechanic.id] });
+    revision: workspace.resourceRevisions.rules });
   const projectionId = endpointProjectionId(edge.source, qualifiers);
-  workspace.views = [{ schemaVersion: 3, kind: 'view', workspaceId: workspace.manifest.id, id: 'combined', name: '组合视图',
-    mechanicRegistrations: [{ mechanicId: mechanic.id, visible: true }], projectionPositions: { [projectionId]: { x: 120, y: 80 } }, positions: {}, collapsedNodeIds: [], structuralPresentation: 'line' }];
+  workspace.views = [{ schemaVersion: 4, kind: 'view', workspaceId: workspace.manifest.id, id: 'combined', name: '组合视图',
+    mechanicRegistrations: [{ mechanicId: mechanic.id, visible: true }], focusNodeIds: [], pinnedRuleIds: [], projectionPositions: { [projectionId]: { x: 120, y: 80 } }, positions: {}, collapsedNodeIds: [], structuralPresentation: 'line' }];
   applyAgentMutation(workspace, { resource: 'rule', action: 'delete', mechanic: mechanic.id,
-    source: edge.source, target: edge.target, revision: workspace.resourceRevisions.mechanics[mechanic.id] });
+    source: edge.source, target: edge.target, revision: workspace.resourceRevisions.rules });
   assert.equal(workspace.views[0].projectionPositions[projectionId], undefined);
 });
 
 test('Agent 新增未限定的影响规则时，不把缺省限定词当作数组读取', async () => {
   const workspace = await readWorkspace(join(example, '.mechanics'));
   const mechanic = workspace.mechanics[0];
-  const existing = new Set(workspace.mechanics.flatMap(item => item.edges.map(edge => `${edge.source}->${edge.target}`)));
+  const existing = new Set(workspace.rules.rules.map(edge => `${edge.source}->${edge.target}`));
   const conceptIds = workspace.definitions.nodes.map(concept => concept.id);
   const candidate = conceptIds.flatMap(source => conceptIds.map(target => ({ source, target })))
     .find(({ source, target }) => source !== target && !existing.has(`${source}->${target}`));
@@ -155,9 +155,9 @@ test('Agent 新增未限定的影响规则时，不把缺省限定词当作数�
     resource: 'rule', action: 'add', mechanic: mechanic.id,
     source: candidate.source, target: candidate.target, relation: 'influence', sign: 1,
     ruleText: '轮到参与者回合时，可在满足条件下执行卡牌。',
-    revision: workspace.resourceRevisions.mechanics[mechanic.id],
+    revision: workspace.resourceRevisions.rules,
   });
-  const added = mechanic.edges.find(edge => edge.source === candidate.source && edge.target === candidate.target);
+  const added = workspace.rules.rules.find(edge => edge.source === candidate.source && edge.target === candidate.target);
   assert.equal(added?.sign, 1);
   assert.equal(added?.sourceQualifiers, undefined);
   assert.equal(added?.targetQualifiers, undefined);
@@ -174,20 +174,9 @@ test('旧 CLI 参数和已删除命令明确拒绝', async () => {
     error => /命令或参数数量无效/.test(error.stderr));
 });
 
-test('v7 到 v8 的已有迁移候选同时移除条件字段并保留规则文字', async t => {
-  const { root } = await fixture(t), workspace = await readWorkspace(root);
-  for (const file of workspace.files) {
-    const path = join(root, file.path), document = JSON.parse(await readFile(path, 'utf8'));
-    document.schemaVersion = file.kind === 'workspace' ? 7 : file.kind === 'view' ? 2 : 3;
-    if (file.kind === 'mechanic') for (const edge of document.edges) {
-      delete edge.inheritance;
-      edge.condition = '迁移测试约束';
-    }
-    await writeFile(path, JSON.stringify(document));
-  }
-  const plan = await planV7ToV8Migration(root);
-  const rules = plan.documents.filter(item => item.document.kind === 'mechanic').flatMap(item => item.document.edges);
-  assert.ok(rules.length > 0);
-  assert.ok(rules.every(edge => edge.ruleText.endsWith('\n条件约束：迁移测试约束') && !Object.hasOwn(edge, 'condition')));
-  assert.equal(JSON.parse(await readFile(join(root, 'workspace.json'), 'utf8')).schemaVersion, 7);
+test('v7 到 v8 的规则迁移合并旧 condition 并保留规则文字', () => {
+  const migrated = mergeRuleCondition({ id: 'a-2-b', source: 'a', target: 'b', relation: 'influence', sign: 1,
+    ruleText: '原规则', condition: '迁移测试约束' });
+  assert.equal(migrated.ruleText, '原规则\n条件约束：迁移测试约束');
+  assert.equal(Object.hasOwn(migrated, 'condition'), false);
 });

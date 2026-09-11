@@ -20,6 +20,22 @@ export function mergeRuleCondition(edge) {
 }
 
 const fail = (code, message, cause) => { throw Object.assign(new ContractError(code, message), cause ? { cause } : {}); };
+// 历史协议的迁移候选不能交给 v11 schema 校验；它们尚未拥有 rules.json。
+// 这里仅验证跨文件不变量，最终 v10 → v11 仍必须通过完整当前合同回读。
+function validateLegacyCandidate({ manifest, definitions, mechanics, views = [] }) {
+  if (!manifest?.id || !Array.isArray(definitions?.nodes)) fail('MIGRATION_VALIDATION_FAILED', '历史候选缺少工作区或概念定义。');
+  const ids = new Set(definitions.nodes.map(node => node.id));
+  if (ids.size !== definitions.nodes.length) fail('MIGRATION_VALIDATION_FAILED', '历史候选的概念 ID 重复。');
+  for (const document of [definitions, ...mechanics, ...views]) if (document.workspaceId !== manifest.id) {
+    fail('MIGRATION_VALIDATION_FAILED', '历史候选存在工作区归属不一致。');
+  }
+  for (const mechanic of mechanics) {
+    for (const id of mechanic.nodeIds ?? []) if (!ids.has(id)) fail('MIGRATION_VALIDATION_FAILED', `机制 ${mechanic.id} 引用了不存在的概念：${id}`);
+    for (const edge of mechanic.edges ?? []) {
+      if (!ids.has(edge.source) || !ids.has(edge.target)) fail('MIGRATION_VALIDATION_FAILED', `机制 ${mechanic.id} 的规则端点引用不存在的概念：${edge.id}`);
+    }
+  }
+}
 const revisionOf = (snapshots, directories) => {
   const hash = createHash('sha256');
   for (const [file, raw] of [...snapshots].sort(([a], [b]) => a.localeCompare(b))) hash.update(JSON.stringify([file, raw]));
@@ -71,7 +87,7 @@ export async function planV7ToV8Migration(workspaceRoot) {
     structuralPresentation: 'line',
   }));
   const candidate = { manifest: nextManifest, definitions: nextDefinitions, mechanics: nextMechanics, views: nextViews, files };
-  try { validateWorkspace(candidate); }
+  try { validateLegacyCandidate(candidate); }
   catch (error) { fail('MIGRATION_VALIDATION_FAILED', 'v7 → v8 候选未通过全量校验：' + error.message, error); }
   const documents = [
     { path: 'workspace.json', document: nextManifest }, { path: manifest.definitions, document: nextDefinitions },
@@ -147,7 +163,7 @@ export async function planV8ToV9Migration(workspaceRoot) {
   const nextViews = views.map(view => ({ ...structuredClone(view),
     collapsedNodeIds: view.collapsedNodeIds.filter(id => !qualified.has(id)), positions: migratePositions(view.positions) }));
   const candidate = { manifest: nextManifest, definitions: nextDefinitions, mechanics: nextMechanics, views: nextViews, files };
-  try { validateWorkspace(candidate); }
+  try { validateLegacyCandidate(candidate); }
   catch (error) { fail('MIGRATION_VALIDATION_FAILED', 'v8 → v9 候选未通过全量校验：' + error.message, error); }
   const documents = [
     { path: 'workspace.json', document: nextManifest }, { path: manifest.definitions, document: nextDefinitions },
@@ -187,7 +203,7 @@ export async function planV9ToV10Migration(workspaceRoot) {
     ...mechanics.map((item, index) => ({ kind: 'mechanic', id: item.id, path: discovered.mechanicPaths[index] })),
     ...views.map((item, index) => ({ kind: 'view', id: item.id, path: discovered.viewPaths[index] }))];
   const candidate = { manifest: nextManifest, definitions, mechanics: nextMechanics, views, files };
-  try { validateWorkspace(candidate); } catch (error) { fail('MIGRATION_VALIDATION_FAILED', 'v9 → v10 候选未通过全量校验：' + error.message, error); }
+  try { validateLegacyCandidate(candidate); } catch (error) { fail('MIGRATION_VALIDATION_FAILED', 'v9 → v10 候选未通过跨文件校验：' + error.message, error); }
   return { root, from: 9, to: 10, revision: revisionOf(snapshots, discovered.directories), documents: [
     { path: 'workspace.json', document: nextManifest },
     ...nextMechanics.map(document => ({ path: files.find(item => item.kind === 'mechanic' && item.id === document.id)?.path, document })),
@@ -270,7 +286,7 @@ export async function planV9DanglingNodeRepair(workspaceRoot) {
     ...(manifest.lastView?.graphIds ? { lastView: { ...manifest.lastView,
       collapsedNodeIds: manifest.lastView.collapsedNodeIds.filter(id => defined.has(id)), positions: removeLayout(manifest.lastView.positions) } } : {}) };
   const candidate = { manifest: nextManifest, definitions, mechanics: nextMechanics, views: nextViews, files };
-  try { validateWorkspace(candidate); }
+  try { validateLegacyCandidate(candidate); }
   catch (error) { fail('MIGRATION_VALIDATION_FAILED', 'v9 悬空节点修复候选未通过全量校验：' + error.message, error); }
   return { root, from: 9, to: 9, revision: revisionOf(snapshots, discovered.directories), documents: [
     { path: 'workspace.json', document: nextManifest },
