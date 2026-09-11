@@ -10,7 +10,7 @@ import { auditGraphGeometryStrict, ROUTING_QUALITY, routeGraphScore } from '../s
 
 // 只读验证任意项目的真实投影；报告输出目录独立于 canonical 工作区。
 export async function readRoutingSample(project, kind, id) {
-  const workspace = await readWorkspace(join(resolve(project), '.game-graph'));
+  const workspace = await readWorkspace(join(resolve(project), '.mechanics'));
   const opening = prepareOpening(workspace, { kind, id });
   const graph = projectEndpointQualifiers(opening.original);
   const positions = graphPositions(workspace, opening.original, opening.snapshot.positions, opening.activeId);

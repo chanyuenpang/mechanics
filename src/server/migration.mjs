@@ -194,6 +194,50 @@ export async function planV9ToV10Migration(workspaceRoot) {
   ], summary: { workspace: 1, mechanics: nextMechanics.length, rulesRekeyed: nextMechanics.flatMap(item => item.edges).length } };
 }
 
+// v11 将规则从机制图的编辑投影中移出，改由 workspace 唯一 rules.json 持有。
+export async function planV10ToV11Migration(workspaceRoot) {
+  const root = await realpath(resolve(workspaceRoot));
+  const snapshots = new Map();
+  const read = async file => { const result = await readDocument(root, file); snapshots.set(file, result.raw); return result.document; };
+  const manifest = await read('workspace.json');
+  if (manifest?.kind !== 'workspace' || manifest.schemaVersion !== 10) fail('MIGRATION_VERSION_UNSUPPORTED', '迁移只支持 workspace v10 → v11；当前工作区版本为 v' + String(manifest?.schemaVersion));
+  const definitions = await read(manifest.definitions), discovered = await discover(root), mechanics = [], views = [];
+  for (const path of discovered.mechanicPaths) mechanics.push(await read(path));
+  for (const path of discovered.viewPaths) views.push(await read(path));
+  if (definitions?.schemaVersion !== 5 || mechanics.some(item => item?.schemaVersion !== 6) || views.some(item => item?.schemaVersion !== 3)) {
+    fail('MIGRATION_VERSION_UNSUPPORTED', '迁移只接受 definitions v5、mechanic v6 与 view v3 的完整 v10 工作区');
+  }
+  const rules = mechanics.flatMap(mechanic => mechanic.edges.map(edge => structuredClone(edge)));
+  const seen = new Map();
+  for (const rule of rules) {
+    const pair = `${rule.source}\u0000${rule.target}`;
+    if (seen.has(pair)) fail('DUPLICATE_ENDPOINT_RULE', 'v10 → v11 发现同一有向概念对的多条规则，拒绝猜测归并。', {
+      conflicts: [{ pair: pair.split('\u0000'), ruleIds: [seen.get(pair), rule.id] }],
+    });
+    seen.set(pair, rule.id);
+  }
+  const nextManifest = { ...structuredClone(manifest), schemaVersion: 11, definitions: 'definitions.json', rules: 'rules.json' };
+  const nextDefinitions = { ...structuredClone(definitions), schemaVersion: 6 };
+  const nextRules = { schemaVersion: 1, kind: 'rules', workspaceId: manifest.id, rules };
+  const nextMechanics = mechanics.map(mechanic => ({ schemaVersion: 7, kind: 'mechanic', workspaceId: mechanic.workspaceId,
+    id: mechanic.id, name: mechanic.name, scope: mechanic.scope, focusNodeIds: [...mechanic.nodeIds],
+    pinnedRuleIds: mechanic.edges.map(edge => edge.id), positions: structuredClone(mechanic.positions),
+    ...(mechanic.projectionPositions ? { projectionPositions: structuredClone(mechanic.projectionPositions) } : {}),
+    ...(mechanic.routeCache ? { routeCache: structuredClone(mechanic.routeCache) } : {}) }));
+  const nextViews = views.map(view => ({ ...structuredClone(view), schemaVersion: 4, focusNodeIds: [], pinnedRuleIds: [] }));
+  const files = [{ kind: 'workspace', id: manifest.id, path: 'workspace.json' }, { kind: 'definitions', path: 'definitions.json' }, { kind: 'rules', path: 'rules.json' },
+    ...mechanics.map((item, index) => ({ kind: 'mechanic', id: item.id, path: discovered.mechanicPaths[index] })),
+    ...views.map((item, index) => ({ kind: 'view', id: item.id, path: discovered.viewPaths[index] }))];
+  const candidate = { manifest: nextManifest, definitions: nextDefinitions, rules: nextRules, mechanics: nextMechanics, views: nextViews, files };
+  try { validateWorkspace(candidate); } catch (error) { fail('MIGRATION_VALIDATION_FAILED', 'v10 → v11 候选未通过全量校验：' + error.message, error); }
+  return { root, from: 10, to: 11, revision: revisionOf(snapshots, discovered.directories), documents: [
+    { path: 'workspace.json', document: nextManifest }, { path: 'definitions.json', document: nextDefinitions, create: true },
+    { path: 'rules.json', document: nextRules, create: true }, { path: manifest.definitions, delete: true },
+    ...nextMechanics.map(document => ({ path: files.find(item => item.kind === 'mechanic' && item.id === document.id)?.path, document })),
+    ...nextViews.map(document => ({ path: files.find(item => item.kind === 'view' && item.id === document.id)?.path, document })),
+  ], summary: { workspace: 1, definitions: 1, rules: rules.length, mechanics: nextMechanics.length, views: nextViews.length } };
+}
+
 // 只修复一次已确认的跨文件半提交：definitions 已删除、机制仍保留无规则节点引用。
 export async function planV9DanglingNodeRepair(workspaceRoot) {
   const root = await realpath(resolve(workspaceRoot));

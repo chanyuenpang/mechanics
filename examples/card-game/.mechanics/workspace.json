@@ -1,10 +1,10 @@
 {
-  "schemaVersion": 10,
+  "schemaVersion": 11,
   "kind": "workspace",
   "id": "sample-card-game",
   "name": "卡牌规则示例 · 假设模型",
-  "definitions": "definitions.graph.json",
-  "agentExportPath": "game-mechanics",
+  "definitions": "definitions.json",
+  "agentExportPath": "mechanics",
   "compositions": [
     {
       "id": "encounter-with-hand",
@@ -35,5 +35,6 @@
     "activeLayerId": "basic-rules",
     "collapsedNodeIds": [],
     "positions": {}
-  }
+  },
+  "rules": "rules.json"
 }

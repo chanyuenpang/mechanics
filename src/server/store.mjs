@@ -3,13 +3,13 @@ import { resolve, relative, posix, dirname } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { readWorkspace, readDocument, discover, assertRelativeFile, ensureWorkspaceDirectory, workspacePath } from './workspace.mjs';
 import { encode, commitFile, commitFiles, acquireWorkspaceLock } from './files.mjs';
-import { planV7ToV8Migration, planV8ToV9Migration, planV9ToV10Migration, planV9DanglingNodeRepair } from './migration.mjs';
+import { planV7ToV8Migration, planV8ToV9Migration, planV9ToV10Migration, planV10ToV11Migration, planV9DanglingNodeRepair } from './migration.mjs';
 import { assertDocument, validateWorkspace, ContractError } from '../domain/validate.mjs';
 import { composeView } from '../domain/view.mjs';
 import { documentExportStructure } from '../domain/document-export.mjs';
 import { readQuerySnapshot } from './query-snapshot.mjs';
 import { assertCatalogRemovable, buildCatalog, inspectCatalogPublication, publishCatalog, removeCatalog } from './catalog.mjs';
-import { projectContext } from './project-context.mjs';
+import { projectContext, WORKSPACE_DIRECTORY } from './project-context.mjs';
 import { applyAgentMutation } from './agent-mutation.mjs';
 import { semanticRuleId } from '../domain/identity.mjs';
 import { compose } from '../domain/graph.mjs';
@@ -272,8 +272,8 @@ export async function createWorkspaceStore(workspaceRoot) {
     }
     const folder = body.folder === undefined ? '' : mechanicFolder(body.folder);
     const before = await readWorkspace(root);
-    const document = { schemaVersion: 6, kind: 'mechanic', workspaceId: before.manifest.id, id: body.id,
-      name: body.name.trim(), scope: body.scope.trim(), nodeIds: [], edges: [], positions: {} };
+    const document = { schemaVersion: 7, kind: 'mechanic', workspaceId: before.manifest.id, id: body.id,
+      name: body.name.trim(), scope: body.scope.trim(), focusNodeIds: [], pinnedRuleIds: [], positions: {} };
     const file = `${mechanicDirectory(folder)}/${body.id}.mechanic.json`;
     const committed = await create('mechanic', { revision: body.revision, document, file, requireExistingFolder: true });
     return { canonicalCommitted: true, workspaceId: committed.manifest.id, revision: committed.revision,
@@ -312,7 +312,7 @@ export async function createWorkspaceStore(workspaceRoot) {
     if (body.revision !== workspace.resourceRevisions.mechanics[mechanic.id]) {
       fail('RESOURCE_REVISION_CONFLICT', `机制 ${mechanic.id} 已改变，请重新查询后再自动排版`);
     }
-    if (!mechanic.nodeIds.length) fail('MECHANIC_EMPTY', `机制 ${body.mechanic} 没有节点，不能自动排版`);
+    if (!mechanic.focusNodeIds.length) fail('MECHANIC_EMPTY', `机制 ${body.mechanic} 没有引用概念，不能自动排版`);
     const graph = compose(workspace, [mechanic.id]);
     const positions = graphPositions(workspace, graph, {}, mechanic.id);
     let layout;
@@ -332,6 +332,7 @@ export async function createWorkspaceStore(workspaceRoot) {
   // 输入仅声明“哪条既有规则归属哪个机制”；规则语义始终从来源机制的 canonical 边复制，
   // 从而杜绝 Agent 在迁移时重写规则文字、限定词或继承语义。
   const agentMechanicTransfer = body => write(async () => {
+    fail('RULE_OWNERSHIP_TRANSFER_REMOVED', '规则已全局存于 rules.json；机制图不再拥有或迁移规则。请直接创建机制图/视图投影并引用已有概念。');
     if (body?.action !== 'transfer' || typeof body.mechanic !== 'string' || !Array.isArray(body.transfers)
       || typeof body.viewId !== 'string' || !body.viewId.trim() || typeof body.viewName !== 'string' || !body.viewName.trim()) {
       fail('AGENT_MUTATION_INVALID', 'mechanic transfer 必须提供来源机制、规则归属清单及非空总览视图 ID/名称');
@@ -482,6 +483,7 @@ export async function createWorkspaceStore(workspaceRoot) {
       name: manifest.proposedNonemptyContext.name, scope: '生产设施与生态前提', folder }], manifestPath };
   };
   const recipeMigration = async body => {
+    fail('RULE_OWNERSHIP_TRANSFER_REMOVED', '配方规则归属迁移已移除：规则不再属于机制图。请通过机制图的 focusNodeIds 和视图投影组织规则。');
     const plan = await recipeMigrationPlan(body.manifest);
     if (body.action === 'preview') return { preview: true, migration: 'recipe-migration', revision: plan.workspace.revision,
       sourceMechanic: plan.source.id, sourceResourceRevision: plan.workspace.resourceRevisions.mechanics[plan.source.id],
@@ -554,6 +556,7 @@ export async function createWorkspaceStore(workspaceRoot) {
     const workspace = await readWorkspace(root);
     const target = applyAgentMutation(workspace, body);
     const file = target.kind === 'definitions' ? workspace.manifest.definitions
+      : target.kind === 'rules' ? workspace.manifest.rules
       : workspace.files.find(item => item.kind === 'mechanic' && item.id === target.id)?.path;
     if (!file) fail('AGENT_MUTATION_INVALID', 'Agent mutation 的目标文件不存在');
     const changes = [{ path: file, document: target.document }, ...(target.companionMechanics ?? []).map(mechanic => ({
@@ -566,6 +569,7 @@ export async function createWorkspaceStore(workspaceRoot) {
     else await commitFiles(root, changes, { verify: () => readWorkspace(root) });
     const committed = await verified();
     const resourceRevision = target.kind === 'definitions' ? committed.resourceRevisions.definitions
+      : target.kind === 'rules' ? committed.resourceRevisions.rules
       : committed.resourceRevisions.mechanics[target.id];
     const envelope = { canonicalCommitted: true, workspaceId: committed.manifest.id, revision: committed.revision,
       resourceRevision, resource: body.resource, action: body.action, ...(target.id ? { id: target.id } : {}) };
@@ -575,19 +579,21 @@ export async function createWorkspaceStore(workspaceRoot) {
   // Agent 草稿只能在此处进入 canonical：它没有坐标，保存时必须重新校验、排版并一次提交定义与机制。
   const saveAgentDraft = body => write(async () => {
     if (!body || typeof body !== 'object' || typeof body.mechanic !== 'string' || !body.mechanic
-      || !body.definitions || !body.document) fail('AGENT_DRAFT_INVALID', '草稿保存必须提供定义、机制和目标机制 ID');
+      || !body.definitions || !body.rules || !body.document) fail('AGENT_DRAFT_INVALID', '草稿保存必须提供概念、规则、机制和目标机制 ID');
     const workspace = await readWorkspace(root);
     if (body.workspaceRevision !== workspace.revision) fail('REVISION_CONFLICT', '工作区已改变；草稿未覆盖正式文件，请重新 open 后合并。');
     if (body.definitionsRevision !== workspace.resourceRevisions.definitions) fail('RESOURCE_REVISION_CONFLICT', '概念定义已改变；草稿未覆盖正式文件，请重新 open 后合并。');
+    if (body.rulesRevision !== workspace.resourceRevisions.rules) fail('RESOURCE_REVISION_CONFLICT', '规则定义已改变；草稿未覆盖正式文件，请重新 open 后合并。');
     if (body.mechanicRevision !== workspace.resourceRevisions.mechanics[body.mechanic]) fail('RESOURCE_REVISION_CONFLICT', `机制 ${body.mechanic} 已改变；草稿未覆盖正式文件，请重新 open 后合并。`);
     const index = workspace.mechanics.findIndex(item => item.id === body.mechanic);
     if (index < 0 || body.document.id !== body.mechanic || body.document.kind !== 'mechanic') fail('AGENT_DRAFT_SCOPE_MISMATCH', '草稿机制与 open 的目标不一致');
-    if (body.definitions.kind !== 'definitions' || body.definitions.workspaceId !== workspace.manifest.id || body.document.workspaceId !== workspace.manifest.id) {
+    if (body.definitions.kind !== 'definitions' || body.rules.kind !== 'rules' || body.definitions.workspaceId !== workspace.manifest.id || body.rules.workspaceId !== workspace.manifest.id || body.document.workspaceId !== workspace.manifest.id) {
       fail('AGENT_DRAFT_SCOPE_MISMATCH', '草稿不属于当前工作区');
     }
     const definitionIds = new Set((body.definitions.nodes ?? []).map(node => node.id));
     workspace.definitions = { ...body.definitions, positions: Object.fromEntries(Object.entries(workspace.definitions.positions ?? {})
       .filter(([id]) => definitionIds.has(id))) };
+    workspace.rules = body.rules;
     workspace.mechanics[index] = { ...body.document, positions: {}, routeCache: undefined };
     validateWorkspace(workspace);
     const mechanic = workspace.mechanics[index], graph = compose(workspace, [mechanic.id]);
@@ -601,11 +607,46 @@ export async function createWorkspaceStore(workspaceRoot) {
     validateWorkspace(workspace);
     const mechanicPath = workspace.files.find(file => file.kind === 'mechanic' && file.id === mechanic.id)?.path;
     if (!mechanicPath) fail('AGENT_DRAFT_INVALID', '草稿目标机制文件不存在');
-    await commitFiles(root, [{ path: workspace.manifest.definitions, document: workspace.definitions }, { path: mechanicPath, document: mechanic }], { verify: () => readWorkspace(root) });
+    await commitFiles(root, [{ path: workspace.manifest.definitions, document: workspace.definitions },
+      { path: workspace.manifest.rules, document: workspace.rules }, { path: mechanicPath, document: mechanic }], { verify: () => readWorkspace(root) });
     const committed = await verified();
     const envelope = { canonicalCommitted: true, workspaceId: committed.manifest.id, revision: committed.revision,
-      definitionsRevision: committed.resourceRevisions.definitions, mechanicRevision: committed.resourceRevisions.mechanics[mechanic.id], mechanic: mechanic.id };
+      definitionsRevision: committed.resourceRevisions.definitions, rulesRevision: committed.resourceRevisions.rules,
+      mechanicRevision: committed.resourceRevisions.mechanics[mechanic.id], mechanic: mechanic.id };
     return { ...envelope, exportPublication: schedulePublication(committed) };
+  });
+  // 规则是全局事实，而“在当前机制图中可见”是该机制的投影选择；用户从画布新建规则时，
+  // 两份文件必须作为一个 canonical 提交一起校验和回读，不能留下只写入其一的中间状态。
+  const saveRulesAndMechanic = body => write(async () => {
+    const workspace = await current(body?.revision);
+    if (!body?.rules || !body?.mechanic || typeof body.mechanicId !== 'string') fail('RULE_PROJECTION_INVALID', '规则提交必须提供 rules、mechanic 和 mechanicId');
+    assertDocument(body.rules, 'rules'); assertDocument(body.mechanic, 'mechanic');
+    const index = workspace.mechanics.findIndex(item => item.id === body.mechanicId);
+    if (index < 0 || body.mechanic.id !== body.mechanicId) fail('RULE_PROJECTION_INVALID', '规则提交目标机制不存在或 ID 不一致');
+    workspace.rules = body.rules; workspace.mechanics[index] = body.mechanic;
+    validateWorkspace(workspace);
+    const mechanicPath = workspace.files.find(item => item.kind === 'mechanic' && item.id === body.mechanicId)?.path;
+    if (!mechanicPath) fail('RULE_PROJECTION_INVALID', '规则提交目标机制缺少文件路径');
+    await commitFiles(root, [{ path: workspace.manifest.rules, document: workspace.rules }, { path: mechanicPath, document: workspace.mechanics[index] }],
+      { verify: () => readWorkspace(root) });
+    return refreshCatalog();
+  });
+  const deleteGlobalRule = body => write(async () => {
+    const workspace = await current(body?.revision);
+    if (typeof body?.ruleId !== 'string' || !body.ruleId) fail('RULE_DELETE_INVALID', '删除规则必须提供 ruleId');
+    if (!workspace.rules.rules.some(rule => rule.id === body.ruleId)) fail('RULE_NOT_FOUND', '规则不存在：' + body.ruleId);
+    workspace.rules.rules = workspace.rules.rules.filter(rule => rule.id !== body.ruleId);
+    const mechanics = workspace.mechanics.filter(mechanic => mechanic.pinnedRuleIds.includes(body.ruleId));
+    const views = workspace.views.filter(view => view.pinnedRuleIds.includes(body.ruleId));
+    for (const mechanic of mechanics) mechanic.pinnedRuleIds = mechanic.pinnedRuleIds.filter(id => id !== body.ruleId);
+    for (const view of views) view.pinnedRuleIds = view.pinnedRuleIds.filter(id => id !== body.ruleId);
+    validateWorkspace(workspace);
+    const changes = [{ path: workspace.manifest.rules, document: workspace.rules },
+      ...mechanics.map(mechanic => ({ path: workspace.files.find(file => file.kind === 'mechanic' && file.id === mechanic.id)?.path, document: mechanic })),
+      ...views.map(view => ({ path: workspace.files.find(file => file.kind === 'view' && file.id === view.id)?.path, document: view }))];
+    if (changes.some(change => !change.path)) fail('RULE_DELETE_INVALID', '规则关联投影缺少文件路径');
+    await commitFiles(root, changes, { verify: () => readWorkspace(root) });
+    return refreshCatalog();
   });
   return {
     read: () => enqueue(async () => {
@@ -626,6 +667,8 @@ export async function createWorkspaceStore(workspaceRoot) {
       let file;
       if (kind === 'definitions') {
         file = workspace.manifest.definitions; workspace.definitions = document;
+      } else if (kind === 'rules') {
+        file = workspace.manifest.rules; workspace.rules = document;
       } else if (kind === 'mechanic' || kind === 'view') {
         const documents = kind === 'mechanic' ? workspace.mechanics : workspace.views;
         const index = documents.findIndex(item => item.id === id);
@@ -641,8 +684,10 @@ export async function createWorkspaceStore(workspaceRoot) {
       validateWorkspace(workspace);
       if (kind === 'view') composeView(workspace, document);
       await commitFile(root, file, encode(document));
-      return kind === 'definitions' || kind === 'mechanic' || kind === 'view' ? refreshCatalog() : verified();
+      return kind === 'definitions' || kind === 'rules' || kind === 'mechanic' || kind === 'view' ? refreshCatalog() : verified();
     }),
+    saveRulesAndMechanic,
+    deleteGlobalRule,
     createMechanic: body => create('mechanic', body),
     createMechanicFolder,
     moveMechanic,
@@ -679,7 +724,7 @@ export async function createWorkspaceStore(workspaceRoot) {
 // 仅用于本次已确认的“提交器在备份清理阶段破坏了 workspace.json”的灾难恢复。
 // 它不接受任意图数据：只能从项目内迁移清单重建丢失的配方 owner 和同 ID 总览视图。
 export async function recoverRecipeMigration(projectRoot, manifestPath) {
-  const root = await realpath(resolve(projectRoot, '.game-graph'));
+  const root = await realpath(resolve(projectRoot, WORKSPACE_DIRECTORY));
   if (typeof manifestPath !== 'string' || !manifestPath.startsWith('docs/') || !manifestPath.endsWith('.json') || manifestPath.includes('\\')
     || manifestPath.split('/').some(part => !part || part === '.' || part === '..')) fail('UNSAFE_PATH', '恢复清单只能是项目内 docs/ 下的 JSON 相对路径');
   const manifestFile = resolve(projectRoot, manifestPath);
@@ -763,11 +808,12 @@ export async function migrateWorkspace(workspaceRoot, options = {}) {
   if (from === undefined) {
     const { document } = await readDocument(root, 'workspace.json');
     from = document?.schemaVersion;
-    if (to === undefined) to = from === 7 ? 8 : from === 8 ? 9 : from === 9 ? 10 : undefined;
+    if (to === undefined) to = from === 7 ? 8 : from === 8 ? 9 : from === 9 ? 10 : from === 10 ? 11 : undefined;
   }
   const planMigration = () => from === 7 && to === 8 ? planV7ToV8Migration(root)
     : from === 8 && to === 9 ? planV8ToV9Migration(root)
     : from === 9 && to === 10 ? planV9ToV10Migration(root)
+    : from === 10 && to === 11 ? planV10ToV11Migration(root)
     : from === 9 && to === 9 ? planV9DanglingNodeRepair(root)
       : Promise.reject(new ContractError('MIGRATION_VERSION_UNSUPPORTED', `不支持 v${from} → v${to} 迁移`));
   if (!execute) {
@@ -779,9 +825,9 @@ export async function migrateWorkspace(workspaceRoot, options = {}) {
     const plan = await planMigration();
     if (typeof revision !== 'string' || !revision) fail('MIGRATION_REVISION_CONFLICT', '实际迁移必须提供 dry-run 返回的 revision');
     if (revision !== plan.revision) fail('MIGRATION_REVISION_CONFLICT', '工作区自预览后已改变；未写入任何文件。');
-    await commitFiles(root, plan.documents, { verify: to === 10 ? () => readWorkspace(root) : null });
+    await commitFiles(root, plan.documents, { verify: to === 10 || to === 11 ? () => readWorkspace(root) : null });
     let migrated;
-    try { migrated = to === 10 ? await readWorkspace(root) : { revision: plan.revision }; }
+    try { migrated = to === 10 || to === 11 ? await readWorkspace(root) : { revision: plan.revision }; }
     catch (error) { fail('MIGRATION_READBACK_FAILED', `迁移提交后 v${to} 工作区回读失败：` + error.message); }
     return { ...plan.summary, from: plan.from, to: plan.to, revision: migrated.revision, preview: false, migrated: true };
   } finally { await release(); }

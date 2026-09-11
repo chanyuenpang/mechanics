@@ -2,6 +2,7 @@ import { lstat, realpath, open, readdir, mkdir } from 'node:fs/promises';
 import { resolve, relative, isAbsolute, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { assertDocument, validateWorkspace, ContractError } from '../domain/validate.mjs';
+import { resolvePresentationReferences } from '../domain/presentation.mjs';
 import { projectContext, projectRootFromWorkspace } from './project-context.mjs';
 
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -12,10 +13,10 @@ export function workspaceResourceRevisions(workspace) {
   const mechanics = Object.fromEntries([...workspace.mechanics]
     .sort((a, b) => a.id.localeCompare(b.id))
     .map(mechanic => [mechanic.id, semanticHash({
-      nodeIds: [...mechanic.nodeIds].sort(),
-      edges: [...mechanic.edges].sort((a, b) => a.id.localeCompare(b.id)),
+      focusNodeIds: [...mechanic.focusNodeIds].sort(),
+      pinnedRuleIds: [...mechanic.pinnedRuleIds].sort(),
     })]));
-  return { definitions: semanticHash({ nodes }), mechanics };
+  return { definitions: semanticHash({ nodes }), rules: semanticHash({ rules: workspace.rules.rules }), mechanics };
 }
 export function assertRelativeFile(file, extensions = ['.json']) {
   if (typeof file !== 'string' || file.length > 512 || !extensions.some(extension => file.endsWith(extension)) || isAbsolute(file)
@@ -112,8 +113,8 @@ export async function readWorkspace(workspaceRoot, { context = null } = {}) {
     physicalFiles.add(identity); snapshots.set(file, raw); return document;
   }
   const manifest = await read('workspace.json');
-  if (manifest.kind === 'workspace' && manifest.schemaVersion !== 10) {
-    throw new ContractError('WORKSPACE_VERSION_UNSUPPORTED', '只支持 Game-Graph 工作区 v10；当前文件为 v' + String(manifest.schemaVersion) + '。');
+  if (manifest.kind === 'workspace' && manifest.schemaVersion !== 11) {
+    throw new ContractError('WORKSPACE_VERSION_UNSUPPORTED', '只支持 Mechanics 工作区 v11；当前文件为 v' + String(manifest.schemaVersion) + '。');
   }
   assertDocument(manifest, 'workspace', 'workspace.json');
   context ??= await projectContext(await projectRootFromWorkspace(root), { manifest, createExportRoot: false,
@@ -122,6 +123,7 @@ export async function readWorkspace(workspaceRoot, { context = null } = {}) {
     throw new ContractError('PROJECT_CONTEXT_MISMATCH', '工作区不属于当前项目上下文：' + root);
   }
   const definitions = await read(manifest.definitions);
+  const rules = await read(manifest.rules);
   const { mechanicPaths, viewPaths, directories } = await discover(root);
   const mechanics = [], views = [];
   for (const [paths, documents, kind] of [[mechanicPaths, mechanics, 'mechanic'], [viewPaths, views, 'view']]) {
@@ -129,14 +131,18 @@ export async function readWorkspace(workspaceRoot, { context = null } = {}) {
   }
   const files = [{ kind: 'workspace', id: manifest.id, path: 'workspace.json' },
     { kind: 'definitions', path: manifest.definitions },
+    { kind: 'rules', path: manifest.rules },
     ...mechanics.map((graph, index) => ({ kind: 'mechanic', id: graph.id, path: mechanicPaths[index] })),
     ...views.map((view, index) => ({ kind: 'view', id: view.id, path: viewPaths[index] }))];
-  const workspace = validateWorkspace({ manifest, definitions, mechanics, views, files });
+  // 先严格验证所有会改变领域模型的事实，再解析不拥有存在性事实的展示状态。
+  // 解析只产生内存快照，项目打开不会因此悄悄改写用户文件。
+  const validated = validateWorkspace({ manifest, definitions, rules, mechanics, views, files });
+  const { workspace, diagnostics: presentationDiagnostics } = resolvePresentationReferences({ ...validated, files });
   const hash = createHash('sha256');
   for (const [file, raw] of [...snapshots].sort(([a], [b]) => a.localeCompare(b))) hash.update(JSON.stringify([file, raw]));
   // 空目录变化也会改变文件树版本，避免目录操作基于旧树执行。
   hash.update(JSON.stringify(directories));
   return { ...workspace, projectRoot: context.projectRoot, workspaceRoot: root, agentExportRoot: context.exportRoot,
     agentExportPath: context.agentExportPath, agentExportStatus: context.exportStatus, agentExportError: context.exportError,
-    files, directories, revision: hash.digest('hex'), resourceRevisions: workspaceResourceRevisions(workspace) };
+    files, directories, presentationDiagnostics, revision: hash.digest('hex'), resourceRevisions: workspaceResourceRevisions(workspace) };
 }

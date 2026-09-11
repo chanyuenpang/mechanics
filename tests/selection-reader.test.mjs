@@ -15,8 +15,8 @@ test('工具栏文档按钮改为悬浮说明开关，页面不再渲染选中�
 });
 
 test('详情栏折叠状态与 hover 开关均通过浏览器偏好保留', () => {
-  assert.match(app, /game-graph:inspector-collapsed/);
-  assert.match(app, /game-graph:hover-tooltips-enabled/);
+  assert.match(app, /mechanics:inspector-collapsed/);
+  assert.match(app, /mechanics:hover-tooltips-enabled/);
   assert.match(app, /inspector-toggle-path/);
   assert.match(page, /class="panel-toggle-icon"/);
   assert.match(page, /class="panel-close-icon"/);

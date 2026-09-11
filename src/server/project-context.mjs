@@ -2,8 +2,8 @@ import { lstat, mkdir, readFile, realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { assertDocument, ContractError } from '../domain/validate.mjs';
 
-export const WORKSPACE_DIRECTORY = '.game-graph';
-export const DEFAULT_AGENT_EXPORT_PATH = 'game-mechanics';
+export const WORKSPACE_DIRECTORY = '.mechanics';
+export const DEFAULT_AGENT_EXPORT_PATH = 'mechanics';
 
 function fail(code, message) { throw new ContractError(code, message); }
 
@@ -23,7 +23,7 @@ function directoryParts(value) {
     || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))) {
     fail('INVALID_EXPORT_PATH', 'Agent 机制文档路径包含不安全目录：' + value);
   }
-  if (parts.some(part => ['.game-graph', '.git', 'node_modules'].includes(part.toLowerCase()))) {
+  if (parts.some(part => ['.mechanics', '.git', 'node_modules'].includes(part.toLowerCase()))) {
     fail('INVALID_EXPORT_PATH', 'Agent 机制文档不能写入控制目录或依赖目录：' + value);
   }
   return parts;
@@ -68,8 +68,8 @@ export async function projectContext(projectRoot, { requireWorkspace = true, cre
   const workspaceRoot = resolve(root, WORKSPACE_DIRECTORY);
   inside(root, workspaceRoot);
   try {
-    const actual = await ordinaryDirectory(workspaceRoot, 'Game-Graph 工作区');
-    if (actual !== workspaceRoot && process.platform !== 'win32') fail('UNSAFE_PATH', '.game-graph 不得通过链接指向其他目录');
+    const actual = await ordinaryDirectory(workspaceRoot, 'Mechanics 工作区');
+    if (actual !== workspaceRoot && process.platform !== 'win32') fail('UNSAFE_PATH', '.mechanics 不得通过链接指向其他目录');
     inside(root, actual);
   } catch (error) {
     if (requireWorkspace || error.code !== 'ENOENT') throw error;
@@ -80,7 +80,7 @@ export async function projectContext(projectRoot, { requireWorkspace = true, cre
     catch (error) { fail(error.code === 'ENOENT' ? 'PROJECT_NOT_FOUND' : 'INVALID_JSON', `无法读取 ${WORKSPACE_DIRECTORY}/workspace.json：${error.message}`); }
     try { manifest = JSON.parse(raw); }
     catch (error) { fail('INVALID_JSON', `${WORKSPACE_DIRECTORY}/workspace.json 不是有效 JSON：${error.message}`); }
-    if (manifest?.schemaVersion !== 10) fail('WORKSPACE_VERSION_UNSUPPORTED', `只支持 Game-Graph 工作区 v10；当前为 v${String(manifest?.schemaVersion)}`);
+    if (manifest?.schemaVersion !== 11) fail('WORKSPACE_VERSION_UNSUPPORTED', `只支持 Mechanics 工作区 v11；当前为 v${String(manifest?.schemaVersion)}`);
     assertDocument(manifest, 'workspace', 'workspace.json');
   }
   // 导出目录是 canonical 的派生投影目标；缺失配置不再悄悄回填默认目录。
@@ -91,7 +91,7 @@ export async function projectContext(projectRoot, { requireWorkspace = true, cre
   try {
     const exportRoot = await resolveAgentExportRoot(root, agentExportPath, { create: createExportRoot, allowMissing: allowMissingExport });
     if (workspaceRoot === exportRoot || workspaceRoot.startsWith(exportRoot + sep) || exportRoot.startsWith(workspaceRoot + sep)) {
-      fail('INVALID_EXPORT_PATH', 'Agent 机制文档目录不能与 .game-graph 重叠');
+      fail('INVALID_EXPORT_PATH', 'Agent 机制文档目录不能与 .mechanics 重叠');
     }
     // allowMissingExport 只允许 canonical 读取继续；不把路径存在误报为已发布。
     let exportStatus = 'available';
@@ -106,7 +106,7 @@ export async function projectContext(projectRoot, { requireWorkspace = true, cre
 }
 
 export async function projectRootFromWorkspace(workspaceRoot) {
-  const root = await ordinaryDirectory(resolve(workspaceRoot), 'Game-Graph 工作区');
+  const root = await ordinaryDirectory(resolve(workspaceRoot), 'Mechanics 工作区');
   if (basename(root) !== WORKSPACE_DIRECTORY) {
     fail('PROJECT_LAYOUT_REQUIRED', `工作区必须位于项目固定目录 ${WORKSPACE_DIRECTORY}：${root}`);
   }

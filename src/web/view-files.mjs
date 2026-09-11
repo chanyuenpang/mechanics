@@ -47,7 +47,7 @@ export function graphPositions(workspace, graph, positions = {}, mechanicId = nu
 
 function materializeView(workspace, snapshot, original, graph) {
   const positions = completeViewPositions(workspace, original, snapshot.positions);
-  return { mechanicRegistrations: snapshot.mechanicRegistrations.map(item => structuredClone(item)), collapsedNodeIds: [], positions,
+  return { mechanicRegistrations: snapshot.mechanicRegistrations.map(item => structuredClone(item)), focusNodeIds: structuredClone(snapshot.focusNodeIds ?? []), pinnedRuleIds: structuredClone(snapshot.pinnedRuleIds ?? []), collapsedNodeIds: [], positions,
     projectionPositions: structuredClone(snapshot.projectionPositions ?? {}), ...(snapshot.routeCache ? { routeCache: structuredClone(snapshot.routeCache) } : {}),
     structuralPresentation: snapshot.structuralPresentation };
 }
@@ -56,6 +56,8 @@ function updateViewProjection(workspace, snapshot) {
   const original = composeView(workspace, snapshot);
   return {
     mechanicRegistrations: snapshot.mechanicRegistrations.map(item => structuredClone(item)),
+    focusNodeIds: structuredClone(snapshot.focusNodeIds ?? []),
+    pinnedRuleIds: structuredClone(snapshot.pinnedRuleIds ?? []),
     collapsedNodeIds: [],
     positions: completeViewPositions(workspace, original, snapshot.positions),
     projectionPositions: structuredClone(snapshot.projectionPositions ?? {}),

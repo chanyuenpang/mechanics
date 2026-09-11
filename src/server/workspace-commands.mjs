@@ -31,7 +31,7 @@ export async function findWorkspace(start = process.cwd()) {
   return resolve(projectRoot, WORKSPACE_DIRECTORY);
 }
 
-export async function initProject(target, { name = '游戏规则工作区', id = null, createProjectRoot = true } = {}) {
+export async function initProject(target, { name = '规则模型工作区', id = null, createProjectRoot = true } = {}) {
   if (!target) throw new ContractError('PROJECT_REQUIRED', 'init 必须指定项目目录');
   const requestedRoot = resolve(target);
   id ??= basename(requestedRoot);
@@ -52,18 +52,20 @@ export async function initProject(target, { name = '游戏规则工作区', id =
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   await preflightProjectSkills(projectRoot);
 
-  const manifest = { schemaVersion: 10, kind: 'workspace', id, name, definitions: 'definitions.graph.json',
+  const manifest = { schemaVersion: 11, kind: 'workspace', id, name, definitions: 'definitions.json', rules: 'rules.json',
     agentExportPath: DEFAULT_AGENT_EXPORT_PATH, compositions: [],
     lastView: { graphIds: [], activeLayerId: null, collapsedNodeIds: [], positions: {} } };
-  const definitions = { schemaVersion: 5, kind: 'definitions', workspaceId: id, nodes: [], positions: {} };
-  validateWorkspace({ manifest, definitions, mechanics: [] });
+  const definitions = { schemaVersion: 6, kind: 'definitions', workspaceId: id, nodes: [], positions: {} };
+  const rules = { schemaVersion: 1, kind: 'rules', workspaceId: id, rules: [] };
+  validateWorkspace({ manifest, definitions, rules, mechanics: [] });
 
   const stagingRoot = resolve(projectRoot, `${WORKSPACE_DIRECTORY}.${randomUUID()}.tmp`);
   await mkdir(stagingRoot);
   try {
-    await writeExclusive(resolve(stagingRoot, 'definitions.graph.json'), encode(definitions));
+    await writeExclusive(resolve(stagingRoot, 'definitions.json'), encode(definitions));
+    await writeExclusive(resolve(stagingRoot, 'rules.json'), encode(rules));
     await mkdir(resolve(stagingRoot, 'mechanics'));
-    await writeExclusive(resolve(stagingRoot, '.gitignore'), '.game-graph.lock\n*.game-graph.tmp\n');
+    await writeExclusive(resolve(stagingRoot, '.gitignore'), '.mechanics.lock\n*.mechanics.tmp\n');
     await writeExclusive(resolve(stagingRoot, 'workspace.json'), encode(manifest));
     await readWorkspace(stagingRoot, {
       context: { projectRoot, workspaceRoot: stagingRoot, exportRoot: resolve(projectRoot, DEFAULT_AGENT_EXPORT_PATH), agentExportPath: DEFAULT_AGENT_EXPORT_PATH } });

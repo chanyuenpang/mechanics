@@ -30,19 +30,19 @@ const mechanicById = (workspace, id) => workspace.mechanics.find(mechanic => mec
 
 function assertRevision(workspace, body, kind, id = null) {
   requiredString(body, 'revision');
-  const current = kind === 'definitions' ? workspace.resourceRevisions.definitions : workspace.resourceRevisions.mechanics[id];
-  if (body.revision !== current) fail('RESOURCE_REVISION_CONFLICT', `${kind === 'definitions' ? '概念定义' : `机制 ${id}`} 已改变，请重新查询后再编辑`);
+  const current = kind === 'definitions' ? workspace.resourceRevisions.definitions
+    : kind === 'rules' ? workspace.resourceRevisions.rules : workspace.resourceRevisions.mechanics[id];
+  const label = kind === 'definitions' ? '概念定义' : kind === 'rules' ? '全局规则' : `机制 ${id}`;
+  if (body.revision !== current) fail('RESOURCE_REVISION_CONFLICT', `${label} 已改变，请重新查询后再编辑`);
 }
 
 function externalConceptReferences(workspace, id) {
   const references = [];
   for (const mechanic of workspace.mechanics) {
-    if (mechanic.nodeIds.includes(id)) references.push({ kind: 'mechanicNode', mechanicId: mechanic.id });
+    if (mechanic.focusNodeIds.includes(id)) references.push({ kind: 'mechanicNode', mechanicId: mechanic.id });
     if (has(mechanic.positions, id)) references.push({ kind: 'mechanicPosition', mechanicId: mechanic.id });
-    for (const edge of mechanic.edges) if (edge.source === id || edge.target === id) {
-      references.push({ kind: 'ruleEndpoint', mechanicId: mechanic.id, edgeId: edge.id });
-    }
   }
+  for (const rule of workspace.rules.rules) if (rule.source === id || rule.target === id) references.push({ kind: 'ruleEndpoint', ruleId: rule.id });
   const compositionReferences = [...workspace.manifest.compositions,
     ...(workspace.manifest.lastView && !('viewId' in workspace.manifest.lastView) ? [{ id: 'lastView', ...workspace.manifest.lastView }] : [])];
   for (const view of compositionReferences) {
@@ -88,8 +88,8 @@ function mutateConcept(workspace, body) {
       const blockers = references.filter(reference => !['mechanicNode', 'mechanicPosition', 'view'].includes(reference.kind));
       if (blockers.length) fail('CONCEPT_REFERENCED', `概念 ${id} 仍被规则、视图或组合引用；请先清理这些引用`, { references: blockers });
       const companionMechanics = [];
-      for (const mechanic of workspace.mechanics) if (mechanic.nodeIds.includes(id) || has(mechanic.positions, id)) {
-        mechanic.nodeIds = mechanic.nodeIds.filter(nodeId => nodeId !== id); delete mechanic.positions[id]; companionMechanics.push(mechanic);
+      for (const mechanic of workspace.mechanics) if (mechanic.focusNodeIds.includes(id) || has(mechanic.positions, id)) {
+        mechanic.focusNodeIds = mechanic.focusNodeIds.filter(nodeId => nodeId !== id); delete mechanic.positions[id]; companionMechanics.push(mechanic);
       }
       const companionViews = [];
       for (const view of workspace.views) if (has(view.positions, id) || view.collapsedNodeIds.includes(id)) {
@@ -131,19 +131,13 @@ function projectionIds(edge) {
     .map(key => endpointProjectionId(key === 'sourceQualifiers' ? edge.source : edge.target, edge[key]));
 }
 
-function clearRemovedProjectionPositions(workspace, mechanic, previousEdges) {
-  const current = new Set(mechanic.edges.flatMap(projectionIds));
-  const removed = new Set(previousEdges.flatMap(projectionIds).filter(id => !current.has(id)));
+function clearRemovedProjectionPositions(workspace, previousRules) {
+  const current = new Set(workspace.rules.rules.flatMap(projectionIds));
+  const removed = new Set(previousRules.flatMap(projectionIds).filter(id => !current.has(id)));
   if (!removed.size) return;
-  if (mechanic.projectionPositions) for (const id of removed) delete mechanic.projectionPositions[id];
-  // 组合视图为各机制边的端点投影保存独立坐标；删除或取消限定词时，必须同步清理
-  // 不再由该视图任一已注册机制使用的投影，不能让过期坐标阻止 canonical 规则写入。
+  for (const mechanic of workspace.mechanics) if (mechanic.projectionPositions) for (const id of removed) delete mechanic.projectionPositions[id];
   for (const view of workspace.views) {
-    if (!view.projectionPositions || !view.mechanicRegistrations.some(item => item.mechanicId === mechanic.id)) continue;
-    const activeProjectionIds = new Set(view.mechanicRegistrations
-      .map(item => workspace.mechanics.find(candidate => candidate.id === item.mechanicId))
-      .filter(Boolean).flatMap(candidate => candidate.edges.flatMap(projectionIds)));
-    for (const id of removed) if (!activeProjectionIds.has(id)) delete view.projectionPositions[id];
+    if (view.projectionPositions) for (const id of removed) delete view.projectionPositions[id];
   }
 }
 
@@ -156,30 +150,36 @@ function mutateRule(workspace, body) {
   const mechanicId = requiredString(body, 'mechanic');
   const mechanic = mechanicById(workspace, mechanicId);
   if (!mechanic) fail('SCOPE_NOT_FOUND', `机制不存在：${mechanicId}`);
-  assertRevision(workspace, body, 'mechanic', mechanicId);
+  assertRevision(workspace, body, 'rules');
   const source = requiredString(body, 'source'), target = requiredString(body, 'target');
   if (!conceptById(workspace, source) || !conceptById(workspace, target)) fail('NODE_NOT_FOUND', '规则端点必须是已存在的概念');
   const sourceQualifiers = has(body, 'sourceQualifiers') ? jsonValue(body, 'sourceQualifiers') : undefined;
   const targetQualifiers = has(body, 'targetQualifiers') ? jsonValue(body, 'targetQualifiers') : undefined;
   const sameEndpoint = edge => edge.source === source && edge.target === target;
-  const current = mechanic.edges.find(sameEndpoint);
+  const current = workspace.rules.rules.find(sameEndpoint);
   if (body.action === 'add') {
-    const duplicate = workspace.mechanics.find(candidate => candidate.edges.some(sameEndpoint));
-    if (duplicate) fail('DUPLICATE_ENDPOINT_RULE', `概念 ${source} 到 ${target} 已在机制 ${duplicate.id} 中存在规则`);
-    mechanic.edges.push(finalEdge(null, { ...body, source, target, sourceQualifiers, targetQualifiers }));
-    if (!mechanic.nodeIds.includes(source)) mechanic.nodeIds.push(source);
-    if (!mechanic.nodeIds.includes(target)) mechanic.nodeIds.push(target);
+    if (current) fail('DUPLICATE_ENDPOINT_RULE', `概念 ${source} 到 ${target} 已存在规则`);
+    const rule = finalEdge(null, { ...body, source, target, sourceQualifiers, targetQualifiers });
+    workspace.rules.rules.push(rule);
+    if (!mechanic.focusNodeIds.includes(source)) mechanic.focusNodeIds.push(source);
+    if (!mechanic.focusNodeIds.includes(target)) mechanic.focusNodeIds.push(target);
+    if (!mechanic.pinnedRuleIds.includes(rule.id)) mechanic.pinnedRuleIds.push(rule.id);
   } else {
-    if (!current) fail('RULE_NOT_FOUND', `机制 ${mechanicId} 中不存在 ${source} 到 ${target} 的规则`);
-    const previousEdges = [current];
+    if (!current) fail('RULE_NOT_FOUND', `不存在 ${source} 到 ${target} 的规则`);
+    const previousRules = [current];
     if (body.action === 'update') {
       const changed = ['relation', 'sign', 'ruleText', 'inheritance', 'sourceQualifiers', 'targetQualifiers', 'customData'].filter(key => has(body, key));
       if (!changed.length) fail('AGENT_MUTATION_INVALID', 'rule update 至少需要一个可编辑字段');
-      mechanic.edges[mechanic.edges.indexOf(current)] = finalEdge(current, body);
-    } else mechanic.edges = mechanic.edges.filter(edge => edge !== current);
-    clearRemovedProjectionPositions(workspace, mechanic, previousEdges);
+      workspace.rules.rules[workspace.rules.rules.indexOf(current)] = finalEdge(current, body);
+    } else {
+      workspace.rules.rules = workspace.rules.rules.filter(rule => rule !== current);
+      for (const candidate of workspace.mechanics) candidate.pinnedRuleIds = candidate.pinnedRuleIds.filter(id => id !== current.id);
+      for (const view of workspace.views) view.pinnedRuleIds = view.pinnedRuleIds.filter(id => id !== current.id);
+    }
+    clearRemovedProjectionPositions(workspace, previousRules);
   }
-  return { kind: 'mechanic', document: mechanic, id: mechanicId };
+  return { kind: 'rules', document: workspace.rules, id: workspace.rules.workspaceId, companionMechanics: [mechanic],
+    companionViews: body.action === 'delete' ? workspace.views : [] };
 }
 
 // 机制图只保存全局概念的成员引用；移除成员绝不能触及 definitions、其他机制或视图。
@@ -199,17 +199,14 @@ function mutateMechanic(workspace, body) {
     ...(workspace.manifest.lastView && !('viewId' in workspace.manifest.lastView) ? [{ id: 'lastView', ...workspace.manifest.lastView }] : [])];
   for (const conceptId of removing) {
     if (!conceptById(workspace, conceptId)) fail('NODE_NOT_FOUND', `概念不存在：${conceptId}`);
-    if (!mechanic.nodeIds.includes(conceptId)) fail('MECHANIC_MEMBER_NOT_FOUND', `机制 ${mechanicId} 未引用概念：${conceptId}`);
-    const edges = mechanic.edges.filter(edge => edge.source === conceptId || edge.target === conceptId || qualifierReferences(edge).includes(conceptId));
+    if (!mechanic.focusNodeIds.includes(conceptId)) fail('MECHANIC_MEMBER_NOT_FOUND', `机制 ${mechanicId} 未引用概念：${conceptId}`);
+    const edges = workspace.rules.rules.filter(edge => edge.source === conceptId || edge.target === conceptId || qualifierReferences(edge).includes(conceptId));
     if (edges.length) fail('MECHANIC_MEMBER_NOT_ISOLATED', `概念 ${conceptId} 仍被机制 ${mechanicId} 的规则或限定词引用`, { edgeIds: edges.map(edge => edge.id) });
-    if (!workspace.mechanics.some(candidate => candidate.id !== mechanicId && candidate.nodeIds.includes(conceptId))) {
-      fail('MECHANIC_MEMBER_NOT_SHARED', `概念 ${conceptId} 未被其他机制图引用，不能作为迁移残留移除`);
-    }
     const blockedViews = views.filter(view => view.collapsedNodeIds?.includes(conceptId));
     if (blockedViews.length) fail('MECHANIC_MEMBER_VIEW_REFERENCED', `概念 ${conceptId} 被折叠视图引用，不能移除成员归属`, { viewIds: blockedViews.map(view => view.id) });
   }
   for (const key of changed) mechanic[key] = requiredString(body, key);
-  mechanic.nodeIds = mechanic.nodeIds.filter(id => !removing.includes(id));
+  mechanic.focusNodeIds = mechanic.focusNodeIds.filter(id => !removing.includes(id));
   for (const conceptId of removing) delete mechanic.positions[conceptId];
   return { kind: 'mechanic', document: mechanic, id: mechanicId };
 }

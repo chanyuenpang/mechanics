@@ -44,7 +44,7 @@ test('修改概念只保存指定定义文案，稳定ID、布局、其余定义
 async function fixture(t) {
   const projectRoot = await mkdtemp(join(tmpdir(), 'rule-reference-'));
   await copyExampleFixture(projectRoot);
-  const root = join(projectRoot, '.game-graph');
+  const root = join(projectRoot, '.mechanics');
   const store = await createWorkspaceStore(root);
   t.after(async () => { await store.close(); await rm(projectRoot, { recursive: true, force: true }); });
   const workspace = await store.read(), draft = structuredClone(workspace.mechanics[0]); draft.scope = '已有未保存机制草稿';

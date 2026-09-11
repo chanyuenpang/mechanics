@@ -3,12 +3,11 @@ import { assertSpecializes } from './graph.mjs';
 import { registeredMechanicIds, visibleMechanicIds } from './view.mjs';
 import schema from '../../schemas/protocol.schema.json' with { type: 'json' };
 import { normalizeSearchTerm, semanticIdProblem, semanticRuleId } from './identity.mjs';
-import { endpointProjectionId } from './endpoint-projection.mjs';
 
 // 文件结构只由 JSON Schema 定义；这里补充跨文件语义，不修正输入。
 const ajv = new Ajv({ allErrors: true, strict: true, strictRequired: false });
 ajv.addSchema(schema);
-const kinds = { workspace: 'workspace', definitions: 'definitionGraph', mechanic: 'mechanic', view: 'view' };
+const kinds = { workspace: 'workspace', definitions: 'definitionGraph', rules: 'ruleRegistry', mechanic: 'mechanic', view: 'view' };
 
 export class ContractError extends Error {
   constructor(code, message) {
@@ -39,23 +38,6 @@ function requireReference(ids, id, location) {
   if (!ids.has(id)) throw new ContractError('MISSING_REFERENCE', `${location} 引用了不存在的 ID：${id}`);
 }
 
-function positionsExist(positions, ids, location) {
-  for (const id of Object.keys(positions)) requireReference(ids, id, `${location}.positions`);
-}
-
-function projectionIdsFor(graphs) {
-  const ids = new Set();
-  for (const graph of graphs) for (const edge of graph.edges) {
-    if (edge.sourceQualifiers?.length) ids.add(endpointProjectionId(edge.source, edge.sourceQualifiers));
-    if (edge.targetQualifiers?.length) ids.add(endpointProjectionId(edge.target, edge.targetQualifiers));
-  }
-  return ids;
-}
-
-function projectionPositionsExist(positions = {}, ids, location) {
-  for (const id of Object.keys(positions)) requireReference(ids, id, `${location}.projectionPositions`);
-}
-
 function validateRuleQualifiers(qualifiers, nodes, location) {
   if (qualifiers === undefined) return;
   const keys = new Set();
@@ -70,17 +52,18 @@ function validateRuleQualifiers(qualifiers, nodes, location) {
   }
 }
 
-export function validateWorkspace({ manifest, definitions, mechanics, views = [], files = [] }) {
+export function validateWorkspace({ manifest, definitions, rules, mechanics, views = [], files = [] }) {
   assertDocument(manifest, 'workspace', 'workspace.json');
   assertDocument(definitions, 'definitions', manifest.definitions);
+  assertDocument(rules, 'rules', manifest.rules);
   mechanics.forEach(graph => assertDocument(graph, 'mechanic', graph.id));
   views.forEach(view => assertDocument(view, 'view', view.id));
-  const documents = [definitions, ...mechanics, ...views];
+  const documents = [definitions, rules, ...mechanics, ...views];
   for (const document of documents) {
     if (document.workspaceId !== manifest.id) throw new ContractError('WORKSPACE_MISMATCH', '文档所属工作区与清单不一致');
   }
   const semanticIds = [manifest.id, ...manifest.compositions.map(item => item.id), ...definitions.nodes.map(item => item.id),
-    ...mechanics.flatMap(item => [item.id, ...item.edges.map(edge => edge.id)]), ...views.map(item => item.id)];
+    ...rules.rules.map(rule => rule.id), ...mechanics.map(item => item.id), ...views.map(item => item.id)];
   for (const id of semanticIds) {
     const problem = semanticIdProblem(id);
     if (problem) throw new ContractError('INVALID_SEMANTIC_ID', `持久化领域 ID ${problem}：${id}`);
@@ -94,40 +77,30 @@ export function validateWorkspace({ manifest, definitions, mechanics, views = []
       throw new ContractError('ALIAS_SHADOWS_ID', `概念 ${node.id} 的别名遮蔽稳定 ID：${alias}`);
     }
   }
-  positionsExist(definitions.positions, nodes, manifest.definitions);
   const graphIds = unique(mechanics, '机制图清单');
   const workspaceEndpointPairs = new Map();
-  for (const graph of mechanics) {
-    const included = new Set(graph.nodeIds);
-    const endpointPairs = new Set();
-    for (const edge of graph.edges) {
+  for (const edge of rules.rules) {
       if (edge.relation === 'specializes' && (edge.sourceQualifiers || edge.targetQualifiers)) {
-        throw new ContractError('QUALIFIER_ON_SPECIALIZES', `is-a 只能连接概念分类，不能限定规则参与者：${graph.id}/${edge.id}`);
+        throw new ContractError('QUALIFIER_ON_SPECIALIZES', `is-a 只能连接概念分类，不能限定规则参与者：${edge.id}`);
       }
-      validateRuleQualifiers(edge.sourceQualifiers, nodes, `${graph.id}/${edge.id}.source`);
-      validateRuleQualifiers(edge.targetQualifiers, nodes, `${graph.id}/${edge.id}.target`);
+      validateRuleQualifiers(edge.sourceQualifiers, nodes, `${edge.id}.source`);
+      validateRuleQualifiers(edge.targetQualifiers, nodes, `${edge.id}.target`);
       const pair = `${edge.source}\u0000${edge.target}`;
-      if (endpointPairs.has(pair)) throw new ContractError('DUPLICATE_ENDPOINT_RULE',
-        `机制图 ${graph.id} 中 ${edge.source} 到 ${edge.target} 已有规则；同一有向端点对只允许一条规则`);
-      endpointPairs.add(pair);
       if (workspaceEndpointPairs.has(pair)) throw new ContractError('DUPLICATE_ENDPOINT_RULE',
-        `概念 ${edge.source} 到 ${edge.target} 已在机制 ${workspaceEndpointPairs.get(pair)} 中存在规则；全工作区同一有向端点对只允许一条规则`);
-      workspaceEndpointPairs.set(pair, graph.id);
-    }
-    unique(graph.edges, `机制图 ${graph.id} 的连线`);
-    graph.nodeIds.forEach(id => requireReference(nodes, id, graph.id));
-    for (const edge of graph.edges) {
-      requireReference(included, edge.source, `${graph.id}/${edge.id}.source`);
-      requireReference(included, edge.target, `${graph.id}/${edge.id}.target`);
+        `概念 ${edge.source} 到 ${edge.target} 已在规则 ${workspaceEndpointPairs.get(pair)} 中存在；全工作区同一有向端点对只允许一条规则`);
+      workspaceEndpointPairs.set(pair, edge.id);
+      requireReference(nodes, edge.source, `${edge.id}.source`);
+      requireReference(nodes, edge.target, `${edge.id}.target`);
       const expectedId = semanticRuleId(edge.source, edge.target, new Set());
       if (edge.id !== expectedId) throw new ContractError('RULE_ID_MISMATCH',
-        `机制图 ${graph.id} 的规则 ID 必须由端点确定：${edge.id} 应为 ${expectedId}`);
-    }
-    positionsExist(graph.positions, included, graph.id);
-    projectionPositionsExist(graph.projectionPositions, projectionIdsFor([graph]), graph.id);
-    assertSpecializes(graph.edges.map(edge => ({ ...edge, id: `${graph.id}/${edge.id}` })));
+        `规则 ID 必须由端点确定：${edge.id} 应为 ${expectedId}`);
   }
-  assertSpecializes(mechanics.flatMap(graph => graph.edges.map(edge => ({ ...edge, id: `${graph.id}/${edge.id}` }))));
+  unique(rules.rules, '规则库');
+  assertSpecializes(rules.rules);
+  for (const graph of mechanics) {
+    graph.focusNodeIds.forEach(id => requireReference(nodes, id, graph.id));
+    graph.pinnedRuleIds.forEach(id => requireReference(new Set(rules.rules.map(rule => rule.id)), id, graph.id));
+  }
   unique(manifest.compositions, '叠加组合');
   const viewIds = unique(views, '视图文件');
   const exportSelections = manifest.exportSelections;
@@ -171,19 +144,16 @@ export function validateWorkspace({ manifest, definitions, mechanics, views = []
       if (!view.graphIds.includes(view.activeLayerId)) throw new ContractError('HIDDEN_ACTIVE_LAYER', location + ' 的编辑图层必须可见');
     }
     const included = new Set(mechanics.filter(graph => view.graphIds.includes(graph.id)).flatMap(graph => graph.nodeIds));
-    view.collapsedNodeIds.forEach(id => requireReference(included, id, location + ' 的折叠节点'));
-    // 视图可记住暂时隐藏的已定义节点坐标；Visible 只控制显示，不销毁布局。
-    positionsExist(view.positions, nodes, location);
+    // 坐标、折叠状态与路由缓存属于展示状态；读取时由 presentation resolver
+    // 按当前语义图过滤。它们绝不能升级为领域完整性失败。
   }
   for (const view of views) {
     const location = files.find(file => file.kind === 'view' && file.id === view.id)?.path ?? `视图 ${view.id}`;
     const registered = registeredMechanicIds(view);
     if (new Set(registered).size !== registered.length) throw new ContractError('DUPLICATE_ID', `${location} 中机制注册重复`);
     registered.forEach(id => requireReference(graphIds, id, location));
-    const included = new Set(mechanics.filter(graph => registered.includes(graph.id)).flatMap(graph => graph.nodeIds));
-    view.collapsedNodeIds.forEach(id => requireReference(included, id, location + ' 的折叠节点'));
-    positionsExist(view.positions, nodes, location);
-    projectionPositionsExist(view.projectionPositions, projectionIdsFor(mechanics.filter(graph => registered.includes(graph.id))), location);
+    view.focusNodeIds.forEach(id => requireReference(nodes, id, location));
+    view.pinnedRuleIds.forEach(id => requireReference(new Set(rules.rules.map(rule => rule.id)), id, location));
   }
-  return { manifest, definitions, mechanics, views };
+  return { manifest, definitions, rules, mechanics, views };
 }

@@ -26,7 +26,7 @@ export function validateQuery(request) {
 
 function projectGraph(workspace) {
   const nodes = workspace.definitions.nodes.map(node => structuredClone(node)).sort(byId);
-  const edges = workspace.mechanics.flatMap(mechanic => mechanic.edges.map(edge => ({ ...structuredClone(edge), id: `${mechanic.id}/${edge.id}`, origin: { mechanicId: mechanic.id, edgeId: edge.id } }))).sort(byId);
+  const edges = workspace.rules.rules.map(rule => ({ ...structuredClone(rule), origin: { ruleId: rule.id } })).sort(byId);
   return { nodes, edges };
 }
 const nodeDTO = node => ({ id: node.id, label: node.label, description: node.description, aliases: structuredClone(node.aliases ?? []), tags: structuredClone(node.tags ?? []), ...(node.customData ? { customData: node.customData } : {}) });
@@ -55,7 +55,7 @@ export function queryWorkspace(workspace, request) {
   if (request.command === 'guide') return queryGuide();
   if (request.revision && request.revision !== workspace.revision) fail('REVISION_CONFLICT', '查询版本已改变，请重新读取项目状态');
   const result = meta(workspace, request.command);
-  if (request.command === 'scopes') return { ...result, resourceRevisions: structuredClone(workspace.resourceRevisions), mechanics: workspace.mechanics.map(item => ({ id: item.id, name: item.name, scope: item.scope, nodeCount: item.nodeIds.length, edgeCount: item.edges.length })).sort(byId), views: workspace.views.map(item => ({ id: item.id, name: item.name })).sort(byId) };
+  if (request.command === 'scopes') return { ...result, resourceRevisions: structuredClone(workspace.resourceRevisions), mechanics: workspace.mechanics.map(item => ({ id: item.id, name: item.name, scope: item.scope, nodeCount: item.focusNodeIds.length, edgeCount: workspace.rules.rules.filter(rule => item.pinnedRuleIds.includes(rule.id)).length })).sort(byId), views: workspace.views.map(item => ({ id: item.id, name: item.name })).sort(byId) };
   const graph = projectGraph(workspace), nodeMap = new Map(graph.nodes.map(node => [node.id, node]));
   if (request.command === 'search') {
     if (request.query) { const resolution = resolveConcept(graph.nodes, request.query); return resolution.status === 'resolved' ? { ...result, query: request.query, resolution: { status: 'resolved', matchedBy: resolution.matchedBy }, concept: nodeDTO(resolution.concept) } : { ...result, query: request.query, resolution }; }

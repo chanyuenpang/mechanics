@@ -1,6 +1,6 @@
 # 发布包只保留通用示例的 canonical 数据；排除所有示例运行态与生成副本。
-**/.game-graph.lock
+**/.mechanics.lock
 **/.rule-text-backup-*/
 **/.ui-state.json
 examples/**/.agents/
-examples/**/game-mechanics/
+examples/**/mechanics/

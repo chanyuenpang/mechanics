@@ -15,7 +15,7 @@ import { copyExampleFixture } from './example-fixture.mjs';
 async function fixture(t) {
   const projectRoot = await mkdtemp(join(tmpdir(), 'rule-editor-test-'));
   await copyExampleFixture(projectRoot);
-  const directory = join(projectRoot, '.game-graph');
+  const directory = join(projectRoot, '.mechanics');
   const store = await createWorkspaceStore(directory);
   t.after(async () => { await store.close(); await rm(projectRoot, { recursive: true, force: true }); });
   return { directory, store, workspace: await store.read() };
@@ -31,16 +31,16 @@ test('单文件保存真实落盘，读服务不持锁，写入冲突不覆盖',
   assert.notEqual(saved.revision, workspace.revision);
   assert.deepEqual(JSON.parse(await readFile(join(directory, pathOf(document.id)), 'utf8')), document);
   assert.equal(await readFile(join(directory, pathOf(workspace.mechanics[1].id)), 'utf8'), before);
-  await assert.rejects(access(join(directory, '.game-graph.lock')), { code: 'ENOENT' });
+  await assert.rejects(access(join(directory, '.mechanics.lock')), { code: 'ENOENT' });
   const reader = await createWorkspaceStore(directory); await reader.close();
-  await writeFile(join(directory, '.game-graph.lock'), '{"pid":999999999,"owner":"stopped-writer"}');
+  await writeFile(join(directory, '.mechanics.lock'), '{"pid":999999999,"owner":"stopped-writer"}');
   await store.save({ revision: saved.revision, kind: 'mechanic', id: document.id, document });
-  await assert.rejects(access(join(directory, '.game-graph.lock')), { code: 'ENOENT' });
+  await assert.rejects(access(join(directory, '.mechanics.lock')), { code: 'ENOENT' });
   const release = await acquireWorkspaceLock(directory);
   try {
     await assert.rejects(store.save({ revision: saved.revision, kind: 'mechanic', id: document.id, document }), { code: 'WORKSPACE_LOCKED' });
   } finally { await release(); }
-  await assert.rejects(access(join(directory, '.game-graph.lock')), { code: 'ENOENT' });
+  await assert.rejects(access(join(directory, '.mechanics.lock')), { code: 'ENOENT' });
 });
 
 test('外部修改与同时旧版本写入不会被覆盖；失败后草稿可修正再提交', async t => {
@@ -114,7 +114,7 @@ test('创建图层逐级拒绝指向外部目录的 junction，未写外部文�
   t.after(async () => { if (store) await store.close(); await rm(directory, { recursive: true, force: true }); });
   const projectRoot = join(directory, 'workspace'); await mkdir(projectRoot);
   await copyExampleFixture(projectRoot);
-  const root = join(projectRoot, '.game-graph');
+  const root = join(projectRoot, '.mechanics');
   const original = await readWorkspace(root);
   const manifest = structuredClone(original.manifest); manifest.compositions = [];
   await writeFile(join(root, 'workspace.json'), JSON.stringify(manifest));
@@ -128,7 +128,7 @@ test('创建图层逐级拒绝指向外部目录的 junction，未写外部文�
 test('HTTP 写入无需 session 且允许跨源，仍要求 JSON 并拒绝过期版本', async t => {
   const projectRoot = await mkdtemp(join(tmpdir(), 'rule-editor-http-'));
   await copyExampleFixture(projectRoot);
-  const directory = join(projectRoot, '.game-graph');
+  const directory = join(projectRoot, '.mechanics');
   const { close, origin } = await startServer({ projectRoot, port: 0, projectHistoryPath: join(projectRoot, '.test-projects.json') });
   t.after(async () => { await close(); await rm(projectRoot, { recursive: true, force: true }); });
   const headers = { Origin: 'https://other.example', 'Content-Type': 'application/json' };

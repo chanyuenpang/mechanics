@@ -15,7 +15,7 @@ test('源项目声明参考项目，目录绑定只存本机并可供定位', as
   const declared = await declareProjectReference(source, { projectRoot: target }, { bindingsFile });
   assert.equal(declared[0].status, 'ready');
   assert.equal(declared[0].workspaceId, 'sample-card-game');
-  const shared = JSON.parse(await readFile(join(source, '.game-graph', 'references.json'), 'utf8'));
+  const shared = JSON.parse(await readFile(join(source, '.mechanics', 'references.json'), 'utf8'));
   assert.equal(shared.references[0].id, 'sample-card-game');
   assert.equal(shared.references[0].relativePath, '../target');
   assert.equal(JSON.parse(await readFile(bindingsFile, 'utf8')).bindings[0].projectRoot, target);
@@ -41,17 +41,17 @@ test('本机绑定写入失败时保留已保存的共享声明并显式报告�
     () => declareProjectReference(source, { projectRoot: target }, { bindingsFile }),
     error => error.code === 'REFERENCE_DECLARATION_PARTIAL' && error.referenceDeclared === true && error.reference.id === 'sample-card-game',
   );
-  const shared = JSON.parse(await readFile(join(source, '.game-graph', 'references.json'), 'utf8'));
+  const shared = JSON.parse(await readFile(join(source, '.mechanics', 'references.json'), 'utf8'));
   assert.equal(shared.references[0].id, 'sample-card-game');
 });
 
-test('读取旧项目根目录关联声明时迁移至工作区元数据，且不保留根目录污染文件', async t => {
+test('项目根目录的旧关联声明不再作为运行时兼容输入读取', async t => {
   const root = await mkdtemp(join(tmpdir(), 'game-graph-project-references-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const source = join(root, 'source'); await copyExampleFixture(source);
   const legacy = { version: 1, references: [{ id: 'sample-card-game', name: '示例', workspaceId: 'sample-card-game', relativePath: '../target' }] };
   await writeFile(join(source, 'game-graph.references.json'), JSON.stringify(legacy));
-  assert.deepEqual(await readProjectReferences(source), legacy);
-  assert.deepEqual(JSON.parse(await readFile(join(source, '.game-graph', 'references.json'), 'utf8')), legacy);
-  await assert.rejects(access(join(source, 'game-graph.references.json')), { code: 'ENOENT' });
+  assert.deepEqual(await readProjectReferences(source), { version: 1, references: [] });
+  await assert.rejects(access(join(source, '.mechanics', 'references.json')), { code: 'ENOENT' });
+  assert.equal(JSON.parse(await readFile(join(source, 'game-graph.references.json'), 'utf8')).references[0].id, 'sample-card-game');
 });

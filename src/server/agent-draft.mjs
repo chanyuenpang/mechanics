@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ContractError } from '../domain/validate.mjs';
 
-const DRAFT_ROOT = join(tmpdir(), 'game-graph-agent-drafts');
+const DRAFT_ROOT = join(tmpdir(), 'mechanics-agent-drafts');
 const EXPIRES_AFTER_MS = 24 * 60 * 60 * 1000;
 const fail = (code, message) => { throw new ContractError(code, message); };
 const clone = value => structuredClone(value);
@@ -35,22 +35,24 @@ export async function openAgentDraft(workspace, mechanicId) {
   await cleanupExpiredAgentDrafts();
   const id = randomUUID(), root = join(DRAFT_ROOT, id);
   await mkdir(root);
-  const definitionsPath = join(root, 'definitions.graph.json');
-  const mechanicPath = join(root, 'mechanic.graph.json');
+  const definitionsPath = join(root, 'definitions.json');
+  const rulesPath = join(root, 'rules.json');
+  const mechanicPath = join(root, 'mechanic.json');
   await Promise.all([
     writeFile(definitionsPath, JSON.stringify(structureOnly(workspace.definitions), null, 2) + '\n', 'utf8'),
+    writeFile(rulesPath, JSON.stringify(structureOnly(workspace.rules), null, 2) + '\n', 'utf8'),
     writeFile(mechanicPath, JSON.stringify(structureOnly(mechanic), null, 2) + '\n', 'utf8'),
   ]);
-  return { id, root, definitionsPath, mechanicPath, mechanic: mechanicId, workspaceRevision: workspace.revision,
-    definitionsRevision: workspace.resourceRevisions.definitions, mechanicRevision: workspace.resourceRevisions.mechanics[mechanicId] };
+  return { id, root, definitionsPath, rulesPath, mechanicPath, mechanic: mechanicId, workspaceRevision: workspace.revision,
+    definitionsRevision: workspace.resourceRevisions.definitions, rulesRevision: workspace.resourceRevisions.rules, mechanicRevision: workspace.resourceRevisions.mechanics[mechanicId] };
 }
 
 export async function readAgentDraft(record) {
   try {
-    const [definitions, mechanic] = await Promise.all([
-      readFile(record.definitionsPath, 'utf8').then(JSON.parse), readFile(record.mechanicPath, 'utf8').then(JSON.parse),
+    const [definitions, rules, mechanic] = await Promise.all([
+      readFile(record.definitionsPath, 'utf8').then(JSON.parse), readFile(record.rulesPath, 'utf8').then(JSON.parse), readFile(record.mechanicPath, 'utf8').then(JSON.parse),
     ]);
-    return { definitions, mechanic };
+    return { definitions, rules, mechanic };
   } catch (error) { fail('AGENT_DRAFT_INVALID', `草稿无法读取或不是有效 JSON：${error.message}`); }
 }
 

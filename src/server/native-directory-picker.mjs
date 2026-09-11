@@ -9,7 +9,7 @@ const script = String.raw`
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 Add-Type -Path $env:GAME_GRAPH_PICKER_HELPER
-$selectedDirectory = [GameGraphDirectoryDialog]::Pick($env:GAME_GRAPH_PICKER_INITIAL_PATH, 'Game-Graph：选择文件夹')
+$selectedDirectory = [GameGraphDirectoryDialog]::Pick($env:GAME_GRAPH_PICKER_INITIAL_PATH, 'Mechanics：选择文件夹')
 if ($null -eq $selectedDirectory) {
   @{ cancelled = $true } | ConvertTo-Json -Compress
 } else {

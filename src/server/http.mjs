@@ -45,7 +45,7 @@ const assets = new Map([
 ]);
 
 export async function startServer({ projectRoot = null, workspaceRoot = null, port = 4319, preferencesPath, projectHistoryPath, directoryPicker = createNativeDirectoryPicker() }) {
-  if (workspaceRoot) throw new Error('startServer 只接受 projectRoot；工作区固定为项目内 .game-graph');
+  if (workspaceRoot) throw new Error('startServer 只接受 projectRoot；工作区固定为项目内 .mechanics');
   const projectHistory = createProjectHistory(projectHistoryPath);
   const projectPreflight = createProjectPreflight();
   const projects = createProjectManager({ onActivated: project => projectHistory.record(project) });
@@ -113,7 +113,7 @@ export async function startServer({ projectRoot = null, workspaceRoot = null, po
         }
         if (request.method === 'GET' && url.pathname === '/api/preferences') { send(200, await preferences.read()); return; }
         if (request.method === 'POST' && ['/api/directories/pick', '/api/project/open', '/api/project/select', '/api/project/reference-enter', '/api/project/preflight', '/api/project/settings', '/api/project/export-path', '/api/document-export/settings', '/api/document-export/generate', '/api/projects/pin',
-          '/api/projects/remove', '/api/save', '/api/local-ui-state', '/api/project-references/bind', '/api/project-references/declare', '/api/mechanics', '/api/mechanic-folders', '/api/mechanic-folder-move', '/api/mechanic-folder-delete', '/api/mechanic-move', '/api/mechanic-delete', '/api/views', '/api/preferences', '/api/agent/session', '/api/agent/mutation', '/api/agent/draft'].includes(url.pathname)) {
+          '/api/projects/remove', '/api/save', '/api/rules-and-mechanic', '/api/rules/delete', '/api/local-ui-state', '/api/project-references/bind', '/api/project-references/declare', '/api/mechanics', '/api/mechanic-folders', '/api/mechanic-folder-move', '/api/mechanic-folder-delete', '/api/mechanic-move', '/api/mechanic-delete', '/api/views', '/api/preferences', '/api/agent/session', '/api/agent/mutation', '/api/agent/draft'].includes(url.pathname)) {
           if (!(request.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
             send(415, { error: 'JSON_REQUIRED', message: '写入必须使用 application/json' }); return;
           }
@@ -154,6 +154,8 @@ export async function startServer({ projectRoot = null, workspaceRoot = null, po
             throw Object.assign(new Error('Agent 草稿只支持 open 或 save'), { code: 'AGENT_DRAFT_INVALID' });
           }
           if (url.pathname === '/api/agent/mutation') { send(200, await projects.mutateAgent(body)); return; }
+          if (url.pathname === '/api/rules-and-mechanic') { send(200, await projects.saveRulesAndMechanic(body)); return; }
+          if (url.pathname === '/api/rules/delete') { send(200, await projects.deleteGlobalRule(body)); return; }
           if (url.pathname === '/api/mechanic-folders') { send(200, await projects.createMechanicFolder(body)); return; }
           if (url.pathname === '/api/mechanic-move') { send(200, await projects.moveMechanic(body)); return; }
           if (url.pathname === '/api/mechanic-folder-move') { send(200, await projects.moveMechanicFolder(body)); return; }

@@ -81,8 +81,8 @@ test('带项目会话令牌的写入始终命中其所属项目，不受当前�
     revision: openedFirst.data.revision, kind: 'workspace', document: { ...openedFirst.data.manifest, name: '第一项目已写入' },
   });
   assert.equal(saved.response.status, 200);
-  assert.equal((await readWorkspace(join(first, '.game-graph'))).manifest.name, '第一项目已写入');
-  assert.notEqual((await readWorkspace(join(second, '.game-graph'))).manifest.name, '第一项目已写入');
+  assert.equal((await readWorkspace(join(first, '.mechanics'))).manifest.name, '第一项目已写入');
+  assert.notEqual((await readWorkspace(join(second, '.mechanics'))).manifest.name, '第一项目已写入');
   const active = await (await fetch(server.origin + '/api/workspace')).json();
   assert.equal(active.projectSessionToken, openedSecond.data.projectSessionToken);
   const selected = await post(server.origin, '/api/project/select', {
@@ -117,14 +117,14 @@ test('进入关联项目保留源项目 active 会话，并返回可写的目标
     revision: entered.data.revision, kind: 'workspace', document: { ...entered.data.manifest, name: '关联项目已写入' },
   });
   assert.equal(saved.response.status, 200, JSON.stringify(saved.data));
-  assert.equal((await readWorkspace(join(reference, '.game-graph'))).manifest.name, '关联项目已写入');
-  assert.notEqual((await readWorkspace(join(source, '.game-graph'))).manifest.name, '关联项目已写入');
+  assert.equal((await readWorkspace(join(reference, '.mechanics'))).manifest.name, '关联项目已写入');
+  assert.notEqual((await readWorkspace(join(source, '.mechanics'))).manifest.name, '关联项目已写入');
 });
 
 test('概念文档接口只读取完整导出，拒绝篡改与任意路径', async t => {
   const temp = await mkdtemp(join(tmpdir(), 'game-graph-concept-docs-'));
   const projectRoot = join(temp, 'project'); await copyExampleFixture(projectRoot);
-  await publishCatalog(join(projectRoot, 'game-mechanics'), await readWorkspace(join(projectRoot, '.game-graph')));
+  await publishCatalog(join(projectRoot, 'mechanics'), await readWorkspace(join(projectRoot, '.mechanics')));
   const server = await startServer({ projectRoot, port: 0, projectHistoryPath: join(temp, 'user', 'projects.json') });
   t.after(async () => { await server.close(); await rm(temp, { recursive: true, force: true }); });
   const index = await fetch(server.origin + '/api/concept-docs');
@@ -138,7 +138,7 @@ test('概念文档接口只读取完整导出，拒绝篡改与任意路径', as
   assert.equal(mechanic.status, 200); assert.equal((await mechanic.json()).document.kind, 'mechanic');
   assert.equal((await fetch(server.origin + '/api/concept-docs?conceptId=health&file=concepts.md')).status, 422);
   assert.equal((await fetch(server.origin + '/api/concept-docs?conceptId=../workspace')).status, 422);
-  await writeFile(join(projectRoot, 'game-mechanics', 'README.md'), '手工篡改');
+  await writeFile(join(projectRoot, 'mechanics', 'README.md'), '手工篡改');
   const stale = await fetch(server.origin + '/api/concept-docs');
   assert.equal(stale.status, 422); assert.equal((await stale.json()).error, 'CATALOG_STALE');
 });
@@ -210,14 +210,14 @@ test('删除未被视图引用的机制会移除 canonical 文件；被引用时
   const path = initial.files.find(item => item.kind === 'mechanic' && item.id === target.id).path;
   const deleted = await post(server.origin, '/api/mechanic-delete', { projectGeneration: initial.projectGeneration, revision: initial.revision, mechanicId: target.id });
   assert.equal(deleted.response.status, 422, JSON.stringify(deleted.data)); assert.equal(deleted.data.error, 'MECHANIC_REFERENCED');
-  await access(join(projectRoot, '.game-graph', path));
+  await access(join(projectRoot, '.mechanics', path));
 });
 
 test('候选项目存在短事务写入锁时仍可打开并只读浏览', async t => {
   const temp = await mkdtemp(join(tmpdir(), 'game-graph-project-lock-'));
   const active = join(temp, 'active-project'), locked = join(temp, 'locked-project');
   await copyExampleFixture(active); await copyExampleFixture(locked);
-  const release = await acquireWorkspaceLock(join(locked, '.game-graph'));
+  const release = await acquireWorkspaceLock(join(locked, '.mechanics'));
   const server = await startServer({ projectRoot: active, port: 0, projectHistoryPath: join(temp, 'user', 'projects.json') });
   t.after(async () => { await server.close(); await release(); await rm(temp, { recursive: true, force: true }); });
   const attempt = await openProject(server.origin, locked);
@@ -239,7 +239,7 @@ test('切换项目不再尝试释放服务生命周期锁', async t => {
   const historyPath = join(temp, 'user', 'projects.json');
   const server = await startServer({ projectRoot: first, port: 0, projectHistoryPath: historyPath });
   t.after(async () => { await server.close(); await rm(temp, { recursive: true, force: true }); });
-  await writeFile(join(first, '.game-graph/.game-graph.lock'), '{"owner":"tampered"}');
+  await writeFile(join(first, '.mechanics/.mechanics.lock'), '{"owner":"tampered"}');
   const attempt = await openProject(server.origin, second);
   assert.equal(attempt.response.status, 200);
   const state = await (await fetch(server.origin + '/api/project')).json();

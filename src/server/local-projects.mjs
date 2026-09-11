@@ -18,7 +18,7 @@ const platformRoot = () => process.platform === 'win32'
   : process.env.XDG_CONFIG_HOME || join(homedir(), '.config');
 
 export function projectHistoryPath() {
-  return join(platformRoot(), 'game-graph', 'projects.json');
+  return join(platformRoot(), 'mechanics', 'projects.json');
 }
 
 function validateHistory(value) {

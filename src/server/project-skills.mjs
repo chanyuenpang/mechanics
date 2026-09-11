@@ -6,8 +6,8 @@ import { writeExclusive } from './files.mjs';
 import { ContractError } from '../domain/validate.mjs';
 
 export const PROJECT_SKILL_DIRECTORY = '.agents/skills';
-export const PROJECT_SKILLS = ['game-mechanic-search', 'game-mechanic-modeling'];
-export const PROJECT_TOOL_DIRECTORY = '.game-graph/tools';
+export const PROJECT_SKILLS = ['mechanics-search', 'mechanics-modeling'];
+export const PROJECT_TOOL_DIRECTORY = '.mechanics/tools';
 export const PROJECT_TOOLS = ['workspace-tool.mjs'];
 const sourceRoot = fileURLToPath(new URL('../../skills/', import.meta.url));
 const toolSourceRoot = fileURLToPath(new URL('../../workspace-tools/', import.meta.url));
@@ -33,7 +33,7 @@ async function sourceSkill(name) {
   return { name, content };
 }
 async function syncProjectTools(projectRoot) {
-  const toolsRoot = resolve(projectRoot, PROJECT_TOOL_DIRECTORY); await ensureDirectory(toolsRoot, '项目 .game-graph/tools'); const installed = [];
+  const toolsRoot = resolve(projectRoot, PROJECT_TOOL_DIRECTORY); await ensureDirectory(toolsRoot, '项目 .mechanics/tools'); const installed = [];
   for (const name of PROJECT_TOOLS) {
     const source = resolve(toolSourceRoot, name), target = resolve(toolsRoot, name), info = await statOrNull(source);
     if (!info?.isFile() || info.isSymbolicLink()) fail('PROJECT_TOOL_SOURCE_INVALID', `安装包缺少有效工具：${name}`);

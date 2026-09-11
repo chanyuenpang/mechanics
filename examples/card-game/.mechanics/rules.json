@@ -1,20 +1,8 @@
 {
-  "schemaVersion": 6,
-  "kind": "mechanic",
+  "schemaVersion": 1,
+  "kind": "rules",
   "workspaceId": "sample-card-game",
-  "id": "basic-rules",
-  "name": "基础规则",
-  "scope": "人工构造的机制图，非游戏运行时事实；未建模牌库耗尽、伤害量和行动时序。",
-  "nodeIds": [
-    "turn-start",
-    "draw",
-    "hand",
-    "melee",
-    "damage",
-    "health",
-    "failure"
-  ],
-  "edges": [
+  "rules": [
     {
       "id": "turn-start-2-draw",
       "source": "turn-start",
@@ -69,7 +57,50 @@
         "mode": "none"
       },
       "ruleText": "只考虑血量归零的失败方式"
+    },
+    {
+      "id": "enemy-2-melee",
+      "source": "enemy",
+      "target": "melee",
+      "relation": "influence",
+      "sign": 1,
+      "inheritance": {
+        "mode": "none"
+      },
+      "ruleText": "敌人可以行动且目标在攻击范围内"
+    },
+    {
+      "id": "evade-2-repel",
+      "source": "evade",
+      "target": "repel",
+      "relation": "influence",
+      "sign": 1,
+      "inheritance": {
+        "mode": "none"
+      },
+      "ruleText": "防御牌在手中、体力足够且行动窗口开放"
+    },
+    {
+      "id": "repel-2-melee",
+      "source": "repel",
+      "target": "melee",
+      "relation": "influence",
+      "sign": -1,
+      "inheritance": {
+        "mode": "none"
+      },
+      "ruleText": "该次近战受到该状态影响"
+    },
+    {
+      "id": "evade-2-stamina",
+      "source": "evade",
+      "target": "stamina",
+      "relation": "influence",
+      "sign": -1,
+      "inheritance": {
+        "mode": "none"
+      },
+      "ruleText": "行动成功支付费用"
     }
-  ],
-  "positions": {}
+  ]
 }

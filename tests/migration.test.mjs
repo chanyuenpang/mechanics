@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,12 +9,13 @@ import { migrateWorkspace } from '../src/server/store.mjs';
 import { readWorkspace } from '../src/server/workspace.mjs';
 import { commitFiles } from '../src/server/files.mjs';
 import { copyExampleFixture } from './example-fixture.mjs';
+import { migrateLegacyProject } from '../src/server/migrate-legacy-project.mjs';
 
 const example = fileURLToPath(new URL('../examples/card-game/', import.meta.url));
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'game-graph-v7-'));
   await copyExampleFixture(root);
-  const workspace = join(root, '.game-graph');
+  const workspace = join(root, '.mechanics');
   t.after(() => rm(root, { recursive: true, force: true }));
   const files = ['workspace.json', 'definitions.graph.json', 'mechanics/basic-rules.mechanic.json', 'mechanics/encounter.mechanic.json', 'mechanics/hand.mechanic.json'];
   for (const file of files) {
@@ -105,4 +106,39 @@ test('批量提交混合替换与新建时不把不存在的备份当作失败',
   await commitFiles(workspace, [{ path: 'workspace.json', document: replacement }, { path: 'created.view.json', document: created, create: true }]);
   assert.equal(JSON.parse(await readFile(join(workspace, 'workspace.json'), 'utf8')).name, replacement.name);
   assert.equal(JSON.parse(await readFile(join(workspace, 'created.view.json'), 'utf8')).id, created.id);
+});
+
+test('旧项目迁移只在显式命令中识别旧根、旧技能和旧导出', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'mechanics-legacy-project-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await copyExampleFixture(root);
+  const manifestPath = join(root, '.mechanics', 'workspace.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  await writeFile(manifestPath, JSON.stringify({ ...manifest, agentExportPath: 'game-mechanics' }, null, 2) + '\n');
+  await rename(join(root, '.mechanics'), join(root, '.game-graph'));
+  for (const name of ['game-mechanic-search', 'game-mechanic-modeling']) {
+    const skill = join(root, '.agents', 'skills', name);
+    await mkdir(skill, { recursive: true });
+    await writeFile(join(skill, 'SKILL.md'), `# ${name}\n`);
+  }
+  const exportRoot = join(root, 'game-mechanics');
+  await mkdir(exportRoot, { recursive: true });
+  await writeFile(join(exportRoot, 'AGENTS.md'), '# Game-Graph Agent 文档使用规则\n<!-- game-graph-agent-docs:v7 workspace-id:sample-card-game -->\n');
+
+  const preview = await migrateLegacyProject(root);
+  assert.equal(preview.execute, false);
+  assert.equal(preview.removableLegacyCatalog, exportRoot);
+  assert.equal(preview.removableLegacySkills.length, 2);
+
+  const result = await migrateLegacyProject(root, { execute: true });
+  assert.equal(result.execute, true);
+  assert.equal(result.removedLegacyCatalog, exportRoot);
+  const migratedManifest = JSON.parse(await readFile(join(root, '.mechanics', 'workspace.json'), 'utf8'));
+  assert.equal(migratedManifest.schemaVersion, 10);
+  assert.equal(migratedManifest.agentExportPath, 'mechanics');
+  await assert.rejects(lstat(join(root, '.game-graph')), { code: 'ENOENT' });
+  await assert.rejects(lstat(join(root, '.agents', 'skills', 'game-mechanic-search')), { code: 'ENOENT' });
+  await assert.rejects(lstat(exportRoot), { code: 'ENOENT' });
+  const guide = await readFile(join(root, 'mechanics', 'AGENTS.md'), 'utf8');
+  assert.match(guide, /<!-- mechanics-agent-docs:v8 workspace-id:sample-card-game -->/);
 });

@@ -12,7 +12,7 @@ import { compose, collapse, canCollapse, tracePaths, diagnose } from '../src/dom
 import { copyExampleFixture } from './example-fixture.mjs';
 
 const example = fileURLToPath(new URL('../examples/card-game/', import.meta.url));
-const source = await readWorkspace(join(example, '.game-graph'));
+const source = await readWorkspace(join(example, '.mechanics'));
 const selected = ['basic-rules', 'encounter', 'hand'];
 
 test('叠加按稳定 ID 接合，保留来源且不修改输入', () => {
@@ -87,7 +87,6 @@ test('结构和引用错误明确拒绝，不修补原始数据', () => {
     data => { data.mechanics[0].workspaceId = 'other-game'; },
     data => { data.definitions.nodes = data.definitions.nodes.filter(node => node.id !== 'melee'); },
     data => { data.manifest.compositions[0].graphIds.push('unknown'); },
-    data => { data.mechanics[0].positions.missing = { x: 0, y: 0 }; },
     data => { delete data.definitions.nodes[0].agentLocked; },
     data => { data.definitions.nodes[0].agentLocked = 'false'; },
     data => { data.mechanics[0].edges[0].note = '旧字段'; },
@@ -153,12 +152,12 @@ test('规则 ID 必须由 source 与 target 稳定确定', () => {
   assert.throws(() => validateWorkspace(invalid), { code: 'RULE_ID_MISMATCH' });
 });
 
-test('视图可保存暂时隐藏的定义节点坐标，但仍拒绝未知节点', () => {
+test('视图可保存暂时隐藏或后续出现的定义节点坐标', () => {
   const draft = structuredClone(source);
   draft.views = [{ schemaVersion: 3, kind: 'view', workspaceId: draft.manifest.id, id: 'layout-memory', name: '布局记忆', mechanicRegistrations: [], collapsedNodeIds: [], positions: { melee: { x: 10, y: 20 } }, structuralPresentation: 'line' }];
   validateWorkspace(draft);
   draft.views[0].positions.missing = { x: 0, y: 0 };
-  assert.throws(() => validateWorkspace(draft), /missing/);
+  validateWorkspace(draft);
 });
 
 test('工具可处理无任何卡牌概念的另一游戏工作区', () => {
@@ -176,7 +175,7 @@ async function temporary(t) {
   let close = async () => {};
   t.after(async () => { await close(); await rm(root, { recursive: true, force: true }); });
   await copyExampleFixture(join(root, 'workspace'));
-  return { root, projectRoot: join(root, 'workspace'), directory: join(root, 'workspace', '.game-graph'), setClose: callback => { close = callback; } };
+  return { root, projectRoot: join(root, 'workspace'), directory: join(root, 'workspace', '.mechanics'), setClose: callback => { close = callback; } };
 }
 
 test('读取真实文件且版本戳反映外部修改，其他后缀的 JSON 不当作规则文件', async t => {

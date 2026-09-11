@@ -150,9 +150,9 @@ export function createProjectManager({ onActivated = null } = {}) {
       if (typeof body?.mechanic !== 'string' || !body.mechanic) fail('AGENT_DRAFT_INVALID', 'draft open 必须提供机制 ID');
       // open 是切换动作：旧草稿先走完全相同的 save，失败则不创建新草稿。
       if (session.agentDraft) {
-        const previous = session.agentDraft, { definitions, mechanic: document } = await readAgentDraft(previous);
+        const previous = session.agentDraft, { definitions, rules, mechanic: document } = await readAgentDraft(previous);
         await session.store.saveAgentDraft({ mechanic: previous.mechanic, workspaceRevision: previous.workspaceRevision,
-          definitionsRevision: previous.definitionsRevision, mechanicRevision: previous.mechanicRevision, definitions, document });
+          definitionsRevision: previous.definitionsRevision, rulesRevision: previous.rulesRevision, mechanicRevision: previous.mechanicRevision, definitions, rules, document });
         await removeAgentDraft(previous); session.agentDraft = null;
       }
       const record = await openAgentDraft(await session.store.read(), body.mechanic);
@@ -162,9 +162,9 @@ export function createProjectManager({ onActivated = null } = {}) {
     saveAgentDraft: body => enqueue(async () => {
       const session = await agentProject(body), record = session.agentDraft;
       if (!record || record.id !== body?.draftId) fail('AGENT_DRAFT_NOT_FOUND', '没有与当前服务会话匹配的草稿；请重新 draft open');
-      const { definitions, mechanic: document } = await readAgentDraft(record);
+      const { definitions, rules, mechanic: document } = await readAgentDraft(record);
       const result = await session.store.saveAgentDraft({ mechanic: record.mechanic, workspaceRevision: record.workspaceRevision,
-        definitionsRevision: record.definitionsRevision, mechanicRevision: record.mechanicRevision, definitions, document });
+        definitionsRevision: record.definitionsRevision, rulesRevision: record.rulesRevision, mechanicRevision: record.mechanicRevision, definitions, rules, document });
       await removeAgentDraft(record); session.agentDraft = null;
       return { ...result, projectGeneration: session.generation, projectSessionToken: session.token };
     }),
@@ -175,7 +175,7 @@ export function createProjectManager({ onActivated = null } = {}) {
     declareProjectReference: body => enqueue(async () => { const session = current(body?.projectSessionToken, body?.projectGeneration); return { projectRoot: session.context.projectRoot, projectGeneration: session.generation, projectSessionToken: session.token, references: await declareProjectReference(session.context.projectRoot, body) }; }),
     readConceptDocs: (conceptId, token) => enqueue(async () => { const session = current(token); return attach(await readCatalogBrowser(session.context, await session.store.read(), conceptId), session); }),
     readDocumentExport: token => enqueue(async () => { const session = current(token); return attach(await session.store.documentExportStructure(), session); }),
-    save: body => call(body, store => store.save(body)), createMechanic: body => call(body, store => store.createMechanic(body)), createMechanicFolder: body => call(body, store => store.createMechanicFolder(body)), moveMechanic: body => call(body, store => store.moveMechanic(body)), moveMechanicFolder: body => call(body, store => store.moveMechanicFolder(body)), deleteMechanicFolder: body => call(body, store => store.deleteMechanicFolder(body)), deleteMechanic: body => call(body, store => store.deleteMechanic(body)), createView: body => call(body, store => store.createView(body)),
+    save: body => call(body, store => store.save(body)), saveRulesAndMechanic: body => call(body, store => store.saveRulesAndMechanic(body)), deleteGlobalRule: body => call(body, store => store.deleteGlobalRule(body)), createMechanic: body => call(body, store => store.createMechanic(body)), createMechanicFolder: body => call(body, store => store.createMechanicFolder(body)), moveMechanic: body => call(body, store => store.moveMechanic(body)), moveMechanicFolder: body => call(body, store => store.moveMechanicFolder(body)), deleteMechanicFolder: body => call(body, store => store.deleteMechanicFolder(body)), deleteMechanic: body => call(body, store => store.deleteMechanic(body)), createView: body => call(body, store => store.createView(body)),
     openAgentEdit: body => enqueue(async () => {
       const session = await agentProject(body);
       if (typeof body?.mechanic !== 'string' || !body.mechanic) fail('AGENT_EDIT_SESSION_INVALID', '打开编辑会话必须提供机制 ID');

@@ -5,7 +5,7 @@ import { dirname, join, resolve, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
-const workspace = join(root, '.game-graph'), drafts = join(workspace, '.agent-drafts'), lock = join(workspace, '.agent-tools.lock');
+const workspace = join(root, '.mechanics'), drafts = join(workspace, '.agent-drafts'), lock = join(workspace, '.agent-tools.lock');
 const fail = (code, message, details = {}) => { throw Object.assign(new Error(message), { code, details }); };
 const hash = value => createHash('sha256').update(value).digest('hex');
 const json = async path => { try { return { path, raw: await readFile(path, 'utf8') }; } catch (error) { fail(error.code === 'ENOENT' ? 'WORKSPACE_FILE_MISSING' : 'WORKSPACE_READ_FAILED', `无法读取 ${path}`); } };
@@ -17,17 +17,17 @@ const readFolders = async (directory, prefix = '') => { const entries = await re
 const folderSegment = (value, location) => { if (typeof value !== 'string' || !value || value === '.' || value === '..' || /[\\/\u0000-\u001f<>:"|?*]/u.test(value)) fail('TOOL_INVALID', `${location} 必须是单段安全目录名`); return value; };
 const folder = (value, location = 'folder') => { if (value === undefined || value === '') return ''; if (typeof value !== 'string') fail('TOOL_INVALID', `${location} 无效`); return value.split('/').map(segment => folderSegment(segment, location)).join('/'); };
 const mechanicDirectory = value => join(workspace, 'mechanics', ...value.split('/').filter(Boolean));
-async function snapshot() { const manifest = await parse(join(workspace, 'workspace.json')), definitions = await parse(join(workspace, 'definitions.graph.json')); const mechanicsRoot = join(workspace, 'mechanics'); const paths = await readMechanicPaths(mechanicsRoot); const mechanics = await Promise.all(paths.map(parse)); const nodes = definitions.value.nodes ?? []; const edges = mechanics.flatMap(file => (file.value.edges ?? []).map(edge => ({ ...edge, id: `${file.value.id}/${edge.id}`, origin: { mechanicId: file.value.id, edgeId: edge.id } }))); const revision = hash([manifest.raw, definitions.raw, ...mechanics.map(item => item.raw)].join('\n'));
-  return { manifest, definitions, mechanics, folders: await readFolders(mechanicsRoot), nodes, edges, revision, nodeMap: new Map(nodes.map(node => [node.id, node])) }; }
+async function snapshot() { const manifest = await parse(join(workspace, 'workspace.json')), definitions = await parse(join(workspace, 'definitions.json')), rules = await parse(join(workspace, 'rules.json')); const mechanicsRoot = join(workspace, 'mechanics'); const paths = await readMechanicPaths(mechanicsRoot); const mechanics = await Promise.all(paths.map(parse)); const nodes = definitions.value.nodes ?? []; const edges = (rules.value.rules ?? []).map(edge => ({ ...edge, origin: { ruleId: edge.id } })); const revision = hash([manifest.raw, definitions.raw, rules.raw, ...mechanics.map(item => item.raw)].join('\n'));
+  return { manifest, definitions, rules, mechanics, folders: await readFolders(mechanicsRoot), nodes, edges, revision, nodeMap: new Map(nodes.map(node => [node.id, node])) }; }
 const operator = edge => edge.relation === 'specializes' ? 'is-a>' : edge.sign === 1 ? '+>' : edge.sign === -1 ? '->' : '?>';
 const guide = () => ({
-  contractVersion: 2,
+  contractVersion: 3,
   commands: ['scopes', 'search', 'node', 'impact', 'draft open', 'draft validate', 'draft save'],
-  workflow: ['scopes', 'draft open（目标不存在时携带名称与范围）', '编辑两份草稿 JSON', 'draft validate', 'draft save'],
+  workflow: ['scopes', 'draft open（目标不存在时携带名称与范围）', '编辑 definitions.json、rules.json 与 mechanic.json 三份草稿', 'draft validate', 'draft save'],
   conceptTemplate: { id: 'stable-concept-id', label: '概念名称', description: '概念定义。', agentLocked: false },
   influenceRuleTemplate: { id: 'source-concept-2-target-concept', source: 'source-concept', target: 'target-concept', relation: 'influence', sign: 1, inheritance: { mode: 'none' }, ruleText: '源概念如何影响目标概念。' },
   specializesRuleTemplate: { id: 'subtype-concept-2-supertype-concept', source: 'subtype-concept', target: 'supertype-concept', relation: 'specializes' },
-  constraints: ['所有持久化 ID 使用英文小写 kebab-case', '规则 ID 固定为 source-2-target', '同一有向端点对在全工作区只能有一条规则', '限定词只属于 influence 规则端点', 'node 的 upstream 只表示发现上游的遍历方向；paths 中的 nodes、steps、chain 与 effect 始终按规则声明的 source → target 方向返回', '草稿不允许 positions、projectionPositions 或 routeCache', 'save 前必须 validate；save 不执行自动排版或文档导出'],
+  constraints: ['所有持久化 ID 使用英文小写 kebab-case', '规则只存于 rules.json，ID 固定为 source-2-target', '同一有向端点对在全工作区只能有一条规则', 'mechanic 只保存 focusNodeIds 与 pinnedRuleIds；引用任一端点会投影该规则', '限定词只属于 influence 规则端点', 'node 的 upstream 只表示发现上游的遍历方向；paths 中的 nodes、steps、chain 与 effect 始终按规则声明的 source → target 方向返回', '草稿不允许 positions、projectionPositions 或 routeCache', 'save 前必须 validate；save 不执行自动排版或文档导出'],
 });
 const semanticId = value => typeof value === 'string' && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u.test(value);
 const text = (value, field) => {
@@ -91,7 +91,7 @@ const inheritance = (value, location) => {
 };
 function validateDefinitions(document, workspaceId) {
   only(document, ['schemaVersion', 'kind', 'workspaceId', 'nodes', 'positions'], ['schemaVersion', 'kind', 'workspaceId', 'nodes', 'positions'], 'definitions');
-  if (![4, 5].includes(document.schemaVersion) || document.kind !== 'definitions' || document.workspaceId !== workspaceId) fail('DRAFT_VALIDATION_FAILED', 'definitions 的版本、类型或 workspaceId 无效');
+  if (document.schemaVersion !== 6 || document.kind !== 'definitions' || document.workspaceId !== workspaceId) fail('DRAFT_VALIDATION_FAILED', 'definitions 的版本、类型或 workspaceId 无效');
   noDraftGeometry(document, 'definitions');
   const nodes = new Map(), aliases = new Set();
   array(document.nodes, 'definitions.nodes').forEach((node, index) => {
@@ -108,22 +108,18 @@ function validateDefinitions(document, workspaceId) {
   for (const node of nodes.values()) for (const alias of node.aliases ?? []) { const normalized = alias.normalize('NFKC').trim().replace(/\s+/gu, ' ').toLocaleLowerCase(); if (aliases.has(normalized) || ids.has(normalized)) fail('DRAFT_VALIDATION_FAILED', `概念别名重复或遮蔽 ID：${alias}`); aliases.add(normalized); }
   return nodes;
 }
-function validateMechanic(document, workspaceId, nodes, otherMechanics) {
-  only(document, ['schemaVersion', 'kind', 'workspaceId', 'id', 'name', 'scope', 'nodeIds', 'edges', 'positions'], ['schemaVersion', 'kind', 'workspaceId', 'id', 'name', 'scope', 'nodeIds', 'edges', 'positions'], 'mechanic');
-  if (![4, 5, 6].includes(document.schemaVersion) || document.kind !== 'mechanic' || document.workspaceId !== workspaceId) fail('DRAFT_VALIDATION_FAILED', 'mechanic 的版本、类型或 workspaceId 无效');
-  draftId(document.id, 'mechanic.id'); draftText(document.name, 'mechanic.name'); draftText(document.scope, 'mechanic.scope'); noDraftGeometry(document, 'mechanic');
-  const included = uniqueIds(array(document.nodeIds, 'mechanic.nodeIds'), 'mechanic.nodeIds');
-  for (const id of included) if (!nodes.has(id)) fail('DRAFT_VALIDATION_FAILED', `mechanic.nodeIds 引用不存在的概念：${id}`);
-  const edgeIds = new Set(), pairs = new Set(), allPairs = new Set(), specializes = [];
-  for (const graph of otherMechanics) for (const edge of graph.value.edges ?? []) { allPairs.add(`${edge.source}\u0000${edge.target}`); if (edge.relation === 'specializes') specializes.push(edge); }
-  array(document.edges, 'mechanic.edges').forEach((edge, index) => {
-    const location = `mechanic.edges[${index}]`, allowed = ['id', 'source', 'target', 'relation', 'sign', 'inheritance', 'ruleText', 'customData', 'sourceQualifiers', 'targetQualifiers'];
+function validateRules(document, workspaceId, nodes) {
+  only(document, ['schemaVersion', 'kind', 'workspaceId', 'rules'], ['schemaVersion', 'kind', 'workspaceId', 'rules'], 'rules');
+  if (document.schemaVersion !== 1 || document.kind !== 'rules' || document.workspaceId !== workspaceId) fail('DRAFT_VALIDATION_FAILED', 'rules 的版本、类型或 workspaceId 无效');
+  const edgeIds = new Set(), pairs = new Set(), specializes = [];
+  array(document.rules, 'rules.rules').forEach((edge, index) => {
+    const location = `rules.rules[${index}]`, allowed = ['id', 'source', 'target', 'relation', 'sign', 'inheritance', 'ruleText', 'customData', 'sourceQualifiers', 'targetQualifiers'];
     only(edge, ['id', 'source', 'target', 'relation'], allowed, location); draftId(edge.id, `${location}.id`); draftId(edge.source, `${location}.source`); draftId(edge.target, `${location}.target`);
-    if (!included.has(edge.source) || !included.has(edge.target)) fail('DRAFT_VALIDATION_FAILED', `${location} 的端点必须在 mechanic.nodeIds 中`);
+    if (!nodes.has(edge.source) || !nodes.has(edge.target)) fail('DRAFT_VALIDATION_FAILED', `${location} 的端点必须是已有概念`);
     const pair = `${edge.source}\u0000${edge.target}`;
-    if (edgeIds.has(edge.id) || pairs.has(pair) || allPairs.has(pair)) fail('DRAFT_VALIDATION_FAILED', `${location} 的 ID 或有向端点与既有规则重复`);
+    if (edgeIds.has(edge.id) || pairs.has(pair)) fail('DRAFT_VALIDATION_FAILED', `${location} 的 ID 或有向端点与既有规则重复`);
     if (edge.id !== `${edge.source}-2-${edge.target}`) fail('DRAFT_VALIDATION_FAILED', `${location}.id 必须为 ${edge.source}-2-${edge.target}`);
-    edgeIds.add(edge.id); pairs.add(pair); allPairs.add(pair);
+    edgeIds.add(edge.id); pairs.add(pair);
     if (edge.relation === 'influence') { if (![1, -1, 'random'].includes(edge.sign)) fail('DRAFT_VALIDATION_FAILED', `${location}.sign 无效`); inheritance(edge.inheritance, `${location}.inheritance`); qualifiers(edge.sourceQualifiers, nodes, `${location}.sourceQualifiers`); qualifiers(edge.targetQualifiers, nodes, `${location}.targetQualifiers`); }
     else if (edge.relation === 'specializes') { if ('sign' in edge || 'inheritance' in edge || 'sourceQualifiers' in edge || 'targetQualifiers' in edge) fail('DRAFT_VALIDATION_FAILED', `${location} 的 is-a 不能带影响属性或限定词`); if (edge.source === edge.target) fail('DRAFT_VALIDATION_FAILED', `${location} 的 is-a 不能连接自身`); specializes.push(edge); }
     else fail('DRAFT_VALIDATION_FAILED', `${location}.relation 无效`);
@@ -134,6 +130,16 @@ function validateMechanic(document, workspaceId, nodes, otherMechanics) {
   for (const edge of specializes) (outgoing.get(edge.source) ?? outgoing.set(edge.source, []).get(edge.source)).push(edge.target);
   const visit = id => { if (visiting.has(id)) fail('DRAFT_VALIDATION_FAILED', 'is-a 关系形成分类环'); if (visited.has(id)) return; visiting.add(id); for (const target of outgoing.get(id) ?? []) visit(target); visiting.delete(id); visited.add(id); };
   for (const id of outgoing.keys()) visit(id);
+}
+function validateMechanic(document, workspaceId, nodes, rules) {
+  only(document, ['schemaVersion', 'kind', 'workspaceId', 'id', 'name', 'scope', 'focusNodeIds', 'pinnedRuleIds', 'positions'], ['schemaVersion', 'kind', 'workspaceId', 'id', 'name', 'scope', 'focusNodeIds', 'pinnedRuleIds', 'positions'], 'mechanic');
+  if (document.schemaVersion !== 7 || document.kind !== 'mechanic' || document.workspaceId !== workspaceId) fail('DRAFT_VALIDATION_FAILED', 'mechanic 的版本、类型或 workspaceId 无效');
+  draftId(document.id, 'mechanic.id'); draftText(document.name, 'mechanic.name'); draftText(document.scope, 'mechanic.scope'); noDraftGeometry(document, 'mechanic');
+  const focused = uniqueIds(array(document.focusNodeIds, 'mechanic.focusNodeIds'), 'mechanic.focusNodeIds');
+  for (const id of focused) if (!nodes.has(id)) fail('DRAFT_VALIDATION_FAILED', `mechanic.focusNodeIds 引用不存在的概念：${id}`);
+  const pinned = uniqueIds(array(document.pinnedRuleIds, 'mechanic.pinnedRuleIds'), 'mechanic.pinnedRuleIds');
+  const ruleIds = new Set(rules.rules.map(rule => rule.id));
+  for (const id of pinned) if (!ruleIds.has(id)) fail('DRAFT_VALIDATION_FAILED', `mechanic.pinnedRuleIds 引用不存在的规则：${id}`);
 }
 function resolveNode(nodes, key) { const norm = key.trim().toLowerCase(); const id = nodes.find(node => node.id.toLowerCase() === norm); if (id) return { status: 'resolved', node: id, matchedBy: 'id' }; const candidates = nodes.filter(node => node.label?.trim().toLowerCase() === norm || (node.aliases ?? []).some(alias => alias.trim().toLowerCase() === norm)); if (candidates.length === 1) return { status: 'resolved', node: candidates[0], matchedBy: candidates[0].label?.trim().toLowerCase() === norm ? 'label' : 'alias' }; return candidates.length ? { status: 'ambiguous', candidates: candidates.map(node => ({ id: node.id, label: node.label })) } : { status: 'not_found' }; }
 function paths(edges, from, to, maxDepth = 16) { const out = new Map(); for (const edge of edges) (out.get(edge.source) ?? out.set(edge.source, []).get(edge.source)).push(edge); const queue = [{ ids: [from], steps: [] }], result = []; for (let i = 0; i < queue.length; i++) { const current = queue[i]; if (current.ids.at(-1) === to && current.steps.length) { result.push(current); continue; } if (current.steps.length >= maxDepth) continue; for (const edge of out.get(current.ids.at(-1)) ?? []) if (!current.ids.includes(edge.target)) queue.push({ ids: [...current.ids, edge.target], steps: [...current.steps, edge] }); } return result.sort((a,b) => a.steps.length - b.steps.length || a.ids.join('\0').localeCompare(b.ids.join('\0'))); }
@@ -150,7 +156,7 @@ function compact(path, map) {
 async function withLock(fn) { try { await writeFile(lock, String(process.pid), { flag: 'wx' }); } catch { fail('WORKSPACE_LOCKED', '已有 JSON 工具正在写入工作区'); } try { return await fn(); } finally { await rm(lock, { force: true }); } }
 const structuralCopy = value => {
   const copy = structuredClone(value);
-  copy.positions = {};
+  if ('positions' in copy) copy.positions = {};
   delete copy.projectionPositions;
   delete copy.routeCache;
   return copy;
@@ -163,54 +169,62 @@ async function openDraft(mechanicId, options) {
   if (mechanic && (options.name !== undefined || options.scope !== undefined || options.folder !== undefined)) fail('DRAFT_TARGET_EXISTS', `机制已存在：${mechanicId}；重新打开时不要提供 --name、--scope 或 --folder`);
   if (!mechanic && (!semanticId(mechanicId) || options.name === undefined || options.scope === undefined)) fail('DRAFT_CREATE_METADATA_REQUIRED', '新机制 draft open 必须同时提供 --mechanic、--name 与 --scope');
   if (!mechanic && targetFolder && !data.folders.includes(targetFolder)) fail('FOLDER_NOT_FOUND', `机制目录不存在：${targetFolder}`);
-  const document = mechanic?.value ?? { schemaVersion: 6, kind: 'mechanic', workspaceId: data.manifest.value.id, id: mechanicId,
-    name: text(options.name, '机制名称'), scope: text(options.scope, '机制范围'), nodeIds: [], edges: [], positions: {} };
+  const document = mechanic?.value ?? { schemaVersion: 7, kind: 'mechanic', workspaceId: data.manifest.value.id, id: mechanicId,
+    name: text(options.name, '机制名称'), scope: text(options.scope, '机制范围'), focusNodeIds: [], pinnedRuleIds: [], positions: {} };
   await mkdir(drafts, { recursive: true }); const id = randomUUID(), draftFolder = join(drafts, id); await mkdir(draftFolder);
-  const definitionsPath = join(draftFolder, 'definitions.graph.json'), mechanicPath = join(draftFolder, 'mechanic.json');
+  const definitionsPath = join(draftFolder, 'definitions.json'), rulesPath = join(draftFolder, 'rules.json'), mechanicPath = join(draftFolder, 'mechanic.json');
   await writeFile(definitionsPath, JSON.stringify(structuralCopy(data.definitions.value), null, 2) + '\n');
+  await writeFile(rulesPath, JSON.stringify(structuralCopy(data.rules.value), null, 2) + '\n');
   await writeFile(mechanicPath, JSON.stringify(structuralCopy(document), null, 2) + '\n');
-  const meta = { id, workspaceId: data.manifest.value.id, mechanicId, definitionsRevision: data.definitions.revision,
+  const meta = { id, workspaceId: data.manifest.value.id, mechanicId, definitionsRevision: data.definitions.revision, rulesRevision: data.rules.revision,
     mechanicRevision: mechanic?.revision ?? null, targetFile: mechanic?.path ?? join(mechanicDirectory(targetFolder), `${mechanicId}.mechanic.json`), created: !mechanic };
   await writeFile(join(draftFolder, 'draft.json'), JSON.stringify(meta, null, 2) + '\n');
-  return { draftId: id, draftPath: draftFolder, definitionsPath, mechanicPath, revision: data.revision, target: mechanic ? 'existing' : 'new',
+  return { draftId: id, draftPath: draftFolder, definitionsPath, rulesPath, mechanicPath, revision: data.revision, target: mechanic ? 'existing' : 'new',
     geometry: '已从草稿移除；保存时保留既有节点位置并清除过期路径缓存' };
 }
-async function saveDraft(id, validateOnly = false) { const folder = join(drafts, id); if (relative(drafts, folder).startsWith('..' + sep)) fail('DRAFT_NOT_FOUND', '草稿不存在'); const meta = (await parse(join(folder, 'draft.json'))).value, draftDefinitions = await parse(join(folder, 'definitions.graph.json')), draftMechanic = await parse(join(folder, 'mechanic.json'));
+async function saveDraft(id, validateOnly = false) { const folder = join(drafts, id); if (relative(drafts, folder).startsWith('..' + sep)) fail('DRAFT_NOT_FOUND', '草稿不存在'); const meta = (await parse(join(folder, 'draft.json'))).value, draftDefinitions = await parse(join(folder, 'definitions.json')), draftRules = await parse(join(folder, 'rules.json')), draftMechanic = await parse(join(folder, 'mechanic.json'));
   return withLock(async () => {
     const data = await snapshot(), mechanic = data.mechanics.find(item => item.value.id === meta.mechanicId), creating = meta.created === true;
-    if ((creating ? Boolean(mechanic) : !mechanic) || data.manifest.value.id !== meta.workspaceId || data.definitions.revision !== meta.definitionsRevision || (!creating && mechanic.revision !== meta.mechanicRevision)) fail('RESOURCE_REVISION_CONFLICT', '保存前 canonical 已变化；草稿已保留');
+    if ((creating ? Boolean(mechanic) : !mechanic) || data.manifest.value.id !== meta.workspaceId || data.definitions.revision !== meta.definitionsRevision || data.rules.revision !== meta.rulesRevision || (!creating && mechanic.revision !== meta.mechanicRevision)) fail('RESOURCE_REVISION_CONFLICT', '保存前 canonical 已变化；草稿已保留');
     if (draftMechanic.value.id !== meta.mechanicId) fail('DRAFT_IDENTITY_MISMATCH', '草稿机制 ID 与目标不一致');
     const nodes = validateDefinitions(draftDefinitions.value, meta.workspaceId);
-    validateMechanic(draftMechanic.value, meta.workspaceId, nodes, data.mechanics.filter(item => item.value.id !== meta.mechanicId));
+    validateRules(draftRules.value, meta.workspaceId, nodes);
+    validateMechanic(draftMechanic.value, meta.workspaceId, nodes, draftRules.value);
     if (validateOnly) return { valid: true, draftId: id, revision: data.revision };
-    const definitions = structuredClone(draftDefinitions.value), document = structuredClone(draftMechanic.value);
+    const definitions = structuredClone(draftDefinitions.value), rules = structuredClone(draftRules.value), document = structuredClone(draftMechanic.value);
     definitions.positions = retainedPositions(data.definitions.value.positions, new Set(definitions.nodes.map(node => node.id)));
-    document.positions = retainedPositions(mechanic?.value.positions, new Set(document.nodeIds));
+    const projectedNodeIds = new Set([...document.focusNodeIds, ...rules.rules.filter(rule => document.focusNodeIds.includes(rule.source) || document.focusNodeIds.includes(rule.target) || document.pinnedRuleIds.includes(rule.id)).flatMap(rule => [rule.source, rule.target])]);
+    document.positions = retainedPositions(mechanic?.value.positions, projectedNodeIds);
     const targetMechanicPath = meta.targetFile;
-    const temporaryDefinitions = data.definitions.path + '.' + randomUUID() + '.tmp', temporaryMechanic = targetMechanicPath + '.' + randomUUID() + '.tmp';
-    const backupDefinitions = data.definitions.path + '.' + randomUUID() + '.backup', backupMechanic = targetMechanicPath + '.' + randomUUID() + '.backup';
-    let definitionsBacked = false, mechanicBacked = false, definitionsCommitted = false, mechanicCommitted = false;
+    const temporaryDefinitions = data.definitions.path + '.' + randomUUID() + '.tmp', temporaryRules = data.rules.path + '.' + randomUUID() + '.tmp', temporaryMechanic = targetMechanicPath + '.' + randomUUID() + '.tmp';
+    const backupDefinitions = data.definitions.path + '.' + randomUUID() + '.backup', backupRules = data.rules.path + '.' + randomUUID() + '.backup', backupMechanic = targetMechanicPath + '.' + randomUUID() + '.backup';
+    let definitionsBacked = false, rulesBacked = false, mechanicBacked = false, definitionsCommitted = false, rulesCommitted = false, mechanicCommitted = false;
     try {
       await writeFile(temporaryDefinitions, JSON.stringify(definitions, null, 2) + '\n', { flag: 'wx' });
+      await writeFile(temporaryRules, JSON.stringify(rules, null, 2) + '\n', { flag: 'wx' });
       await writeFile(temporaryMechanic, JSON.stringify(document, null, 2) + '\n', { flag: 'wx' });
       await rename(data.definitions.path, backupDefinitions); definitionsBacked = true;
+      await rename(data.rules.path, backupRules); rulesBacked = true;
       if (mechanic) { await rename(mechanic.path, backupMechanic); mechanicBacked = true; }
       await rename(temporaryDefinitions, data.definitions.path); definitionsCommitted = true;
+      await rename(temporaryRules, data.rules.path); rulesCommitted = true;
       await rename(temporaryMechanic, targetMechanicPath); mechanicCommitted = true;
       const verified = await snapshot();
       if (!verified.mechanics.some(item => item.value.id === meta.mechanicId)) fail('SAVE_UNCERTAIN', '提交后回读未找到目标机制');
-      await rm(backupDefinitions, { force: true }); await rm(backupMechanic, { force: true });
+      await rm(backupDefinitions, { force: true }); await rm(backupRules, { force: true }); await rm(backupMechanic, { force: true });
       await rm(folder, { recursive: true, force: true });
       return { saved: true, revision: verified.revision, note: '已校验并原子提交 JSON；保留既有节点位置，清除过期连线路径缓存；未执行网页排版或文档导出。' };
     } catch (error) {
       try {
         if (definitionsCommitted) await rm(data.definitions.path, { force: true });
+        if (rulesCommitted) await rm(data.rules.path, { force: true });
         if (mechanicCommitted) await rm(targetMechanicPath, { force: true });
         if (definitionsBacked) await rename(backupDefinitions, data.definitions.path);
+        if (rulesBacked) await rename(backupRules, data.rules.path);
         if (mechanicBacked) await rename(backupMechanic, targetMechanicPath);
       } catch (rollback) { fail('SAVE_ROLLBACK_FAILED', `草稿保存失败且回滚失败：${rollback.message}`); }
       throw error;
-    } finally { await rm(temporaryDefinitions, { force: true }); await rm(temporaryMechanic, { force: true }); }
+    } finally { await rm(temporaryDefinitions, { force: true }); await rm(temporaryRules, { force: true }); await rm(temporaryMechanic, { force: true }); }
   }); }
 async function main() { const { positionals, options } = args(process.argv.slice(2)), [command, action] = positionals; if (!command) fail('TOOL_INVALID', '需要命令'); const data = ['scopes','search','node','impact'].includes(command) ? await snapshot() : null;
   if (command === 'guide') return guide();

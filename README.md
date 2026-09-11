@@ -1,8 +1,10 @@
-# Game-Graph
+# Mechanics
+
+> 规则、概念与关系解释工具。
 
 用概念节点、正向影响、负向影响、随机影响和 `specializes` 结构关系分析规则。限定词只缩小某条规则端点的适用范围，不产生新的概念或子类；`tags` 仅用于分类和搜索。统一节点定义图提供共享概念；独立机制图描述基础规则、关卡、敌人或手牌；多张机制图可以组合浏览。
 
-**当前版本 0.7.0 可从 npm 安装为 CLI，并启动网页编辑器。** 顶部切换「概念表｜机制图」；侧栏上方是视图，下方是可折叠、筛选的机制目录，两区的「＋」分别新建对应文件。概念表维护共享定义，机制文件引用概念并编辑关系，磁盘后缀仍为 `.mechanic.json`。
+**当前版本可从 npm 安装为 CLI，并启动网页编辑器。** 顶部切换「概念表｜机制图」；侧栏上方是视图，下方是可折叠、筛选的机制目录，两区的「＋」分别新建对应文件。概念表维护共享定义，机制文件引用概念并编辑关系，磁盘后缀仍为 `.mechanic.json`。
 
 在机制的「引用概念」窗口可以按名称、英文语义 ID 或自然语言别名搜索已有概念，也可直接新建。持久化概念、机制、视图和规则 ID 使用稳定的小写英文 kebab-case，不再自动生成 UUID 或随机十六进制片段。规则 ID 由有向端点固定为 `<source>-2-<target>`；同一机制内同一有向端点对只允许一条规则，再次连接应编辑原规则。
 
@@ -19,19 +21,19 @@
 需要 Node.js 24+。从 npm 安装：
 
 ```sh
-npm install -g game-graph@0.7.0
-game-graph web
+npm install -g @veewo/mechanics
+mech web
 ```
 
-`init` 在项目内创建固定 `.game-graph`，并把包内 `game-mechanic-search`、`game-mechanic-modeling` 注册到项目 `.agents/skills/`。它不覆盖已有工作区或内容不同的同名 skill；相同版本视为已注册。工作区 ID 默认取项目目录名；目录名不符合英文语义 ID 时必须显式传 `--id`。`web` 可不带项目启动，再从网页打开或初始化项目；`validate`、`catalog`、`root` 省略 `--project` 时向上寻找最近的 `.game-graph/workspace.json`。
+`init` 在项目内创建固定 `.mechanics`，并把包内 `mechanics-search`、`mechanics-modeling` 注册到项目 `.agents/skills/`。它不覆盖已有工作区或内容不同的同名 skill；相同版本视为已注册。工作区 ID 默认取项目目录名；目录名不符合英文语义 ID 时必须显式传 `--id`。`web` 可不带项目启动，再从网页打开或初始化项目；`validate`、`catalog`、`root` 省略 `--project` 时向上寻找最近的 `.mechanics/workspace.json`。
 
-服务只在项目固定 `.game-graph` 中递归发现 `*.mechanic.json` 和 `*.view.json`，支持中文目录和空目录。统一定义只读取配置指定的唯一文件，机制按稳定 ID 接合。正式协议为 workspace v8、mechanic/definitions v4、view v3；旧协议、旧文件类型或旧字段严格失败，不提供运行时兼容。v7 资料仅能用 `game-graph migrate --from 7 --to 8 --project <项目目录>` 预览后显式执行升级。详见 [CLI 与工作区](docs/CLI与工作区.md)。
+服务只在项目固定 `.mechanics` 中递归发现 `*.mechanic.json` 和 `*.view.json`，支持中文目录和空目录。统一定义只读取配置指定的唯一文件，机制按稳定 ID 接合。正式协议为 workspace v10、mechanic v6、definitions v5、view v3；旧协议、旧文件类型或旧字段严格失败，不提供运行时兼容。旧根目录只能用 `mech migrate-root --project <项目目录>` 预览后显式执行切换。详见 [CLI 与工作区](docs/CLI与工作区.md)。
 
 ## 从源码启动
 
 CLI 同时提供只读 `agent guide/scopes/search/graph/node/impact` 与受约束 `agent concept/rule` mutation。Agent 先用 guide 理解符号与模型边界，再搜索概念、按方向与距离查询相关机制；只有用户明确要求建模写入时才使用 mutation。默认语义 JSON，支持易读中文文本、整体/资源版本约束及在线服务。声明、推导与未知项明确分开。用法见 [Agent 查询与受约束写入](docs/Agent查询接口.md)。
 
-每个项目还会在 `agentExportPath` 指定的目录（默认 `game-mechanics`）生成 catalog v5 的 `AGENTS.md`、`README.md`、唯一的 `concepts.md`，以及 `folders/<机制文件夹>/index.md`。文件夹页只汇总直接所属的机制图，并只链接子文件夹；概念仍是全局共享词典，不会随机制图复制成单独文件。它们是排除坐标、端口、连线路径和视图状态的只读 Agent 文档；canonical definitions/mechanics 仍是唯一可编辑真相。文档只投影概念、声明规则与已填写的规则文字，不由程序合成机制流程说明。
+每个项目还会在 `agentExportPath` 指定的目录（默认 `mechanics`）生成 `AGENTS.md`、`README.md`、唯一的 `concepts.md`，以及 `folders/<机制文件夹>/index.md`。文件夹页只汇总直接所属的机制图，并只链接子文件夹；概念仍是全局共享词典，不会随机制图复制成单独文件。它们是排除坐标、端口、连线路径和视图状态的只读 Agent 文档；canonical definitions/mechanics 仍是唯一可编辑真相。文档只投影概念、声明规则与已填写的规则文字，不由程序合成机制流程说明。
 
 需要 Node.js 24 或更高版本。工具没有宿主游戏依赖。
 
@@ -55,7 +57,7 @@ src/domain/          通用图算法与工作区校验
 src/server/          本地文件读写、版本冲突与 HTTP 服务
 src/web/             文件目录、图层和 SVG 节点编辑器
 schemas/             JSON 文件结构的唯一合同
-skills/              init 注册到项目的 Game-Graph Codex skill 唯一维护源
+skills/              init 注册到项目的 Mechanics Codex skill 唯一维护源
 examples/card-game/  通用演示，不含宿主项目数据
 tests/               协议、图语义、文件边界与 HTTP 验证
 docs/                产品、架构、协议和后续实施切片
@@ -65,14 +67,14 @@ docs/                产品、架构、协议和后续实施切片
 
 ```text
 某个游戏项目/
-├── .game-graph/
+├── .mechanics/
 │   ├── workspace.json
 │   ├── definitions.graph.json
 │   └── mechanics/
 │       ├── basic-rules.mechanic.json
 │       ├── encounter.mechanic.json
 │       └── encounter-with-hand.view.json
-└── game-mechanics/             默认，可由 agentExportPath 改为项目内其他目录
+└── mechanics/                  默认，可由 agentExportPath 改为项目内其他目录
 │   ├── README.md
 │   ├── AGENTS.md
 │   ├── concepts.md

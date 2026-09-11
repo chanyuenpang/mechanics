@@ -12,13 +12,14 @@ import { validateWorkspace } from '../src/domain/validate.mjs';
 import { copyExampleFixture } from './example-fixture.mjs';
 
 const example = fileURLToPath(new URL('../examples/card-game/', import.meta.url));
-const exampleWorkspace = join(example, '.game-graph');
+const exampleWorkspace = join(example, '.mechanics');
 
 async function fixture(t) {
   const temp = await mkdtemp(join(tmpdir(), 'game-graph-catalog-'));
   t.after(() => rm(temp, { recursive: true, force: true }));
   const projectRoot = join(temp, 'workspace'); await copyExampleFixture(projectRoot);
-  const root = join(projectRoot, '.game-graph'), exportRoot = join(projectRoot, 'game-mechanics');
+  const root = join(projectRoot, '.mechanics'), exportRoot = join(projectRoot, 'mechanics');
+  await rm(exportRoot, { recursive: true, force: true }); await mkdir(exportRoot);
   return { temp, projectRoot, root, exportRoot, workspace: await readWorkspace(root) };
 }
 
@@ -134,12 +135,13 @@ test('文档版本涵盖名称、scope 与路径，语义版本忽略分类，�
   assert.notEqual(buildCatalog(moved).semanticRevision, before.semanticRevision);
 });
 
-test('发布转换旧逐概念文档、保存刷新词典，浏览器从磁盘校验并读取文件夹或概念锚点', async t => {
+test('未标记的旧文档拒绝普通发布；当前词典随 canonical 保存刷新', async t => {
   const { root, exportRoot, workspace } = await fixture(t);
-  // 显式构造旧受管目录，验证本轮转换无需改写 canonical。
   await rm(exportRoot, { recursive: true, force: true }); await mkdir(join(exportRoot, 'concepts'), { recursive: true });
-  await writeFile(join(exportRoot, 'AGENTS.md'), '# Game-Graph Agent 文档使用规则\n');
+  await writeFile(join(exportRoot, 'AGENTS.md'), '# Mechanics Agent 文档使用规则\n');
   await writeFile(join(exportRoot, 'README.md'), '旧索引'); await writeFile(join(exportRoot, 'concepts/health.md'), '旧概念');
+  await assert.rejects(publishCatalog(exportRoot, workspace), { code: 'EXPORT_ROOT_NOT_OWNED' });
+  await rm(exportRoot, { recursive: true, force: true }); await mkdir(exportRoot, { recursive: true });
   await publishCatalog(exportRoot, workspace);
   assert.deepEqual((await readdir(exportRoot)).sort(), ['AGENTS.md', 'README.md', 'concepts.md', 'mechanics']);
   await assert.rejects(access(join(exportRoot, 'concepts')), { code: 'ENOENT' });

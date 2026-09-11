@@ -31,7 +31,7 @@ const iconAction = (name, run, className = 'icon-button') => {
 function toggleWithKeyboard(event) {
   if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.currentTarget.click(); }
 }
-let workspace, activeId = null, draft, baseline, visible = [], viewRegistrations = [], viewPositions = {}, scopedPositions = {}, viewRouteCache = null;
+let workspace, activeId = null, draft, baseline, visible = [], viewRegistrations = [], viewFocusNodeIds = [], viewPinnedRuleIds = [], viewPositions = {}, scopedPositions = {}, viewRouteCache = null;
 let selection = null, graph, original, history = [], future = [], pending = 0, viewState = 'saved', writeQueue = Promise.resolve();
 let screen = 'mechanic', viewId = null, opening = false, arranging = false, autosave, legacy = false;
 let computeState = null, arrangeSequence = 0, geometryEpoch = 0;
@@ -55,12 +55,12 @@ const uiPreference = (key, fallback) => {
   try { const value = localStorage.getItem(key); return value === null ? fallback : value === 'true'; } catch { return fallback; }
 };
 const saveUiPreference = (key, value) => { try { localStorage.setItem(key, String(value)); } catch {} };
-autoCloseEditorTabs = uiPreference('game-graph:auto-close-editor-tabs', false);
+autoCloseEditorTabs = uiPreference('mechanics:auto-close-editor-tabs', false);
 const persistTabState = () => persistRecentState();
-let inspectorCollapsed = uiPreference('game-graph:inspector-collapsed', false);
-let hoverTooltipsEnabled = uiPreference('game-graph:hover-tooltips-enabled', true);
+let inspectorCollapsed = uiPreference('mechanics:inspector-collapsed', false);
+let hoverTooltipsEnabled = uiPreference('mechanics:hover-tooltips-enabled', true);
 let hoverTooltipsTemporarilyEnabled = false;
-let referencesCollapsed = uiPreference('game-graph:references-collapsed', false);
+let referencesCollapsed = uiPreference('mechanics:references-collapsed', false);
 // 导航页、筛选、目录展开和最近资源只属于本次浏览会话，不写入图文件。
 const sidebarState = {
   page: 'views', detailViewId: null, memberQuery: '',
@@ -106,7 +106,7 @@ function renderCanvasFilePath() {
   control.title = `点击复制路径：${path}`;
   control.setAttribute('aria-label', `复制文件路径：${path}`);
 }
-const viewSnapshot = () => ({ mechanicRegistrations: viewRegistrations.map(item => clone(item)), collapsedNodeIds: [], positions: clone(viewPositions), projectionPositions: clone(scopedPositions), ...(viewRouteCache ? { routeCache: clone(viewRouteCache) } : {}), structuralPresentation: workspace.views.find(item => item.id === viewId)?.structuralPresentation });
+const viewSnapshot = () => ({ mechanicRegistrations: viewRegistrations.map(item => clone(item)), focusNodeIds: clone(viewFocusNodeIds), pinnedRuleIds: clone(viewPinnedRuleIds), collapsedNodeIds: [], positions: clone(viewPositions), projectionPositions: clone(scopedPositions), ...(viewRouteCache ? { routeCache: clone(viewRouteCache) } : {}), structuralPresentation: workspace.views.find(item => item.id === viewId)?.structuralPresentation });
 const contextKey = () => viewId !== null ? 'view/' + viewId : legacy ? 'legacy' : 'mechanic/' + activeId;
 const rememberCamera = () => { if (!definitionMode()) cameras.set(contextKey(), clone(canvas.camera)); };
 const restoreCamera = () => { if (cameras.has(contextKey())) { canvas.camera = clone(cameras.get(contextKey())); canvas.transform(); } };
@@ -206,7 +206,7 @@ async function promptEditorTabLimit() {
     container.append(el('p', `标签页最多保留 ${EDITOR_TAB_LIMIT} 个。请双击标签标题关闭不再需要的文件后再打开新文件。`, 'note'));
     const label = el('label', undefined, 'choice'), input = el('input'); input.type = 'checkbox'; input.checked = enabled;
     input.onchange = () => { enabled = input.checked; }; label.append(input, el('span', '以后自动关闭最早打开的文件')); container.append(label);
-  }, () => { if (!enabled) return false; autoCloseEditorTabs = true; saveUiPreference('game-graph:auto-close-editor-tabs', true); persistTabState(); return true; }, '启用自动关闭');
+  }, () => { if (!enabled) return false; autoCloseEditorTabs = true; saveUiPreference('mechanics:auto-close-editor-tabs', true); persistTabState(); return true; }, '启用自动关闭');
 }
 async function openEditorTab(tab) {
   if (!workspace || !await guard()) return;
@@ -389,6 +389,8 @@ function edit(change, { inspect = true, refresh = true, topology = true } = {}) 
 }
 function assignSnapshot(snapshot) {
   viewRegistrations = viewId === null ? snapshot.graphIds.map(mechanicId => ({ mechanicId, visible: true })) : snapshot.mechanicRegistrations.map(item => clone(item));
+  viewFocusNodeIds = clone(snapshot.focusNodeIds ?? []);
+  viewPinnedRuleIds = clone(snapshot.pinnedRuleIds ?? []);
   visible = viewRegistrations.filter(item => item.visible).map(item => item.mechanicId);
   viewPositions = clone(snapshot.positions);
   scopedPositions = clone(snapshot.projectionPositions ?? {});
@@ -443,22 +445,22 @@ function qualifiersFromRows(rows) {
     return { key, value: qualifierValueFromForm(row) };
   });
 }
-function setEdgeQualifiers(id, side, qualifiers) {
-  let nextId = id;
-  const changed = edit(data => {
-    const edge = data.edges.find(item => item.id === id);
-    if (!edge) throw new Error('连线已不存在，请重新读取。');
+async function updateGlobalRule(id, change) {
+  const rules = clone(workspace.rules), rule = rules.rules.find(item => item.id === id);
+  if (!rule) throw new Error('规则已不存在，请重新读取。');
+  change(rule);
+  await write(revision => api('/api/save', { revision, kind: 'rules', document: rules }));
+  selection = { type: 'edge', id }; render();
+}
+async function setEdgeQualifiers(id, side, qualifiers) {
+  await updateGlobalRule(id, edge => {
     if (qualifiers.length) edge[side] = qualifiers;
     else delete edge[side];
-    const used = new Set(data.edges.filter(item => item.id !== id).map(item => item.id));
-    nextId = semanticRuleId(edge.source, edge.target, used, edge.sourceQualifiers, edge.targetQualifiers);
-    edge.id = nextId;
-  }, { refresh: false });
-  if (changed) { selection = { type: 'edge', id: activeId + '/' + nextId }; render(); }
-  return changed;
+  });
+  return true;
 }
 async function editEdgeQualifiers(id, side) {
-  const edge = draft?.edges.find(item => item.id === id);
+  const edge = workspace.rules.rules.find(item => item.id === id);
   if (!edge || edge.relation === 'specializes') return;
   const sideLabel = side === 'sourceQualifiers' ? '源参与者' : '目标参与者';
   const form = { rows: qualifierRowsFromCanonical(edge[side]) };
@@ -648,6 +650,17 @@ async function addViewMechanics() {
     editView(snapshot => Object.assign(snapshot, next));
   }, '添加到视图');
 }
+async function addViewConcepts() {
+  if (!viewMode() || busy() || autosave.blocked) return;
+  const session = { query: '', selected: new Set(viewFocusNodeIds), candidates: [], form: null, commit: null };
+  let picker;
+  await dialog('添加已有概念', container => {
+    picker = new ConceptPicker(container, session, workspace.definitions, [], {
+      allowCreate: false,
+      status: (text, enabled) => { $('confirm-dialog').textContent = text; $('confirm-dialog').disabled = !enabled; },
+    });
+  }, () => editView(snapshot => { snapshot.focusNodeIds = [...session.selected].sort(); }), '更新视图概念', { settled: () => picker.updateStatus() });
+}
 function rememberRecent(kind, id) {
   if (!id) return;
   const key = kind === 'view' ? 'recentViews' : 'recentMechanics';
@@ -698,7 +711,7 @@ function showDropPreview(heading) {
   heading.classList.add('drop-target'); heading.dataset.dropPreview = '放开以移入';
 }
 function attachMechanicDropTarget(target, targetFolder) {
-  const dragId = event => draggingMechanicId || event.dataTransfer.getData('application/x-game-graph-mechanic');
+  const dragId = event => draggingMechanicId || event.dataTransfer.getData('application/x-mechanics-mechanic');
   const accepts = event => canPreviewMechanicMove(dragId(event), targetFolder);
   target.ondragenter = event => { if (!accepts(event)) { event.dataTransfer.dropEffect = 'none'; return; } event.preventDefault(); showDropPreview(target); };
   target.ondragover = event => { if (!accepts(event)) { event.dataTransfer.dropEffect = 'none'; return; } event.preventDefault(); event.dataTransfer.dropEffect = 'move'; showDropPreview(target); };
@@ -719,7 +732,7 @@ function renderResourceRow(item, kind) {
     row.ondragstart = event => {
       if (!canPreviewMechanicMove(item.id, '__any_target__')) { event.preventDefault(); return; }
       draggingMechanicId = item.id; row.classList.add('is-dragging'); clearDropPreview();
-      event.dataTransfer.setData('application/x-game-graph-mechanic', item.id); event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('application/x-mechanics-mechanic', item.id); event.dataTransfer.effectAllowed = 'move';
     };
     row.ondragend = () => { draggingMechanicId = null; row.classList.remove('is-dragging'); clearDropPreview(); };
     attachMechanicDropTarget(row, mechanismFolderPath(item.fullPath.slice(0, item.fullPath.lastIndexOf('/'))));
@@ -751,7 +764,9 @@ function renderViewDetail(container, view) {
   container.append(heading);
   const summary = el('div', undefined, 'view-detail-summary');
   summary.append(el('span', `${registrations.filter(item => item.visible).length} 个可见`), el('span', `${registrations.length} 个已注册`));
-  const add = button('添加机制', addViewMechanics, 'view-detail-add'); add.prepend(icon('plus')); add.disabled = source.id !== viewId; summary.append(add); container.append(summary);
+  const add = button('添加机制', addViewMechanics, 'view-detail-add'); add.prepend(icon('plus')); add.disabled = source.id !== viewId;
+  const addConcept = button('添加概念', addViewConcepts, 'view-detail-add'); addConcept.prepend(icon('plus')); addConcept.disabled = source.id !== viewId;
+  summary.append(add, addConcept); container.append(summary);
   if (source.id !== viewId) container.append(el('p', '先打开此视图，才能修改 Visible、顺序和注册内容。', 'sidebar-note'));
   const list = el('div', undefined, 'view-detail-members'); container.append(list);
   if (registrations.length > 8) {
@@ -986,23 +1001,20 @@ function inspect() {
     if (edge.sourceQualifiers?.length) detail(panel, '源参与者限定', qualifierText(edge.sourceQualifiers));
     if (edge.targetQualifiers?.length) detail(panel, '目标参与者限定', qualifierText(edge.targetQualifiers));
     if (edge.relation === 'specializes') detail(panel, '特化 / 是某种语义', '具体概念沿箭头指向上位概念，表示“是某种”；不写入影响符号或继承设置。');
-    const owned = edge.steps.length === 1 && edge.steps[0].graphId === activeId;
+    const owned = !viewMode() && edge.steps.length === 1;
     if (owned) {
-      const id = edge.steps[0].edgeId, originalEdge = draft.edges.find(item => item.id === id);
+      const id = edge.steps[0].ruleId ?? edge.id, originalEdge = workspace.rules.rules.find(item => item.id === id);
       field(panel, '关系', originalEdge.relation === 'specializes' ? 'specializes' : String(originalEdge.sign), {
         options: [['1', '＋ 正向影响'], ['-1', '− 负向影响'], ['random', '？ 随机影响'], ['specializes', 'is-a 特化 / 是某种（具体 → 上位）']],
         onChange: value => {
-          const changed = edit(data => {
-            const item = data.edges.find(item => item.id === id);
+          void updateGlobalRule(id, item => {
             if (value === 'specializes') { item.relation = 'specializes'; delete item.sign; delete item.inheritance; delete item.sourceQualifiers; delete item.targetQualifiers; }
             else { item.sign = value === 'random' ? 'random' : Number(value); item.relation = 'influence'; item.inheritance ??= { mode: 'none' }; }
-          });
-          if (changed) selectRelation(value === 'specializes' || value === 'random' ? value : Number(value), { beginLink: false });
-          else inspect();
+          }).then(() => selectRelation(value === 'specializes' || value === 'random' ? value : Number(value), { beginLink: false })).catch(showError);
         },
       });
       if (originalEdge.relation !== 'specializes') {
-        const ruleText = field(panel, '规则（可选）', originalEdge.ruleText ?? '', { multiline: true, onChange: value => edit(data => { data.edges.find(item => item.id === id).ruleText = value; }, { inspect: false }) });
+        const ruleText = field(panel, '规则（可选）', originalEdge.ruleText ?? '', { multiline: true, onChange: value => { void updateGlobalRule(id, item => { item.ruleText = value; }).catch(showError); } });
         ruleText.maxLength = 8000;
         ruleText.placeholder = '填写规则；如有条件约束，请一并写入。';
         const qualifierActions = el('div', undefined, 'property-actions');
@@ -1017,16 +1029,15 @@ function inspect() {
         }
         panel.append(qualifierActions);
       }
-      const customData = field(panel, '自定义文本（不参与建模）', originalEdge.customData ?? '', { multiline: true, onChange: value => edit(data => {
-        const item = data.edges.find(item => item.id === id); if (value) item.customData = value; else delete item.customData;
-      }, { inspect: false }) });
+      const customData = field(panel, '自定义文本（不参与建模）', originalEdge.customData ?? '', { multiline: true, onChange: value => { void updateGlobalRule(id, item => {
+        if (value) item.customData = value; else delete item.customData;
+      }).catch(showError); } });
       customData.maxLength = 16000;
       panel.append(button('删除此连线', () => removeSelection(), 'danger'));
     } else panel.append(el('p', '视图中的源规则只读；请打开对应机制文件编辑。', 'note'));
     edge.steps.forEach(step => {
-      detail(panel, graphName(step.graphId) + ' / ' + step.edgeId, name(step.source) + arrow(step) + name(step.target)
+      detail(panel, '全局规则 / ' + (step.ruleId ?? step.id), name(step.source) + arrow(step) + name(step.target)
         + (step.relation === 'specializes' ? '\n特化 / 是某种关系' : step.ruleText?.trim() ? '\n规则：' + step.ruleText : '\n规则：未填写'));
-      if (step.graphId !== activeId) panel.append(button('编辑源机制：' + graphName(step.graphId), () => openLayer(step.graphId)));
     });
     return;
   }
@@ -1051,9 +1062,9 @@ function inspect() {
   if (node.customData) detail(panel, '自定义文本', node.customData);
   detail(panel, 'Agent 锁', node.agentLocked ? '已锁定；Agent 不能修改或删除此概念' : '未锁定');
   if (!legacy) panel.append(button('修改概念', () => editConcept(node.id)));
-  if (draft && !draft.nodeIds.includes(node.id)) panel.append(button('引用到当前图层', () => edit(data => { data.nodeIds.push(node.id); })));
+  if (draft && !draft.focusNodeIds.includes(node.id)) panel.append(button('引用到当前图层', () => edit(data => { data.focusNodeIds.push(node.id); })));
   const actions = el('div', undefined, 'property-actions');
-  if (draft?.nodeIds.includes(node.id)) actions.append(button('移出当前图层', removeSelection, 'danger'));
+  if (draft?.focusNodeIds.includes(node.id)) actions.append(button('移出当前图层', removeSelection, 'danger'));
   panel.append(actions);
   const downstream = downstreamNodes(original, node.id);
   if (!downstream.length) panel.append(el('p', '当前范围内没有下游节点', 'note'));
@@ -1124,15 +1135,23 @@ async function removeSelection() {
   if (!selection || busy() || viewMode() || legacy || autosave.blocked) return;
   if (selection.type === 'edge') {
     const edge = graph.edges.find(item => item.id === selection.id);
-    if (edge?.steps.length !== 1 || edge.steps[0].graphId !== activeId) return;
-    const id = edge.steps[0].edgeId; selection = null; edit(data => { data.edges = data.edges.filter(item => item.id !== id); }); return;
+    if (edge?.steps.length !== 1) return;
+    const id = edge.steps[0].ruleId ?? edge.id;
+    const accepted = await dialog('删除全局规则？', container => {
+      container.append(el('p', '规则会从 rules.json 删除，并同步移除所有机制图和视图中的固定引用；概念本身不会删除。', 'note'));
+    }, () => true, '删除规则');
+    if (!accepted) return;
+    selection = null;
+    await write(revision => api('/api/rules/delete', { revision, ruleId: id }));
+    render();
+    return;
   }
   if (selection.type !== 'node') return;
   const id = selection.id;
   if (definitionMode()) {
-    const owners = workspace.mechanics.filter(item => item.nodeIds.includes(id));
+    const owners = workspace.mechanics.filter(item => item.focusNodeIds.includes(id));
     if (owners.length) throw new Error('节点仍被以下图层引用，不能删除定义：' + owners.map(item => item.name).join('、'));
-  } else if (!draft?.nodeIds.includes(id)) return;
+  } else if (!draft?.focusNodeIds.includes(id)) return;
   const accepted = await dialog(definitionMode() ? '确认删除概念？' : '移出当前图层？', container => {
     container.append(el('p', definitionMode() ? '将删除“' + name(id) + '”的共享定义。此操作会在保存后生效；删除前仍会检查机制和视图引用。' : '移除 ' + name(id) + ' 以及当前图层中连接它的关系。其他图层和共享定义不变。', 'note'));
   }, () => true, definitionMode() ? '删除概念' : '确认移除');
@@ -1140,7 +1159,7 @@ async function removeSelection() {
   selection = null;
   edit(data => {
     if (definitionMode()) data.nodes = data.nodes.filter(item => item.id !== id);
-    else { data.nodeIds = data.nodeIds.filter(item => item !== id); data.edges = data.edges.filter(item => item.source !== id && item.target !== id); }
+    else data.focusNodeIds = data.focusNodeIds.filter(item => item !== id);
     delete data.positions[id];
   });
 }
@@ -1154,7 +1173,7 @@ async function addNode() {
   $('dialog').classList.add('concept-dialog');
   try {
     await dialog('概念节点', container => {
-      picker = new ConceptPicker(container, session, workspace.definitions, draft.nodeIds, {
+      picker = new ConceptPicker(container, session, workspace.definitions, draft.focusNodeIds, {
         status: (text, enabled) => { $('confirm-dialog').textContent = text; $('confirm-dialog').disabled = !enabled; },
         abandon: () => { referenceSession = null; $('dialog').close('cancel'); },
         recover: async () => {
@@ -1330,7 +1349,7 @@ async function newGraph(defaultDirectory = 'mechanics') {
     for (const path of ['.', ...workspace.directories]) { const option = el('option'); option.value = path; choices.append(option); }
     container.append(choices, el('p', '保存为 <相对目录>/<ID>.mechanic.json。支持中文和多层目录；填 . 表示工作区根。', 'note'));
   }, async () => {
-    const document = { schemaVersion: 6, kind: 'mechanic', workspaceId: workspace.manifest.id, id: id.value, name: label.value.trim(), scope: scope.value.trim(), nodeIds: [], edges: [], positions: {} };
+    const document = { schemaVersion: 7, kind: 'mechanic', workspaceId: workspace.manifest.id, id: id.value, name: label.value.trim(), scope: scope.value.trim(), focusNodeIds: [], pinnedRuleIds: [], positions: {} };
     const parent = directory.value.trim(), file = (parent === '.' ? '' : parent + '/') + document.id + '.mechanic.json';
     await write(revision => api('/api/mechanics', { revision, document, file }));
     // 新文件已存在后，打开失败不能自动重复创建。
@@ -1372,21 +1391,23 @@ async function addTerm() {
 }
 async function createRule(source, target, relation) {
   if (busy() || definitionMode() || viewMode() || activeId === null) return false;
-  if (!draft.nodeIds.includes(source) || !draft.nodeIds.includes(target)) throw new Error('请先把两个节点引用到当前图层，再建立此图层的关系。');
-  if (draft.edges.some(edge => edge.source === source && edge.target === target)) {
+  if (!draft.focusNodeIds.includes(source) || !draft.focusNodeIds.includes(target)) throw new Error('请先把两个节点引用到当前机制图，再建立关系。');
+  if (workspace.rules.rules.some(edge => edge.source === source && edge.target === target)) {
     showError('这两个概念之间已有同向规则；请编辑现有规则。');
     return false;
   }
-  const mechanicId = activeId, id = semanticRuleId(source, target, new Set(draft.edges.map(edge => edge.id)));
-  // 双击设定起点后，点击目标立即创建关系；影响关系可在边属性中补充规则文字，is-a 自身即为结构规则。
-  const changed = edit(data => {
-    if (data.edges.some(edge => edge.source === source && edge.target === target)) throw new Error('这两个概念之间已经有规则，请编辑现有规则。');
-    data.edges.push({ id, source, target, ...(relation === 'specializes' ? { relation: 'specializes' } : { relation: 'influence', sign: relation, inheritance: { mode: 'none' }, ruleText: '' }) });
+  const id = semanticRuleId(source, target, new Set(workspace.rules.rules.map(edge => edge.id)));
+  const rules = clone(workspace.rules);
+  rules.rules.push({ id, source, target, ...(relation === 'specializes' ? { relation: 'specializes' } : { relation: 'influence', sign: relation, inheritance: { mode: 'none' }, ruleText: '' }) });
+  const mechanic = clone(draft);
+  for (const nodeId of [source, target]) if (!mechanic.focusNodeIds.includes(nodeId)) mechanic.focusNodeIds.push(nodeId);
+  if (!mechanic.pinnedRuleIds.includes(id)) mechanic.pinnedRuleIds.push(id);
+  await write(async revision => {
+    return api('/api/rules-and-mechanic', { revision, rules, mechanicId: activeId, mechanic });
   });
-  if (changed) {
-    selectRelation(relation, { beginLink: false }); setMode('select'); selection = { type: 'edge', id: mechanicId + '/' + id }; render();
-  }
-  return changed;
+  draft = mechanic; baseline = clone(mechanic);
+  selectRelation(relation, { beginLink: false }); setMode('select'); selection = { type: 'edge', id }; render();
+  return true;
 }
 const glossary = new GlossaryTable($('glossary'), {
   change: (id, key, value) => edit(data => { data.nodes.find(node => node.id === id)[key] = value; }, { refresh: false }),
@@ -1395,7 +1416,7 @@ const glossary = new GlossaryTable($('glossary'), {
   add: () => { void addTerm().catch(showError); },
   remove: id => { selection = { type: 'node', id }; void removeSelection().catch(showError); },
   locate: id => {
-    const owners = workspace.mechanics.filter(item => item.nodeIds.includes(id));
+    const owners = workspace.mechanics.filter(item => item.focusNodeIds.includes(id));
     const target = owners.find(item => item.id === activeId) ?? owners.find(item => visible.includes(item.id)) ?? owners[0];
     if (!target) return;
     void openLayer(target.id).then(() => {
@@ -1466,7 +1487,7 @@ const canvas = new GraphCanvas($('canvas'), {
     void addNode().catch(showError);
   },
   select: value => { selection = value; render(); },
-  canMove: id => !busy() && !autosave.blocked && !legacy && !definitionMode() && (isEndpointProjection(graph?.nodes.find(node => node.id === id)) || viewMode() || !!draft?.nodeIds.includes(id)),
+  canMove: id => !busy() && !autosave.blocked && !legacy && !definitionMode() && (isEndpointProjection(graph?.nodes.find(node => node.id === id)) || viewMode() || !!draft?.focusNodeIds.includes(id)),
   move: positions => {
     const regular = {}, scoped = {};
     for (const [id, point] of Object.entries(positions)) (isEndpointProjection(graph?.nodes.find(node => node.id === id)) ? scoped : regular)[id] = point;
@@ -1477,7 +1498,7 @@ const canvas = new GraphCanvas($('canvas'), {
   hint: text => { $('tool-hint').textContent = text; },
   cancelLink: () => cancelLinking(),
   quickLink: id => {
-    if (busy() || autosave.blocked || viewMode() || legacy || definitionMode() || isEndpointProjection(graph?.nodes.find(node => node.id === id)) || !draft?.nodeIds.includes(id)) return;
+    if (busy() || autosave.blocked || viewMode() || legacy || definitionMode() || isEndpointProjection(graph?.nodes.find(node => node.id === id)) || !draft?.focusNodeIds.includes(id)) return;
     setMode(relationMode(lastRelation));
     canvas.pick(id);
     selection = { type: 'linking', id }; render();
@@ -1606,7 +1627,7 @@ async function openProject() {
         const idRequired = preflight.requiredMetadata?.includes('id');
         projectId = field(root, `稳定英文 ID${idRequired ? '' : '（可选）'}`, preflight.workspaceId ?? '', { required: idRequired, pattern: '[a-z][a-z0-9]*(?:-[a-z0-9]+)*' });
         projectName = field(root, '显示名称（可选）', preflight.suggestedName ?? '', {});
-        root.append(el('p', '确认后会在此目录创建 .game-graph。项目目录本身不会被移动或改名。', 'note'));
+        root.append(el('p', '确认后会在此目录创建 .mechanics。项目目录本身不会被移动或改名。', 'note'));
       } else root.append(el('p', `工作区 ${preflight.workspaceId} 已通过预检。确认后切换，当前画面仅在新项目完整打开后替换。`, 'note'));
       $('confirm-dialog').textContent = preflight.status === 'existing' ? '打开项目' : '初始化并打开'; return;
     }
@@ -1766,7 +1787,7 @@ async function refreshProjectFromDisk() {
 async function newView({ fromLegacy = false } = {}) {
   await writeQueue;
   if (!workspace || busy() || autosave.blocked || !await guard({ allowLegacy: fromLegacy })) return;
-  const source = fromLegacy ? viewSnapshot() : { mechanicRegistrations: [], collapsedNodeIds: [], positions: {}, structuralPresentation: 'line' };
+  const source = fromLegacy ? viewSnapshot() : { mechanicRegistrations: [], focusNodeIds: [], pinnedRuleIds: [], collapsedNodeIds: [], positions: {}, structuralPresentation: 'line' };
   let label, id, directory;
   await dialog(fromLegacy ? '将旧叠加迁移为视图' : '新建空白视图', container => {
     label = field(container, '视图名称', '', { required: true });
@@ -1776,7 +1797,7 @@ async function newView({ fromLegacy = false } = {}) {
     directory = field(container, '相对目录', sourcePath.split('/').slice(0, -1).join('/') || '.', { required: true });
     container.append(el('p', fromLegacy ? '旧叠加中的机制注册、可见状态与布局会写入新的视图文件。' : '创建空视图后，在视图详情中添加机制。', 'note'));
   }, async () => {
-    const document = { schemaVersion: 3, kind: 'view', workspaceId: workspace.manifest.id, id: id.value, name: label.value.trim(), ...source, structuralPresentation: source.structuralPresentation ?? 'line' };
+    const document = { schemaVersion: 4, kind: 'view', workspaceId: workspace.manifest.id, id: id.value, name: label.value.trim(), ...source, structuralPresentation: source.structuralPresentation ?? 'line' };
     const parent = directory.value.trim(), file = (parent === '.' ? '' : parent + '/') + document.id + '.view.json';
     opening = true; updateStatus();
     try {
@@ -1813,7 +1834,7 @@ async function enterReference(referenceId) {
 async function openProjectRoot(projectRoot) {
   if (opening || !await guard()) return false;
   const preflight = await api('/api/project/preflight', { projectRoot });
-  if (preflight.status !== 'existing') throw new Error('目录不是可打开的既有 Game-Graph 项目');
+  if (preflight.status !== 'existing') throw new Error('目录不是可打开的既有 Mechanics 项目');
   canvas.cancel(); opening = true; updateStatus();
   try {
     const opened = await api('/api/project/open', { projectRoot: preflight.projectRoot, selectionToken: preflight.selectionToken, intent: preflight.allowedIntent });
@@ -1827,7 +1848,7 @@ async function manageReferences() {
   const [state, history] = await Promise.all([api(`/api/project-references?projectSessionToken=${encodeURIComponent(source.projectSessionToken)}`), api('/api/projects')]);
   let selectedPath = '', path;
   await dialog('关联项目', container => {
-    container.append(el('p', '这里声明当前项目可快速打开的其他 Game-Graph 项目。关联不合并概念、机制或规则，也不改变任何项目的编辑权限。', 'note'));
+    container.append(el('p', '这里声明当前项目可快速打开的其他 Mechanics 项目。关联不合并概念、机制或规则，也不改变任何项目的编辑权限。', 'note'));
     const list = el('div', undefined, 'detail-list');
     for (const reference of state.references) {
       const row = el('div', undefined, 'detail'); row.append(el('strong', reference.name), el('p', `${reference.id} · ${reference.workspaceId} · ${reference.status === 'ready' ? reference.projectRoot : reference.status}`));
@@ -1864,7 +1885,7 @@ $('new-graph').onclick = () => newGraph().catch(showError);
 $('open-project').onclick = () => openProject().catch(showError);
 $('agent-export-settings').onclick = () => configureProject().catch(showError);
 $('references').onclick = () => manageReferences().catch(showError);
-$('toggle-references').onclick = () => { referencesCollapsed = !referencesCollapsed; saveUiPreference('game-graph:references-collapsed', referencesCollapsed); renderReferenceSection(); };
+$('toggle-references').onclick = () => { referencesCollapsed = !referencesCollapsed; saveUiPreference('mechanics:references-collapsed', referencesCollapsed); renderReferenceSection(); };
 renderReferenceSection();
 $('views-tab').onclick = () => { sidebarState.page = 'views'; sidebarState.detailViewId = null; renderSidebar(); };
 $('mechanics-tab').onclick = () => { sidebarState.page = 'mechanics'; sidebarState.detailViewId = null; renderSidebar(); };
@@ -1895,7 +1916,7 @@ $('fit').onclick = () => canvas.fit();
 $('auto-layout').onclick = () => autoLayout({ fitView: true }).catch(showError);
 $('toggle-information-bar').onclick = () => {
   hoverTooltipsEnabled = !hoverTooltipsEnabled;
-  saveUiPreference('game-graph:hover-tooltips-enabled', hoverTooltipsEnabled);
+  saveUiPreference('mechanics:hover-tooltips-enabled', hoverTooltipsEnabled);
   canvas.setTooltipsEnabled(hoverTooltipsEnabled || hoverTooltipsTemporarilyEnabled); updateStatus();
 };
 $('zoom-in').onclick = () => canvas.zoom(1.2); $('zoom-out').onclick = () => canvas.zoom(1 / 1.2);
@@ -1904,7 +1925,7 @@ $('toggle-sidebar').onclick = () => document.body.classList.toggle('sidebar-hidd
 $('sidebar-scrim').onclick = closeSidebar;
 $('toggle-inspector').onclick = () => {
   inspectorCollapsed = !inspectorCollapsed;
-  saveUiPreference('game-graph:inspector-collapsed', inspectorCollapsed); inspect();
+  saveUiPreference('mechanics:inspector-collapsed', inspectorCollapsed); inspect();
 };
 $('close-inspector').onclick = () => { if (selection?.type === 'linking') cancelLinking(); else { selection = null; render(); } };
 $('diagnostics').onclick = () => { selection = { type: 'diagnostics' }; inspect(); };

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 7,
+  "kind": "mechanic",
+  "workspaceId": "sample-card-game",
+  "id": "hand",
+  "name": "防御手牌",
+  "scope": "防御牌的抽象机制图，用于分析近战抑制与体力代价，不分析具体战局可用性。",
+  "focusNodeIds": [
+    "evade",
+    "repel",
+    "melee",
+    "stamina"
+  ],
+  "pinnedRuleIds": [
+    "evade-2-repel",
+    "repel-2-melee",
+    "evade-2-stamina"
+  ],
+  "positions": {}
+}

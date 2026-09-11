@@ -1,13 +1,16 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "urn:game-graph:protocol:10",
-  "title": "Game-Graph 工作区 v10、机制 v6、定义 v5、视图 v3",
+  "$id": "urn:mechanics-tools:protocol:11",
+  "title": "Mechanics 工作区 v11、机制 v7、定义 v6、规则库 v1、视图 v4",
   "oneOf": [
     {
       "$ref": "#/definitions/workspace"
     },
     {
       "$ref": "#/definitions/definitionGraph"
+    },
+    {
+      "$ref": "#/definitions/ruleRegistry"
     },
     {
       "$ref": "#/definitions/mechanic"
@@ -188,14 +191,13 @@
         "id",
         "name",
         "definitions",
+        "rules",
         "compositions"
       ],
       "properties": {
         "schemaVersion": {
           "enum": [
-            8,
-            9,
-            10
+            11
           ]
         },
         "kind": {
@@ -208,6 +210,9 @@
           "$ref": "#/definitions/text"
         },
         "definitions": {
+          "$ref": "#/definitions/relativePath"
+        },
+        "rules": {
           "$ref": "#/definitions/relativePath"
         },
         "agentExportPath": {
@@ -278,13 +283,15 @@
         "id",
         "name",
         "mechanicRegistrations",
+        "focusNodeIds",
+        "pinnedRuleIds",
         "collapsedNodeIds",
         "positions",
         "structuralPresentation"
       ],
       "properties": {
         "schemaVersion": {
-          "const": 3
+          "const": 4
         },
         "kind": {
           "const": "view"
@@ -316,6 +323,12 @@
               }
             }
           }
+        },
+        "focusNodeIds": {
+          "$ref": "#/definitions/ids"
+        },
+        "pinnedRuleIds": {
+          "$ref": "#/definitions/ids"
         },
         "collapsedNodeIds": {
           "$ref": "#/definitions/ids"
@@ -566,8 +579,7 @@
       "properties": {
         "schemaVersion": {
           "enum": [
-            4,
-            5
+            6
           ]
         },
         "kind": {
@@ -591,6 +603,17 @@
       "type": "object",
       "additionalProperties": {
         "$ref": "#/definitions/position"
+      }
+    },
+    "ruleRegistry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "kind", "workspaceId", "rules"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "kind": { "const": "rules" },
+        "workspaceId": { "$ref": "#/definitions/id" },
+        "rules": { "type": "array", "items": { "$ref": "#/definitions/edge" } }
       }
     },
     "inheritance": {
@@ -751,16 +774,14 @@
         "id",
         "name",
         "scope",
-        "nodeIds",
-        "edges",
+        "focusNodeIds",
+        "pinnedRuleIds",
         "positions"
       ],
       "properties": {
         "schemaVersion": {
           "enum": [
-            4,
-            5,
-            6
+            7
           ]
         },
         "kind": {
@@ -778,14 +799,11 @@
         "scope": {
           "$ref": "#/definitions/text"
         },
-        "nodeIds": {
+        "focusNodeIds": {
           "$ref": "#/definitions/ids"
         },
-        "edges": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/edge"
-          }
+        "pinnedRuleIds": {
+          "$ref": "#/definitions/ids"
         },
         "positions": {
           "$ref": "#/definitions/positions"

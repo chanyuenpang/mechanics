@@ -16,7 +16,8 @@ test('最近打开资源在项目工作区内持久化，并由嵌套 gitignore 
   const projectRoot = join(temp, 'project'); await copyExampleFixture(projectRoot);
   const historyPath = join(temp, 'user', 'projects.json');
   const first = await startServer({ projectRoot, port: 0, projectHistoryPath: historyPath });
-  t.after(async () => { await first.close().catch(() => {}); await rm(temp, { recursive: true, force: true }); });
+  let second;
+  t.after(async () => { await second?.close().catch(() => {}); await first.close().catch(() => {}); await rm(temp, { recursive: true, force: true }); });
 
   const workspace = await (await fetch(first.origin + '/api/workspace')).json();
   const originalRevision = workspace.revision;
@@ -30,11 +31,10 @@ test('最近打开资源在项目工作区内持久化，并由嵌套 gitignore 
   assert.deepEqual(saved.data.recentMechanics, [workspace.mechanics[0].id]);
   assert.deepEqual(saved.data.lastOpened, { kind: 'mechanic', id: workspace.mechanics[0].id });
   assert.equal((await (await fetch(first.origin + '/api/workspace')).json()).revision, originalRevision);
-  assert.match(await readFile(join(projectRoot, '.game-graph/.gitignore'), 'utf8'), /^\.ui-state\.json$/m);
+  assert.match(await readFile(join(projectRoot, '.mechanics/.gitignore'), 'utf8'), /^\.ui-state\.json$/m);
   await first.close();
 
-  const second = await startServer({ projectRoot, port: 0, projectHistoryPath: historyPath });
-  t.after(async () => { await second.close().catch(() => {}); });
+  second = await startServer({ projectRoot, port: 0, projectHistoryPath: historyPath });
   const restored = await (await fetch(second.origin + '/api/local-ui-state')).json();
   assert.deepEqual(restored.recentViews, ['view-recent']);
   assert.deepEqual(restored.recentMechanics, [workspace.mechanics[0].id]);

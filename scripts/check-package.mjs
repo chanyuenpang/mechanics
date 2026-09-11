@@ -22,13 +22,13 @@ for (const path of names) {
   assert.match(path, /^(src\/|workspace-tools\/|schemas\/|skills\/|docs\/|examples\/|README\.md$|package\.json$)/);
   assert.ok(!/(?:^|\/)(?:node_modules|\.git|\.claw|design|\.agents|game-mechanics|\.rule-text-backup-[^/]+)(?:\/|$)|(?:^|\/)\.ui-state\.json$|\.lock$|\.tmp$|\.log$/.test(path), path);
 }
-assert.ok(!names.includes('examples/card-game/.game-graph/.game-graph.lock'), '打包清单不得包含运行态工作区锁');
+assert.ok(!names.includes('examples/card-game/.mechanics/.mechanics.lock'), '打包清单不得包含运行态工作区锁');
 assert.ok(!names.some(path => path.includes('/.rule-text-backup-')), '打包清单不得包含规则文本备份');
 assert.ok(!names.some(path => path.includes('/.agents/')), '打包清单不得包含项目注册 skill 副本');
 assert.ok(!names.some(path => path.includes('/game-mechanics/')), '打包清单不得包含生成的 Agent 文档');
 for (const path of ['src/server/cli.mjs', 'src/server/native-directory-picker.mjs', 'src/server/windows-directory-dialog.cs', 'src/web/glossary.mjs', 'src/web/view-files.mjs', 'src/web/graph-compute.mjs',
   'src/web/graph-compute-kernel.mjs', 'src/web/graph-compute-worker.js', 'src/web/geometry-settle.mjs', 'src/web/hierarchical-layout.mjs', 'src/web/layout-structure.mjs', 'src/web/local-routing.mjs', 'src/web/flow-refinement.mjs', 'src/web/index.html', 'schemas/protocol.schema.json']) assert.ok(names.includes(path), path);
-for (const path of ['skills/game-mechanic-search/SKILL.md', 'skills/game-mechanic-modeling/SKILL.md']) assert.ok(names.includes(path), path);
+for (const path of ['skills/mechanics-search/SKILL.md', 'skills/mechanics-modeling/SKILL.md']) assert.ok(names.includes(path), path);
 await mkdir(join(root, 'dist'), { recursive: true });
 const [packed] = JSON.parse(command(process.execPath, [npm, ...packArgs, '--pack-destination', join(root, 'dist')]));
 assert.deepEqual(packed.files.map(file => file.path), names);
@@ -39,8 +39,8 @@ let child;
 try {
   const install = join(temporary, 'install');
   command(process.execPath, [npm, 'install', '--prefix', install, '--ignore-scripts', '--no-audit', '--no-fund', tarball], temporary);
-  const installed = join(install, 'node_modules/game-graph');
-  const bin = join(install, 'node_modules/.bin/game-graph' + (process.platform === 'win32' ? '.cmd' : ''));
+  const installed = join(install, 'node_modules/@veewo/mechanics');
+  const bin = join(install, 'node_modules/.bin/mech' + (process.platform === 'win32' ? '.cmd' : ''));
   let binVersion;
   if (process.platform === 'win32') {
     // 只运行安装生成的命令 shim；不把此 shell 用于文件操作。
@@ -53,22 +53,22 @@ try {
   assert.match(command(process.execPath, [cli, '--help'], temporary), /init/);
   const workspace = join(temporary, '规则资料');
   const initialized = JSON.parse(command(process.execPath, [cli, 'init', workspace, '--id', 'package-check'], temporary));
-  assert.deepEqual(initialized.projectSkills, ['.agents/skills/game-mechanic-search/SKILL.md', '.agents/skills/game-mechanic-modeling/SKILL.md']);
-  for (const name of ['game-mechanic-search', 'game-mechanic-modeling']) {
+  assert.deepEqual(initialized.projectSkills, ['.agents/skills/mechanics-search/SKILL.md', '.agents/skills/mechanics-modeling/SKILL.md']);
+  for (const name of ['mechanics-search', 'mechanics-modeling']) {
     assert.equal(await readFile(join(workspace, '.agents', 'skills', name, 'SKILL.md'), 'utf8'),
       await readFile(join(installed, 'skills', name, 'SKILL.md'), 'utf8'));
   }
-  const manifestBefore = await readFile(join(workspace, '.game-graph', 'workspace.json'), 'utf8');
-  const data = JSON.parse(command(process.execPath, [cli, 'validate'], join(workspace, '.game-graph', 'mechanics')));
+  const manifestBefore = await readFile(join(workspace, '.mechanics', 'workspace.json'), 'utf8');
+  const data = JSON.parse(command(process.execPath, [cli, 'validate'], join(workspace, '.mechanics', 'mechanics')));
   assert.equal(data.workspaceId, 'package-check');
-  const scopes = JSON.parse(command(process.execPath, [cli, 'agent', 'scopes'], join(workspace, '.game-graph', 'mechanics')));
+  const scopes = JSON.parse(command(process.execPath, [cli, 'agent', 'scopes'], join(workspace, '.mechanics', 'mechanics')));
   assert.equal(scopes.workspaceId, 'package-check');
   assert.equal(scopes.queryApiVersion, 9);
   assert.match(scopes.resourceRevisions.definitions, /^[a-f0-9]{64}$/u);
   const guide = JSON.parse(command(process.execPath, [cli, 'agent', 'guide'], temporary));
   assert.equal(guide.queryApiVersion, 9);
   assert.equal(guide.readingContract.version, 9);
-  const search = JSON.parse(command(process.execPath, [cli, 'agent', 'search', '--query', '未建模概念'], join(workspace, '.game-graph', 'mechanics')));
+  const search = JSON.parse(command(process.execPath, [cli, 'agent', 'search', '--query', '未建模概念'], join(workspace, '.mechanics', 'mechanics')));
   assert.equal(search.queryApiVersion, 9);
   assert.equal(search.readingContract.version, 9);
   assert.equal(search.resolution.status, 'not_found');
@@ -81,7 +81,7 @@ try {
     '--concept', 'package-focus', '--description', '已通过资源版本串联修改。', '--revision', created.resourceRevision], temporary));
   assert.notEqual(updated.resourceRevision, created.resourceRevision);
   // 真实运行安装包中的 CLI 和静态页面，启动 cwd 在资料子目录而非源码内。
-  child = spawn(process.execPath, [cli, 'web', '--port', '0'], { cwd: join(workspace, '.game-graph', 'mechanics'),
+  child = spawn(process.execPath, [cli, 'web', '--port', '0'], { cwd: join(workspace, '.mechanics', 'mechanics'),
     env: { ...process.env, APPDATA: join(temporary, 'config'), XDG_CONFIG_HOME: join(temporary, 'config') },
     windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   const url = await new Promise((accept, reject) => {
@@ -111,8 +111,8 @@ try {
   assert.equal(response.status, 200);
   const opened = await response.json();
   assert.equal(opened.projectRoot, await realpath(workspace));
-  assert.equal(opened.workspaceRoot, await realpath(join(workspace, '.game-graph')));
-  assert.equal(await readFile(join(workspace, '.game-graph', 'workspace.json'), 'utf8'), manifestBefore);
+  assert.equal(opened.workspaceRoot, await realpath(join(workspace, '.mechanics')));
+  assert.equal(await readFile(join(workspace, '.mechanics', 'workspace.json'), 'utf8'), manifestBefore);
   const createdMechanic = JSON.parse(command(process.execPath, [cli, 'agent', 'mechanic', 'create', '--connect', origin,
     '--project', workspace, '--project-generation', String(opened.projectGeneration), '--id', 'package-rules', '--name', '打包规则',
     '--scope', '隔离验收', '--workspace-revision', opened.revision], temporary));

@@ -1,25 +1,31 @@
 // 纯领域计算：不访问文件、浏览器、游戏引擎，不修改传入的工作区。
-export function compose(workspace, selectedIds) {
+export function composeProjection(workspace, { graphIds: selectedIds = [], focusNodeIds = [], pinnedRuleIds = [] } = {}) {
   const graphIds = [...new Set(selectedIds)].sort();
   const graphs = graphIds.map(id => {
     const graph = workspace.mechanics.find(item => item.id === id);
     if (!graph) throw new Error(`选中的机制图不存在：${id}`);
     return graph;
   });
-  const referenced = new Set(graphs.flatMap(graph => graph.nodeIds));
+  const focus = new Set([...graphs.flatMap(graph => graph.focusNodeIds), ...focusNodeIds]);
+  const pinned = new Set(pinnedRuleIds);
+  const rules = workspace.rules.rules;
+  const effectiveRules = rules.filter(rule => pinned.has(rule.id) || focus.has(rule.source) || focus.has(rule.target));
+  const referenced = new Set([...focus, ...effectiveRules.flatMap(rule => [rule.source, rule.target])]);
   const result = {
     graphIds,
     nodes: workspace.definitions.nodes.filter(node => referenced.has(node.id)).map(node => ({
-      ...structuredClone(node), sourceGraphIds: graphs.filter(graph => graph.nodeIds.includes(node.id)).map(graph => graph.id),
+      ...structuredClone(node), sourceGraphIds: graphs.filter(graph => graph.focusNodeIds.includes(node.id)).map(graph => graph.id),
     })),
-    edges: graphs.flatMap(graph => graph.edges.map(edge => ({
-      ...structuredClone(edge), id: `${graph.id}/${edge.id}`,
-      relation: edge.relation,
-      steps: [{ graphId: graph.id, edgeId: edge.id, ...structuredClone(edge) }], hiddenNodes: [],
-    }))).sort((a, b) => a.id.localeCompare(b.id)),
+    edges: effectiveRules.map(rule => ({
+      ...structuredClone(rule), steps: [{ ruleId: rule.id, ...structuredClone(rule) }], hiddenNodes: [],
+    })).sort((a, b) => a.id.localeCompare(b.id)),
   };
   assertSpecializes(result.edges);
   return result;
+}
+
+export function compose(workspace, selectedIds) {
+  return composeProjection(workspace, { graphIds: selectedIds });
 }
 
 // specializes 沿“具体概念 → 上位概念”单向保持极性；分类关系必须无环。

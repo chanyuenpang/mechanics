@@ -1,11 +1,11 @@
 {
-  "name": "game-graph",
+  "name": "@veewo/mechanics",
   "version": "0.7.3",
   "private": false,
-  "description": "独立的游戏规则因果与包含关系图分析工具",
+  "description": "Mechanics：规则、概念与关系解释工具",
   "type": "module",
   "bin": {
-    "game-graph": "src/server/cli.mjs"
+    "mech": "src/server/cli.mjs"
   },
   "files": [
     "src/",
@@ -14,15 +14,15 @@
     "skills/",
     "docs/",
     "examples/",
-    "!examples/card-game/.game-graph/.game-graph.lock",
+    "!examples/card-game/.mechanics/.mechanics.lock",
     "!examples/**/.agents/",
     "!examples/**/.rule-text-backup-*/",
-    "!examples/**/game-mechanics/",
+    "!examples/**/mechanics/",
     "README.md"
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/chanyuenpang/game-graph.git"
+    "url": "git+https://github.com/chanyuenpang/mechanics.git"
   },
   "publishConfig": {
     "access": "public"
@@ -36,6 +36,7 @@
     "test": "node --test",
     "check": "node scripts/check.mjs",
     "check:package": "node scripts/check-package.mjs",
+    "cleanup:legacy-skills": "node scripts/cleanup-legacy-project-skills.mjs",
     "release:check": "npm run check && npm run check:package"
   },
   "dependencies": {

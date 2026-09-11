@@ -16,7 +16,7 @@ async function fixture(t) {
   const projectRoot = await mkdtemp(join(tmpdir(), 'rule-views-'));
   t.after(() => rm(projectRoot, { recursive: true, force: true }));
   await copyExampleFixture(projectRoot);
-  const root = join(projectRoot, '.game-graph');
+  const root = join(projectRoot, '.mechanics');
   return root;
 }
 const view = (id = 'hand', structuralPresentation = 'line') => ({ schemaVersion: 3, kind: 'view', workspaceId: 'sample-card-game', id, name: '规则叠加', mechanicRegistrations: [{ mechanicId: 'basic-rules', visible: true }, { mechanicId: 'hand', visible: true }], collapsedNodeIds: [], positions: {}, structuralPresentation });
@@ -88,7 +88,7 @@ test('视图和机制移动仍按 ID 恢复，外部视图字节修改触发整�
 
 test('未打开的坏视图、跨区、重复引用、隐藏编辑层和双 lastView 事实均拒绝', async t => {
   const root = await fixture(t), initial = await readWorkspace(root);
-  for (const changed of [{ workspaceId: 'another' }, { mechanicRegistrations: [{ mechanicId: 'hand', visible: true }, { mechanicId: 'hand', visible: false }] }, { schemaVersion: 1 }, { activeLayerId: 'missing' }, { mechanicRegistrations: [{ mechanicId: 'absent', visible: true }] }, { collapsedNodeIds: ['absent'] }]) {
+  for (const changed of [{ workspaceId: 'another' }, { mechanicRegistrations: [{ mechanicId: 'hand', visible: true }, { mechanicId: 'hand', visible: false }] }, { schemaVersion: 1 }, { activeLayerId: 'missing' }, { mechanicRegistrations: [{ mechanicId: 'absent', visible: true }] }]) {
     assert.throws(() => validateWorkspace({ ...initial, views: [{ ...view(), ...changed }] }));
   }
   assert.throws(() => validateWorkspace({ ...initial, views: [view(), view()] }), { code: 'DUPLICATE_ID' });
@@ -97,6 +97,27 @@ test('未打开的坏视图、跨区、重复引用、隐藏编辑层和双 last
   validateWorkspace({ ...initial, views: [{ ...view(), mechanicRegistrations: [] }] });
   await writeFile(join(root, '未打开.view.json'), '{bad');
   await assert.rejects(readWorkspace(root), { code: 'INVALID_JSON' });
+});
+
+test('孤儿展示引用不会阻断项目读取，内存快照净化但原文件不被打开动作改写', async t => {
+  const root = await fixture(t);
+  const document = { ...view('presentation-residue'), positions: { absent: { x: 10, y: 20 } }, collapsedNodeIds: ['absent'],
+    projectionPositions: { 'scope:absent:role%3Dliteral%3Astring%3A%22enemy%22': { x: 30, y: 40 } } };
+  const path = join(root, 'presentation-residue.view.json');
+  await writeFile(path, JSON.stringify(document));
+  const raw = await readFile(path, 'utf8');
+  const workspace = await readWorkspace(root);
+  const resolved = workspace.views.find(item => item.id === 'presentation-residue');
+  assert.deepEqual(resolved.positions, {});
+  assert.deepEqual(resolved.collapsedNodeIds, []);
+  assert.deepEqual(resolved.projectionPositions, {});
+  assert.deepEqual(workspace.presentationDiagnostics.filter(item => item.file === 'presentation-residue.view.json').map(item => item.field).sort(),
+    ['collapsedNodeIds', 'positions', 'projectionPositions']);
+  assert.equal(await readFile(path, 'utf8'), raw);
+  const store = await createWorkspaceStore(root);
+  try { await store.read(); } finally { await store.close(); }
+  await rm(join(root, 'mechanics/hand.mechanic.json'));
+  await assert.rejects(readWorkspace(root), { code: 'MISSING_REFERENCE' });
 });
 
 test('视图创建拒绝同名覆盖、越界、隐藏目录及 junction', async t => {

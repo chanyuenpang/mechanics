@@ -19,7 +19,7 @@ async function fixture(t) {
   const temp = await mkdtemp(join(tmpdir(), 'rule-workspace-'));
   t.after(() => rm(temp, { recursive: true, force: true }));
   const projectRoot = join(temp, '资料 目录'); await copyExampleFixture(projectRoot);
-  const root = join(projectRoot, '.game-graph');
+  const root = join(projectRoot, '.mechanics');
   const workspace = await readWorkspace(root);
   return { temp, projectRoot, root, workspace };
 }
@@ -57,7 +57,7 @@ test('CLI 在仓库外初始化项目，子目录定位同一项目，显式目�
   const filesBefore = await snapshot(target);
   assert.equal(call(['init', target], temp).status, 1);
   assert.deepEqual(await snapshot(target), filesBefore);
-  const child = join(target, '.game-graph', 'mechanics');
+  const child = join(target, '.mechanics', 'mechanics');
   assert.equal(call(['root'], child).stdout.trim(), await realpath(target));
   assert.equal(call(['root', '--project', projectRoot], child).stdout.trim(), await realpath(projectRoot));
   const validated = call(['validate'], child);
@@ -68,7 +68,7 @@ test('CLI 在仓库外初始化项目，子目录定位同一项目，显式目�
   assert.equal(JSON.parse(rebuilt.stdout).concepts, 0);
   const semanticTarget = join(temp, 'semantic-workspace');
   assert.equal(call(['init', semanticTarget], temp).status, 0);
-  assert.equal(JSON.parse(await readFile(join(semanticTarget, '.game-graph', 'workspace.json'), 'utf8')).id, 'semantic-workspace');
+  assert.equal(JSON.parse(await readFile(join(semanticTarget, '.mechanics', 'workspace.json'), 'utf8')).id, 'semantic-workspace');
   assert.equal(call(['init', join(temp, '中文 工作区')], temp).status, 1);
   assert.equal(call(['validate', '--project', child], temp).status, 1);
   for (const args of [['web', '--port', 'NaN'], ['web', '--port', '65536'], ['validate', '--port', '2'], ['migrate'], ['unknown'], ['web', 'extra'], ['serve']]) {
@@ -79,7 +79,7 @@ test('CLI 在仓库外初始化项目，子目录定位同一项目，显式目�
 
 test('web 无需项目路径，从普通目录或已有项目子目录启动都等待网页选择项目', async t => {
   const { temp, root } = await fixture(t);
-  assert.match(call(['--help'], temp).stdout, /game-graph web/);
+  assert.match(call(['--help'], temp).stdout, /mech web/);
   for (const cwd of [temp, join(root, 'mechanics')]) {
     const child = spawn(process.execPath, [cli, 'web', '--port', '0'], { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     try {
@@ -128,6 +128,7 @@ test('目录扫描发现新增、移动和空目录；稳定 ID 恢复视图，�
     await rename(join(root, 'mechanics/hand.mechanic.json'), join(root, '关卡/手牌.mechanic.json'));
     await assert.rejects(store.save({ revision: selected.revision, kind: 'workspace', document: manifest }), { code: 'REVISION_CONFLICT' });
     let canonical = await readWorkspace(root, { verifyGeneratedCatalog: false });
+    await mkdir(canonical.agentExportRoot, { recursive: true });
     await publishCatalog(canonical.agentExportRoot, canonical);
     const moved = await store.read();
     assert.equal(moved.files.find(file => file.id === 'hand').path, '关卡/手牌.mechanic.json');

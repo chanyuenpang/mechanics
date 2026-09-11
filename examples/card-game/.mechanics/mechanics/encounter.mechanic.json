@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 7,
+  "kind": "mechanic",
+  "workspaceId": "sample-card-game",
+  "id": "encounter",
+  "name": "近战遭遇",
+  "scope": "假设关卡的机制组合：包含近战敌人规则，不包含远程攻击机制；不是实时战斗状态。",
+  "focusNodeIds": [
+    "enemy",
+    "melee"
+  ],
+  "pinnedRuleIds": [
+    "enemy-2-melee"
+  ],
+  "positions": {}
+}

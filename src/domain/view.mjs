@@ -1,4 +1,4 @@
-import { compose } from './graph.mjs';
+import { composeProjection } from './graph.mjs';
 
 const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
 
@@ -10,7 +10,7 @@ export const visibleMechanicIds = view => view.mechanicRegistrations
 
 // 结构展示仅是视图投影，绝不写回 definitions 或 mechanisms。
 export const composeView = (workspace, view) => ({
-  ...compose(workspace, visibleMechanicIds(view)),
+  ...composeProjection(workspace, { graphIds: visibleMechanicIds(view), focusNodeIds: view.focusNodeIds, pinnedRuleIds: view.pinnedRuleIds }),
   structuralPresentation: view.structuralPresentation,
 });
 

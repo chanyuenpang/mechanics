@@ -24,7 +24,7 @@ function recentIds(value, field) {
 function validateState(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || value.version !== VERSION
     || Object.keys(value).some(key => !['version', 'lastOpened', 'recentViews', 'recentMechanics', 'openTabs'].includes(key))) {
-    fail('LOCAL_UI_STATE_INVALID', '本地界面状态文件格式无效，请修复或删除 .game-graph/.ui-state.json');
+    fail('LOCAL_UI_STATE_INVALID', '本地界面状态文件格式无效，请修复或删除 .mechanics/.ui-state.json');
   }
   const rawOpenTabs = Array.isArray(value.openTabs) ? value.openTabs : [];
   if (rawOpenTabs.some(tab => !tab || !['view', 'mechanic'].includes(tab.kind) || typeof tab.id !== 'string' || !tab.id)) fail('LOCAL_UI_STATE_INVALID', 'openTabs 必须是有效资源标签数组');
@@ -37,7 +37,7 @@ function validateState(value) {
 
 async function replaceText(root, file, text, { create = false } = {}) {
   const path = await workspacePath(root, file, { allowMissing: create, extensions: ['.json', '.gitignore'] });
-  const temp = `${path}.${randomUUID()}.game-graph.tmp`;
+  const temp = `${path}.${randomUUID()}.mechanics.tmp`;
   let committed = false;
   try {
     await writeExclusive(temp, text);
@@ -59,7 +59,7 @@ async function ensureIgnored(root) {
   let source = '', create = false;
   try { source = await readFile(path, 'utf8'); }
   catch (error) { if (error.code !== 'ENOENT') throw error; create = true; }
-  if (Buffer.byteLength(source) > MAX_IGNORE_BYTES) fail('LOCAL_UI_STATE_INVALID', '.game-graph/.gitignore 超过 256 KiB，未修改。');
+  if (Buffer.byteLength(source) > MAX_IGNORE_BYTES) fail('LOCAL_UI_STATE_INVALID', '.mechanics/.gitignore 超过 256 KiB，未修改。');
   if (source.split(/\r?\n/u).some(line => line.trim() === STATE_FILE)) return;
   const next = `${source}${source && !source.endsWith('\n') ? '\n' : ''}${STATE_FILE}\n`;
   await replaceText(root, IGNORE_FILE, next, { create });

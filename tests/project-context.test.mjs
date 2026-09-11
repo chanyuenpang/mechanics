@@ -16,7 +16,7 @@ import { copyExampleFixture } from './example-fixture.mjs';
 
 const exec = promisify(execFile);
 const runWorkspaceTool = async (projectRoot, args) => JSON.parse((await exec(process.execPath,
-  [join(projectRoot, '.game-graph/tools/workspace-tool.mjs'), ...args], { timeout: 15_000 })).stdout);
+  [join(projectRoot, '.mechanics/tools/workspace-tool.mjs'), ...args], { timeout: 15_000 })).stdout);
 
 test('项目初始化原子创建固定工作区和默认 Agent 机制文档目录', async t => {
   const parent = await mkdtemp(join(tmpdir(), 'game-graph-project-'));
@@ -24,19 +24,19 @@ test('项目初始化原子创建固定工作区和默认 Agent 机制文档目�
   const projectRoot = join(parent, 'sample-project'); await mkdir(projectRoot);
   const result = await initProject(projectRoot, { name: '示例项目' });
   assert.equal(result.projectRoot, projectRoot);
-  const manifest = JSON.parse(await readFile(join(projectRoot, '.game-graph/workspace.json'), 'utf8'));
+  const manifest = JSON.parse(await readFile(join(projectRoot, '.mechanics/workspace.json'), 'utf8'));
   assert.equal(manifest.schemaVersion, 10);
-  assert.equal(manifest.agentExportPath, 'game-mechanics');
-  assert.match(await readFile(join(projectRoot, 'game-mechanics/AGENTS.md'), 'utf8'), /^# Game-Graph Agent 文档使用规则/);
-  assert.deepEqual((await readdir(join(projectRoot, 'game-mechanics'))).sort(), ['AGENTS.md', 'README.md', 'concepts.md']);
-  assert.deepEqual(result.projectSkills, ['.agents/skills/game-mechanic-search/SKILL.md', '.agents/skills/game-mechanic-modeling/SKILL.md']);
-  for (const skill of ['game-mechanic-search', 'game-mechanic-modeling']) {
+  assert.equal(manifest.agentExportPath, 'mechanics');
+  assert.match(await readFile(join(projectRoot, 'mechanics/AGENTS.md'), 'utf8'), /^# Mechanics Agent 文档使用规则/);
+  assert.deepEqual((await readdir(join(projectRoot, 'mechanics'))).sort(), ['AGENTS.md', 'README.md', 'concepts.md']);
+  assert.deepEqual(result.projectSkills, ['.agents/skills/mechanics-search/SKILL.md', '.agents/skills/mechanics-modeling/SKILL.md']);
+  for (const skill of ['mechanics-search', 'mechanics-modeling']) {
     assert.equal(await readFile(join(projectRoot, '.agents/skills', skill, 'SKILL.md'), 'utf8'),
       await readFile(fileURLToPath(new URL(`../skills/${skill}/SKILL.md`, import.meta.url)), 'utf8'));
   }
-  assert.equal(await readFile(join(projectRoot, '.game-graph/tools/workspace-tool.mjs'), 'utf8'),
+  assert.equal(await readFile(join(projectRoot, '.mechanics/tools/workspace-tool.mjs'), 'utf8'),
     await readFile(fileURLToPath(new URL('../workspace-tools/workspace-tool.mjs', import.meta.url)), 'utf8'));
-  const workspace = await readWorkspace(join(projectRoot, '.game-graph'));
+  const workspace = await readWorkspace(join(projectRoot, '.mechanics'));
   assert.equal(workspace.projectRoot, projectRoot);
 });
 
@@ -44,15 +44,15 @@ test('项目已有不同 Game-Graph skill 时初始化以安装源整体覆盖',
   const parent = await mkdtemp(join(tmpdir(), 'game-graph-skill-conflict-'));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const projectRoot = join(parent, 'conflict-project');
-  const skillRoot = join(projectRoot, '.agents/skills/game-mechanic-search');
+  const skillRoot = join(projectRoot, '.agents/skills/mechanics-search');
   await mkdir(skillRoot, { recursive: true });
   await writeFile(join(skillRoot, 'SKILL.md'), '用户维护的不同 skill');
   await writeFile(join(skillRoot, '不应保留.md'), '过期附加文件');
   await initProject(projectRoot, { name: '覆盖验证' });
-  const source = await readFile(fileURLToPath(new URL('../skills/game-mechanic-search/SKILL.md', import.meta.url)), 'utf8');
+  const source = await readFile(fileURLToPath(new URL('../skills/mechanics-search/SKILL.md', import.meta.url)), 'utf8');
   assert.equal(await readFile(join(skillRoot, 'SKILL.md'), 'utf8'), source);
   assert.deepEqual(await readdir(skillRoot), ['SKILL.md']);
-  await access(join(projectRoot, '.game-graph'));
+  await access(join(projectRoot, '.mechanics'));
 });
 
 test('网页打开既有项目时，以安装源覆盖内容不一致的建模 skill', async t => {
@@ -60,14 +60,14 @@ test('网页打开既有项目时，以安装源覆盖内容不一致的建模 s
   t.after(() => rm(parent, { recursive: true, force: true }));
   const projectRoot = join(parent, 'sync-project'); await mkdir(projectRoot);
   await initProject(projectRoot, { name: '同步验证' });
-  const target = join(projectRoot, '.agents/skills/game-mechanic-modeling/SKILL.md');
-  const tool = join(projectRoot, '.game-graph/tools/workspace-tool.mjs');
+  const target = join(projectRoot, '.agents/skills/mechanics-modeling/SKILL.md');
+  const tool = join(projectRoot, '.mechanics/tools/workspace-tool.mjs');
   await writeFile(target, '用户维护但未版本化的不同 skill');
   await rm(tool);
   const manager = createProjectManager();
   t.after(() => manager.close());
   await manager.open({ projectRoot, intent: 'existing' });
-  const source = await readFile(fileURLToPath(new URL('../skills/game-mechanic-modeling/SKILL.md', import.meta.url)), 'utf8');
+  const source = await readFile(fileURLToPath(new URL('../skills/mechanics-modeling/SKILL.md', import.meta.url)), 'utf8');
   assert.equal(await readFile(target, 'utf8'), source);
   assert.equal(await readFile(tool, 'utf8'), await readFile(fileURLToPath(new URL('../workspace-tools/workspace-tool.mjs', import.meta.url)), 'utf8'));
 });
@@ -77,7 +77,7 @@ test('进入关联项目也会在建立会话前补齐受管 skill 与工具', a
   t.after(() => rm(parent, { recursive: true, force: true }));
   const sourceRoot = join(parent, 'source'), targetRoot = join(parent, 'target'); await mkdir(sourceRoot); await mkdir(targetRoot);
   await initProject(sourceRoot, { id: 'source-project' }); await initProject(targetRoot, { id: 'target-project' });
-  const targetTool = join(targetRoot, '.game-graph/tools/workspace-tool.mjs'); await rm(targetTool);
+  const targetTool = join(targetRoot, '.mechanics/tools/workspace-tool.mjs'); await rm(targetTool);
   const manager = createProjectManager(); t.after(() => manager.close());
   const source = await manager.open({ projectRoot: sourceRoot, intent: 'existing' });
   const declared = await manager.declareProjectReference({ projectSessionToken: source.projectSessionToken, projectGeneration: source.projectGeneration, projectRoot: targetRoot });
@@ -132,7 +132,7 @@ test('离线草稿先校验语义，失败时 canonical 完整保留', async t =
   await writeFile(draft.mechanicPath, JSON.stringify(invalid, null, 2));
   await assert.rejects(runWorkspaceTool(projectRoot, ['draft', 'validate', '--draft', draft.draftId]), /DRAFT_VALIDATION_FAILED/u);
   await assert.rejects(runWorkspaceTool(projectRoot, ['draft', 'save', '--draft', draft.draftId]), /DRAFT_VALIDATION_FAILED/u);
-  await assert.rejects(access(join(projectRoot, '.game-graph/mechanics/core-loop.mechanic.json')), { code: 'ENOENT' });
+  await assert.rejects(access(join(projectRoot, '.mechanics/mechanics/core-loop.mechanic.json')), { code: 'ENOENT' });
   await access(draft.mechanicPath);
 });
 
@@ -143,12 +143,12 @@ test('项目路径合同拒绝越界、控制目录和已有工作区覆盖', as
   await assert.rejects(projectContext(projectRoot, { requireWorkspace: false, allowMissingExport: true,
     manifest: { agentExportPath: '../outside' } }), { code: 'INVALID_EXPORT_PATH' });
   await assert.rejects(projectContext(projectRoot, { requireWorkspace: false, allowMissingExport: true,
-    manifest: { agentExportPath: '.game-graph/docs' } }), { code: 'INVALID_EXPORT_PATH' });
-  await mkdir(join(projectRoot, '.game-graph'));
-  await writeFile(join(projectRoot, '.game-graph/workspace.json'), '{broken');
-  const before = await readFile(join(projectRoot, '.game-graph/workspace.json'), 'utf8');
+    manifest: { agentExportPath: '.mechanics/docs' } }), { code: 'INVALID_EXPORT_PATH' });
+  await mkdir(join(projectRoot, '.mechanics'));
+  await writeFile(join(projectRoot, '.mechanics/workspace.json'), '{broken');
+  const before = await readFile(join(projectRoot, '.mechanics/workspace.json'), 'utf8');
   await assert.rejects(initProject(projectRoot), { code: 'WORKSPACE_EXISTS' });
-  assert.equal(await readFile(join(projectRoot, '.game-graph/workspace.json'), 'utf8'), before);
+  assert.equal(await readFile(join(projectRoot, '.mechanics/workspace.json'), 'utf8'), before);
 });
 
 test('Agent 导出不会接管已有普通目录', async t => {
@@ -156,7 +156,7 @@ test('Agent 导出不会接管已有普通目录', async t => {
   t.after(() => rm(parent, { recursive: true, force: true }));
   const projectRoot = join(parent, 'owned-project'); await mkdir(projectRoot);
   await initProject(projectRoot);
-  const workspace = await readWorkspace(join(projectRoot, '.game-graph'));
+  const workspace = await readWorkspace(join(projectRoot, '.mechanics'));
   const occupied = join(projectRoot, 'docs/game-mechanics'); await mkdir(occupied, { recursive: true });
   await writeFile(join(occupied, 'notes.md'), '用户文件');
   await assert.rejects(publishCatalog(occupied, workspace), { code: 'EXPORT_ROOT_NOT_OWNED' });
@@ -168,7 +168,7 @@ test('导出目录缺失或不可用不阻止 canonical 打开、保存，并在
   t.after(() => rm(parent, { recursive: true, force: true }));
   const projectRoot = join(parent, 'resilient-project'); await mkdir(projectRoot);
   await initProject(projectRoot, { name: '导出韧性' });
-  await rm(join(projectRoot, 'game-mechanics'), { recursive: true });
+  await rm(join(projectRoot, 'mechanics'), { recursive: true });
   const preflight = await createProjectPreflight().inspect({ projectRoot });
   assert.equal(preflight.status, 'existing');
   const manager = createProjectManager(); t.after(() => manager.close());
@@ -177,7 +177,7 @@ test('导出目录缺失或不可用不阻止 canonical 打开、保存，并在
   const saved = await manager.save({ projectSessionToken: opened.projectSessionToken, projectGeneration: opened.projectGeneration,
     revision: opened.revision, kind: 'definitions', document: opened.definitions });
   assert.equal(saved.exportPublication.state, 'pending');
-  assert.equal((await readWorkspace(join(projectRoot, '.game-graph'))).manifest.name, '导出韧性');
+  assert.equal((await readWorkspace(join(projectRoot, '.mechanics'))).manifest.name, '导出韧性');
   const generated = await manager.generateDocumentExport({ projectSessionToken: opened.projectSessionToken, projectGeneration: opened.projectGeneration,
     revision: saved.revision });
   assert.ok(['pending', 'current'].includes(generated.exportPublication.state));
@@ -188,15 +188,15 @@ test('导出目录缺失或不可用不阻止 canonical 打开、保存，并在
     await new Promise(resolve => setTimeout(resolve, 25));
   }
   assert.equal(published.exportPublication.state, 'current');
-  await access(join(projectRoot, 'game-mechanics', 'README.md'));
+  await access(join(projectRoot, 'mechanics', 'README.md'));
   assert.equal((await manager.open({ projectRoot, intent: 'existing' })).exportPublication.state, 'current');
 
-  await rm(join(projectRoot, 'game-mechanics'), { recursive: true });
-  await writeFile(join(projectRoot, 'game-mechanics'), '不是导出目录');
+  await rm(join(projectRoot, 'mechanics'), { recursive: true });
+  await writeFile(join(projectRoot, 'mechanics'), '不是导出目录');
   const unavailableRoot = join(parent, 'unavailable-project'); await mkdir(unavailableRoot);
   await initProject(unavailableRoot, { name: '不可用导出' });
-  await rm(join(unavailableRoot, 'game-mechanics'), { recursive: true });
-  await writeFile(join(unavailableRoot, 'game-mechanics'), '不是目录');
+  await rm(join(unavailableRoot, 'mechanics'), { recursive: true });
+  await writeFile(join(unavailableRoot, 'mechanics'), '不是目录');
   const unavailable = await manager.open({ projectRoot: unavailableRoot, intent: 'existing' });
   assert.equal(unavailable.exportPublication.state, 'unavailable');
   assert.equal(unavailable.exportPublication.code, 'UNSAFE_PATH');
@@ -207,13 +207,13 @@ test('未配置导出路径仍可打开 canonical，且不会自动回填默认�
   t.after(() => rm(parent, { recursive: true, force: true }));
   const projectRoot = join(parent, 'unconfigured-project'); await mkdir(projectRoot);
   await initProject(projectRoot);
-  const manifestPath = join(projectRoot, '.game-graph/workspace.json');
+  const manifestPath = join(projectRoot, '.mechanics/workspace.json');
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')); delete manifest.agentExportPath;
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
-  await rm(join(projectRoot, 'game-mechanics'), { recursive: true });
+  await rm(join(projectRoot, 'mechanics'), { recursive: true });
   const manager = createProjectManager(); t.after(() => manager.close());
   const opened = await manager.open({ projectRoot, intent: 'existing' });
   assert.equal(opened.exportPublication.state, 'unconfigured');
   assert.equal(opened.agentExportRoot, null);
-  assert.equal((await readWorkspace(join(projectRoot, '.game-graph'))).manifest.agentExportPath, undefined);
+  assert.equal((await readWorkspace(join(projectRoot, '.mechanics'))).manifest.agentExportPath, undefined);
 });

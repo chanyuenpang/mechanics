@@ -1,6 +1,8 @@
 # CLI Agent 查询与受约束写入
 
-`game-graph agent` 的只读内容查询只有 `search`、`node`、`impact`；`guide` 提供协议说明，`scopes` 仅列出编辑资源版本。所有结果均为 JSON。
+> 已迁移提示：当前 CLI 为 `mech`，项目内离线编辑工具为 `.mechanics/tools/workspace-tool.mjs`。下文旧命令示例仅作历史背景；请以 [README](../README.md) 与 `mech agent guide --format json` 为准。
+
+`mech agent` 的只读内容查询只有 `search`、`node`、`impact`；`guide` 提供协议说明，`scopes` 仅列出编辑资源版本。所有结果均为 JSON。
 
 ## 全项目查询
 

@@ -16,7 +16,7 @@ export async function writeExclusive(path, text) {
 }
 export async function commitFile(root, file, text, { create = false, extensions = ['.json'] } = {}) {
   const path = await workspacePath(root, file, { allowMissing: create, extensions });
-  const temp = `${path}.${randomUUID()}.game-graph.tmp`;
+  const temp = `${path}.${randomUUID()}.mechanics.tmp`;
   let committed = false;
   try {
     await writeExclusive(temp, text);
@@ -34,7 +34,7 @@ export async function commitFile(root, file, text, { create = false, extensions 
   }
 }
 export async function acquireWorkspaceLock(root) {
-  const path = resolve(root, '.game-graph.lock');
+  const path = resolve(root, '.mechanics.lock');
   const identity = JSON.stringify({ pid: process.pid, owner: randomUUID() });
   const recoverDeadOwner = async () => {
     let existing, owner;
@@ -70,13 +70,13 @@ export async function commitFiles(root, changes, { verify = null } = {}) {
     for (const change of changes) {
       const path = await workspacePath(root, change.path, { allowMissing: change.create === true });
       if (change.delete === true) {
-        prepared.push({ path, temp: null, backup: path + '.' + randomUUID() + '.game-graph.bak', text: null,
+        prepared.push({ path, temp: null, backup: path + '.' + randomUUID() + '.mechanics.bak', text: null,
           create: false, delete: true, backedUp: false, committed: false });
         continue;
       }
       const text = encode(change.document);
-      const temp = path + '.' + randomUUID() + '.game-graph.tmp';
-      const backup = path + '.' + randomUUID() + '.game-graph.bak';
+      const temp = path + '.' + randomUUID() + '.mechanics.tmp';
+      const backup = path + '.' + randomUUID() + '.mechanics.bak';
       await writeExclusive(temp, text);
       prepared.push({ path, temp, backup, text, create: change.create === true, backedUp: false, committed: false });
     }

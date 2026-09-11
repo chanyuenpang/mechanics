@@ -1,13 +1,13 @@
 ---
-name: game-mechanic-search
-description: 使用项目内 JSON 工具查询已保存的概念、规则、上下游与影响路径；不用于创建、修改或删除概念与规则。
+name: mechanics-search
+description: 查询已保存的规则、概念与关系；不用于创建、修改或删除概念与规则。
 metadata:
-  game_graph_skill_version: "2026.09.10.1"
+  mechanics_skill_version: "2026.09.11.1"
 ---
 
-# 游戏机制只读查询
+# Mechanics 只读查询
 
-只运行 `node <项目>/.game-graph/tools/workspace-tool.mjs`。它直接读取项目 JSON，不依赖或调用 CLI、网页、HTTP 服务或文档导出。
+只运行 `node <项目>/.mechanics/tools/workspace-tool.mjs`。它直接读取项目 JSON，不依赖或调用 CLI、网页、HTTP 服务或文档导出。
 
 - `scopes`：列出机制和工作区 revision。
 - `search --query <ID|完整名称|完整别名>`：返回概念或歧义候选。

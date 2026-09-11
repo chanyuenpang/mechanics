@@ -22,7 +22,7 @@ async function fixture(t) {
   t.after(() => rm(temp, { recursive: true, force: true }));
   const project = join(temp, 'project');
   await copyExampleFixture(project);
-  return { project, root: join(project, '.game-graph') };
+  return { project, root: join(project, '.mechanics') };
 }
 
 test('空规则判定覆盖影响关系的缺省、空串、空白与摘要缺项；is-a 自带结构语义', () => {
@@ -81,7 +81,7 @@ test('画布 hover 提示在右下边缘会向内夹紧，保持可阅读范围'
 });
 
 test('Schema 与 Agent mutation 拒绝旧字段，规则空白不改变路径推理', async () => {
-  const workspace = await readWorkspace(join(example, '.game-graph'));
+  const workspace = await readWorkspace(join(example, '.mechanics'));
   const graph = compose(workspace, ['basic-rules', 'hand']);
   const before = tracePaths(graph, 'evade', 'failure');
   const empty = structuredClone(workspace);
@@ -105,7 +105,7 @@ test('Schema 与 Agent mutation 拒绝旧字段，规则空白不改变路径推
 });
 
 test('Agent 清空或删除限定边时，同时移除失效的投影坐标', async () => {
-  const workspace = await readWorkspace(join(example, '.game-graph'));
+  const workspace = await readWorkspace(join(example, '.mechanics'));
   const mechanic = workspace.mechanics[0], edge = mechanic.edges[0];
   const qualifiers = [{ key: 'faction', value: { kind: 'literal', value: 'friendly' } }];
   applyAgentMutation(workspace, { resource: 'rule', action: 'update', mechanic: mechanic.id,
@@ -129,7 +129,7 @@ test('Agent 清空或删除限定边时，同时移除失效的投影坐标', as
 });
 
 test('Agent 删除限定边时，同时移除组合视图中已失效的投影坐标', async () => {
-  const workspace = await readWorkspace(join(example, '.game-graph'));
+  const workspace = await readWorkspace(join(example, '.mechanics'));
   const mechanic = workspace.mechanics[0], edge = mechanic.edges[0];
   const qualifiers = [{ key: 'faction', value: { kind: 'literal', value: 'friendly' } }];
   applyAgentMutation(workspace, { resource: 'rule', action: 'update', mechanic: mechanic.id,
@@ -144,7 +144,7 @@ test('Agent 删除限定边时，同时移除组合视图中已失效的投影�
 });
 
 test('Agent 新增未限定的影响规则时，不把缺省限定词当作数组读取', async () => {
-  const workspace = await readWorkspace(join(example, '.game-graph'));
+  const workspace = await readWorkspace(join(example, '.mechanics'));
   const mechanic = workspace.mechanics[0];
   const existing = new Set(workspace.mechanics.flatMap(item => item.edges.map(edge => `${edge.source}->${edge.target}`)));
   const conceptIds = workspace.definitions.nodes.map(concept => concept.id);

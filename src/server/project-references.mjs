@@ -3,17 +3,14 @@ import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { ContractError } from '../domain/validate.mjs';
-import { projectContext } from './project-context.mjs';
+import { projectContext, WORKSPACE_DIRECTORY } from './project-context.mjs';
 import { readQuerySnapshot } from './query-snapshot.mjs';
 
-// 关联声明是 Game-Graph 工作区元数据，不能污染宿主项目根目录。
-// 旧版本曾将它保存为项目根目录的 game-graph.references.json；只在迁移时读取它。
+// 关联声明是 Mechanics 工作区元数据，不能污染宿主项目根目录。
 const CONFIG_FILE = 'references.json';
-const LEGACY_CONFIG_FILE = 'game-graph.references.json';
-const WORKSPACE_DIRECTORY = '.game-graph';
 const fail = (code, message) => { throw new ContractError(code, message); };
 const appData = () => process.env.APPDATA || resolve(homedir(), 'AppData', 'Roaming');
-const bindingsPath = () => resolve(appData(), 'game-graph', 'project-reference-bindings.json');
+const bindingsPath = () => resolve(appData(), 'mechanics', 'project-reference-bindings.json');
 const safeId = value => typeof value === 'string' && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(value);
 
 function validateReferences(value) {
@@ -37,21 +34,7 @@ function validateBindings(value) {
 export async function readProjectReferences(sourceRoot) {
   const canonicalPath = referencesPath(sourceRoot);
   try { return validateReferences(JSON.parse(await readFile(canonicalPath, 'utf8'))); }
-  catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-  }
-
-  // 迁移必须在读取时完成：否则仅查看关联项目的用户会长期留下根目录污染文件。
-  const legacyPath = resolve(sourceRoot, LEGACY_CONFIG_FILE);
-  try {
-    const legacy = validateReferences(JSON.parse(await readFile(legacyPath, 'utf8')));
-    await saveProjectReferences(sourceRoot, legacy);
-    await unlink(legacyPath);
-    return legacy;
-  } catch (error) {
-    if (error.code === 'ENOENT') return { version: 1, references: [] };
-    throw error;
-  }
+  catch (error) { if (error.code === 'ENOENT') return { version: 1, references: [] }; throw error; }
 }
 
 async function saveProjectReferences(sourceRoot, value) {

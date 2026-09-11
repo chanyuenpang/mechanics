@@ -46,8 +46,8 @@ test('项目预检区分 existing、missing、invalid，并要求匹配意图和
   const existing = join(root, 'existing'), missing = join(root, 'missing'), initializing = join(root, 'new-project'),
     damaged = join(root, 'damaged');
   await copyExampleFixture(existing); await mkdir(missing); await mkdir(initializing);
-  await mkdir(join(damaged, '.game-graph'), { recursive: true });
-  await writeFile(join(damaged, '.game-graph', 'workspace.json'), '{bad');
+  await mkdir(join(damaged, '.mechanics'), { recursive: true });
+  await writeFile(join(damaged, '.mechanics', 'workspace.json'), '{bad');
   const server = await startServer({ port: 0, projectHistoryPath: join(root, 'user', 'projects.json') });
   t.after(async () => { await server.close(); await rm(root, { recursive: true, force: true }); });
 
@@ -59,7 +59,7 @@ test('项目预检区分 existing、missing、invalid，并要求匹配意图和
   assert.equal(mismatch.response.status, 409); assert.equal(mismatch.data.error, 'PROJECT_INTENT_MISMATCH');
 
   const changing = await post(server.origin, '/api/project/preflight', { projectRoot: existing });
-  const mechanismPath = join(existing, '.game-graph', 'mechanics', 'basic-rules.mechanic.json');
+  const mechanismPath = join(existing, '.mechanics', 'mechanics', 'basic-rules.mechanic.json');
   const mechanism = JSON.parse(await readFile(mechanismPath, 'utf8'));
   mechanism.name = '预检期间已更新';
   await writeFile(mechanismPath, JSON.stringify(mechanism));
@@ -71,19 +71,19 @@ test('项目预检区分 existing、missing、invalid，并要求匹配意图和
   const absent = await post(server.origin, '/api/project/preflight', { projectRoot: missing });
   assert.equal(absent.data.status, 'missing'); assert.equal(absent.data.allowedIntent, 'initialize');
   assert.equal(absent.data.willInitialize, true);
-  await assert.rejects(access(join(missing, '.game-graph')), { code: 'ENOENT' });
-  await mkdir(join(missing, '.game-graph'));
+  await assert.rejects(access(join(missing, '.mechanics')), { code: 'ENOENT' });
+  await mkdir(join(missing, '.mechanics'));
   const stale = await post(server.origin, '/api/project/open', { projectRoot: missing,
     selectionToken: absent.data.selectionToken, intent: 'initialize' });
   assert.equal(stale.response.status, 409); assert.equal(stale.data.error, 'PROJECT_PREFLIGHT_STALE');
-  assert.equal(await readFile(join(damaged, '.game-graph', 'workspace.json'), 'utf8'), '{bad');
+  assert.equal(await readFile(join(damaged, '.mechanics', 'workspace.json'), 'utf8'), '{bad');
 
   const newProject = await post(server.origin, '/api/project/preflight', { projectRoot: initializing });
   assert.equal(newProject.data.status, 'missing'); assert.deepEqual(newProject.data.requiredMetadata, []);
   const initialized = await post(server.origin, '/api/project/open', { projectRoot: initializing,
     selectionToken: newProject.data.selectionToken, intent: 'initialize', name: '新项目' });
   assert.equal(initialized.response.status, 200);
-  assert.equal(JSON.parse(await readFile(join(initializing, '.game-graph', 'workspace.json'), 'utf8')).name, '新项目');
+  assert.equal(JSON.parse(await readFile(join(initializing, '.mechanics', 'workspace.json'), 'utf8')).name, '新项目');
 
   const invalid = await post(server.origin, '/api/project/preflight', { projectRoot: damaged });
   assert.equal(invalid.data.status, 'invalid'); assert.equal(invalid.data.error, 'INVALID_JSON');

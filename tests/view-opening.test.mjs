@@ -13,7 +13,7 @@ import { copyExampleFixture } from './example-fixture.mjs';
 const view = { schemaVersion: 3, kind: 'view', workspaceId: 'sample-card-game', id: 'test-view', name: '测试视图', mechanicRegistrations: [{ mechanicId: 'hand', visible: true }], collapsedNodeIds: [], positions: {}, structuralPresentation: 'line' };
 async function fixture(t) {
   const projectRoot = await mkdtemp(join(tmpdir(), 'rule-view-opening-'));
-  const root = join(projectRoot, '.game-graph');
+  const root = join(projectRoot, '.mechanics');
   let store;
   t.after(async () => { if (store) await store.close(); await rm(projectRoot, { recursive: true, force: true }); });
   await copyExampleFixture(projectRoot);

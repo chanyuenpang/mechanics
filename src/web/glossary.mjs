@@ -210,12 +210,12 @@ export function prepareReference({ workspace, draft, selected, candidates, posit
     if (ids.has(node.id)) throw new Error('概念 ID 已存在，请重新核实，不能覆盖定义。');
     ids.add(node.id); definitions.nodes.push(copy(node));
   }
-  const additions = [...new Set(selected)].filter(id => !draft.nodeIds.includes(id));
+  const additions = [...new Set(selected)].filter(id => !draft.focusNodeIds.includes(id));
   if (!additions.length) throw new Error('请至少选择一个尚未引用的概念。');
   if (candidates.some(node => !additions.includes(node.id))) throw new Error('新概念必须同时被本次机制引用。');
   const mechanic = copy(draft);
-  mechanic.nodeIds.push(...additions);
-  if (mechanic.nodeIds.some(id => !ids.has(id))) throw new Error('待引用概念不存在，请重新核实定义。');
+  mechanic.focusNodeIds.push(...additions);
+  if (mechanic.focusNodeIds.some(id => !ids.has(id))) throw new Error('待引用概念不存在，请重新核实定义。');
   Object.assign(mechanic.positions, referencePositions(positions, additions, center));
   compose({ ...workspace, definitions, mechanics: [mechanic] }, [mechanic.id]);
   return { definitions, mechanic, base: copy(base), candidates: copy(candidates), additions };
@@ -254,7 +254,7 @@ export class ReferenceCommit {
     const saved = found.length > 0 && found.every(Boolean);
     const definitions = copy(workspace.definitions);
     if (!saved) definitions.nodes.push(...copy(this.plan.candidates));
-    if (this.plan.mechanic.nodeIds.some(id => !definitions.nodes.some(node => node.id === id))) throw new Error('当前草稿引用的概念已不存在，请重新读取后合并定义。');
+    if (this.plan.mechanic.focusNodeIds.some(id => !definitions.nodes.some(node => node.id === id))) throw new Error('当前草稿引用的概念已不存在，请重新读取后合并定义。');
     compose({ ...workspace, definitions, mechanics: [this.plan.mechanic] }, [this.plan.mechanic.id]);
     this.plan.definitions = definitions; this.definitionsSaved = saved; this.phase = 'pending';
     return saved;
@@ -318,8 +318,8 @@ export class ConceptEditor {
 
 // 窗口候选只存在于本次引用会话；不直接改共享定义或机制文件。
 export class ConceptPicker {
-  constructor(container, session, definitions, referenced, { status, recover, abandon }) {
-    Object.assign(this, { container, session, definitions, referenced, status });
+  constructor(container, session, definitions, referenced, { status, recover = () => {}, abandon = () => {}, allowCreate = true }) {
+    Object.assign(this, { container, session, definitions, referenced, status, allowCreate });
     container.innerHTML = `<fieldset class="concept-picker-fields"><label class="field">搜索概念<input class="concept-search" type="search" aria-label="搜索概念" placeholder="名称、含义或 ID" autocomplete="off"></label>
       <div class="concept-picked" aria-label="待引用概念"></div><div class="choice-list concept-results" aria-label="搜索结果"></div><button class="concept-new quiet" type="button"></button>
       <section class="concept-form" aria-label="新概念定义" hidden></section></fieldset>
@@ -338,7 +338,9 @@ export class ConceptPicker {
     this.get('.concept-new').onclick = () => this.begin();
     this.get('.concept-recover').onclick = recover;
     this.get('.concept-abandon').onclick = abandon;
-    this.get('.concept-form').hidden = true; this.drawResults(); queueMicrotask(() => this.search.focus());
+    this.get('.concept-form').hidden = true;
+    if (!this.allowCreate) { this.get('.concept-new').hidden = true; this.get('.concept-save-note').textContent = '仅可引用已有概念；此处不能新建或修改概念定义。'; }
+    this.drawResults(); queueMicrotask(() => this.search.focus());
   }
   allNodes() { return [...this.definitions.nodes, ...this.session.candidates]; }
   begin() {
@@ -370,7 +372,7 @@ export class ConceptPicker {
       list.append(label);
     }
     if (!list.childElementCount) list.append(element('p', '没有匹配概念', 'note'));
-    this.get('.concept-new').replaceChildren(icon('plus'), document.createTextNode(this.session.query.trim() ? '新建「' + this.session.query.trim() + '」' : '新建概念'));
+    if (this.allowCreate) this.get('.concept-new').replaceChildren(icon('plus'), document.createTextNode(this.session.query.trim() ? '新建「' + this.session.query.trim() + '」' : '新建概念'));
     this.drawPicked(); this.updateStatus();
   }
   drawPicked() {
@@ -393,7 +395,7 @@ export class ConceptPicker {
     this.get('.concept-recovery').hidden = !commit || ['saving', 'applying', 'done'].includes(commit.phase);
     this.get('.concept-recover').hidden = !commit?.blocked;
     const count = selected.size + (form ? 1 : 0);
-    const creating = !commit?.definitionsSaved && (form || candidates.some(node => selected.has(node.id)));
+    const creating = this.allowCreate && !commit?.definitionsSaved && (form || candidates.some(node => selected.has(node.id)));
     this.status((commit?.definitionsSaved || commit?.phase === 'apply-failed' ? '继续引用' : creating ? '创建并引用' : '添加节点') + (count ? `（${count}）` : ''), !!count && !commit?.blocked && !['saving', 'applying', 'done'].includes(commit?.phase));
   }
 }

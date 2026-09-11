@@ -1,6 +1,8 @@
 # CLI 与项目工作区
 
-Game-Graph 是本地开发工具。程序安装目录只拥有 CLI、网页、Schema、文档和通用示例；每个游戏项目固定使用 `<project>/.game-graph` 保存 canonical 概念、机制与视图。
+> 已迁移提示：当前产品为 **Mechanics**，CLI 为 `mech`，唯一 canonical 根目录为 `<project>/.mechanics`。下文尚未逐段迁移的 `game-graph`、`.game-graph` 与旧协议示例仅作历史背景，不能作为操作指令；请以 [README](../README.md) 与 `mech --help` 为准。
+
+Mechanics 是本地开发工具。程序安装目录只拥有 CLI、网页、Schema、文档和通用示例；每个项目固定使用 `<project>/.mechanics` 保存 canonical 概念、机制与视图。
 
 ## 命令
 
