@@ -2113,7 +2113,10 @@ export class GraphCanvas {
     const top = Math.min(Math.max(margin, event.clientY - rect.top + margin), Math.max(margin, this.root.clientHeight - this.tooltip.offsetHeight - margin));
     this.tooltip.style.left = `${left}px`; this.tooltip.style.top = `${top}px`;
   }
-  update(graph, positions, activeId, selection, definitionMode, { preserveRoutes = false, deferRouting = false, structuralPresentation = 'line' } = {}) {
+  update(graph, positions, activeId, selection, definitionMode, { preserveRoutes = false, deferRouting = false, structuralPresentation = 'line', tagDefinitions = [], nodeColors = {}, nodeStyles = {} } = {}) {
+    this.tagDefinitions = tagDefinitions;
+    this.nodeColors = nodeColors;
+    this.nodeStyles = nodeStyles;
     const pendingMove = this.pendingMove, previousGraph = this.graph, previousPositions = this.positions;
     const nextKey = graphGeometryKey(graph, positions), geometryChanged = nextKey !== this.geometryKey;
     this.pendingMove = null;
@@ -2365,7 +2368,6 @@ export class GraphCanvas {
       const { path, labelX, labelY } = geometry;
       const sign = edge.relation === 'specializes' ? 'specializes' : edge.sign === 1 ? 'positive' : edge.sign === -1 ? 'negative' : 'random';
       const appearance = hasRuleText(edge) ? sign : 'empty-rule';
-      const own = this.activeId === null || (edge.steps.length === 1 && edge.steps[0].graphId === this.activeId);
       const selected = this.selection?.type === 'edge' && this.selection.id === edge.id;
       const relationName = sign === 'specializes' ? '特化 / 是某种' : sign === 'positive' ? '正向影响' : sign === 'negative' ? '负向影响' : '随机影响';
       const qualifierText = (qualifiers, side) => (qualifiers?.length ? `；${side}限定：${qualifiers.map(item => `${item.key}=${item.value.kind === 'concept' ? this.callbacks.name(item.value.conceptId) : String(item.value.value)}`).join('，')}` : '');
@@ -2375,9 +2377,9 @@ export class GraphCanvas {
       const tooltipText = `${ruleText}${qualifierText(edge.sourceQualifiers, '源')}${qualifierText(edge.targetQualifiers, '目标')}`.trim();
       if (tooltipText) group.setAttribute('data-tooltip', tooltipText);
       const hit = svg('path', { d: path, class: 'edge-hit' });
-      const line = svg('path', { d: path, class: `edge-line edge-${appearance} ${own ? '' : 'reference'} ${selected ? 'selected' : ''}`, 'marker-end': `url(#${appearance})`, 'pointer-events': 'none' });
+      const line = svg('path', { d: path, class: `edge-line edge-${appearance} ${selected ? 'selected' : ''}`, 'marker-end': `url(#${appearance})`, 'pointer-events': 'none' });
       group.append(hit, line);
-      const label = svg('text', { x: labelX, y: labelY, class: `edge-label ${appearance}`, opacity: own || selected ? 1 : .4 });
+      const label = svg('text', { x: labelX, y: labelY, class: `edge-label ${appearance}` });
       // 连线类型符号统一为字符体系（与工具栏、图例、检查器一致）：＋ 正向、− 负向、？ 随机、is-a 特化 / 是某种
       label.textContent = sign === 'specializes' ? 'is-a' : edge.sign === 1 ? '＋' : edge.sign === -1 ? '−' : '？'; group.append(label); this.world.append(group);
       this.edgeElements.set(edge.id, { group, hit, line, label });
@@ -2391,20 +2393,28 @@ export class GraphCanvas {
       if (sourceDirection) sourceDirection.outgoing = true;
       if (targetDirection) targetDirection.incoming = true;
     }
+    const tagLookup = new Map((this.tagDefinitions ?? []).map(tag => [tag.id.normalize('NFKC').trim().replace(/\s+/gu, ' ').toLocaleLowerCase(), tag]));
     for (const node of projection.nodes) {
       const point = positions[node.id];
-      const own = this.activeId === null || this.definitionMode || node.sourceGraphIds?.includes(this.activeId);
       const selected = this.selectedIds().includes(node.id);
       const direction = directions.get(node.id);
       const role = direction?.outgoing && !direction.incoming ? 'node-start' : direction?.incoming && !direction.outgoing ? 'node-end' : '';
       const roleLabel = role === 'node-start' ? '，起点' : role === 'node-end' ? '，终点' : '';
-      const group = svg('g', { 'data-node': node.id, transform: `translate(${point.x} ${point.y})`, class: `node ${own ? '' : 'reference'} ${selected ? 'selected' : ''} ${this.linkSource === node.id ? 'link-source' : ''} ${role}`, tabindex: 0, role: 'button', 'aria-label': node.label + roleLabel });
+      const nodeColor = this.nodeColors?.[node.id];
+      const colorClass = nodeColor ? `node-color-${nodeColor.slice(1).toLowerCase()}` : '';
+      const styleClass = this.nodeStyles?.[node.id] === 'transparent-dashed' ? 'node-style-transparent-dashed' : '';
+      const group = svg('g', { 'data-node': node.id, transform: `translate(${point.x} ${point.y})`, class: `node ${selected ? 'selected' : ''} ${this.linkSource === node.id ? 'link-source' : ''} ${role} ${colorClass} ${styleClass}`, tabindex: 0, role: 'button', 'aria-label': node.label + roleLabel });
       const tooltipText = [node.label, node.description].filter(Boolean).join('\n').trim();
       if (tooltipText) group.setAttribute('data-tooltip', tooltipText);
       const label = svg('text', { x: 16, y: 27 }); label.textContent = node.label.length > 10 ? `${node.label.slice(0, 10)}…` : node.label;
       const meta = svg('text', { x: 16, y: 45, class: 'node-meta' });
       meta.textContent = this.definitionMode ? node.id.slice(0, 23) : '';
       group.append(svg('rect', { width: WIDTH, height: HEIGHT, rx: 7 }), label, meta);
+      const nodeTags = (node.tagIds ?? []).map(id => tagLookup.get(id.normalize('NFKC').trim().replace(/\s+/gu, ' ').toLocaleLowerCase())).filter(Boolean);
+      for (const [index, tag] of nodeTags.slice(0, 6).entries()) {
+        const dot = svg('circle', { cx: 20 + index * 10, cy: 43, r: 3.2, style: `fill:${tag.color};stroke:none`, 'pointer-events': 'none' });
+        const title = svg('title'); title.textContent = tag.displayName; dot.append(title); group.append(dot);
+      }
       const badgeModel = badgeDisplayModel(node.badges, this.structuralPresentation);
       const visibleNodeIds = new Set(projection.nodes.map(item => item.id));
       for (const [index, badge] of badgeModel.badges.entries()) {

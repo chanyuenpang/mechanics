@@ -1,4 +1,4 @@
-import { refineHierarchy, qualityVector, AUTO_LAYOUT_OPTIONS, MIN_ROUTE_SEGMENT, routeMeetsMinimum } from './hierarchical-layout.mjs';
+import { refineHierarchy, measureGeometry, qualityVector, AUTO_LAYOUT_OPTIONS, MIN_ROUTE_SEGMENT, routeMeetsMinimum } from './hierarchical-layout.mjs';
 import { routeLocalGraph, routeIntersectsBox, routePairChannels } from './local-routing.mjs';
 import { improveFlowBySubtrees, compactHorizontalRoutes, snapLayoutToGrid } from './flow-refinement.mjs';
 import { connectedComponents, SNAP_GRID, edgeBundles } from './layout-structure.mjs';
@@ -22,11 +22,11 @@ function assertPositions(graph, positions) {
   }
 }
 
-function compactComponents(components, positions, baseline) {
+async function compactComponents(components, positions, baseline) {
   const anchor = ids => ({ x: Math.min(...ids.map(id => positions[id].x)), y: Math.min(...ids.map(id => positions[id].y)) });
   const ordered = components.map(graph => ({ graph, anchor: anchor(graph.nodes.map(node => node.id)) }))
     .sort((a, b) => a.anchor.y - b.anchor.y || a.anchor.x - b.anchor.x);
-  const blocks = [];
+  const blocks = [], warnings = [];
   // 后期逐个区域收紧，保留区域内部节点的横向顺序；最后只平移整个外框。
   for (const { graph } of ordered) {
     const ids = new Set(graph.edges.map(edge => edge.id));
@@ -35,7 +35,30 @@ function compactComponents(components, positions, baseline) {
     const geometry = { ...before, routes: [...before.routes],
       sizes: Object.fromEntries(graph.nodes.map(node => [node.id, { width: WIDTH, height: HEIGHT }])) };
     const compacted = compactHorizontalRoutes(graph, geometry);
-    const snapped = snapLayoutToGrid(graph, compacted.geometry);
+    let snapped;
+    try {
+      snapped = snapLayoutToGrid(graph, compacted.geometry);
+    } catch (error) {
+      // 吸附只改变节点位置；旧折线不能变形时，保留同一份网格节点位置并完整重路由。
+      // 这是自动整理阶段，允许重算所有本区域路径，但绝不移动已吸附的节点。
+      if (!error.rerouteCandidate) throw error;
+      try {
+        const rerouted = await routeLocalGraph({ graph, positions: error.rerouteCandidate, previousPositions: compacted.geometry.positions,
+          cachedRoutes: [], edgeIds: graph.edges.map(edge => edge.id), movedIds: graph.nodes.map(node => node.id), fixedPositions: true });
+        const geometry = { positions: rerouted.positions, routes: [...rerouted.routes],
+          sizes: Object.fromEntries(graph.nodes.map(node => [node.id, { width: WIDTH, height: HEIGHT }])) };
+        if (qualityVector(measureGeometry(graph, geometry))[0] !== 0 || geometry.routes.some(([, route]) => !routeMeetsMinimum(route.points))) {
+          throw new Error('自动排版吸附后重路由未通过几何检查。');
+        }
+        snapped = geometry;
+      } catch (rerouteError) {
+        if (rerouteError?.code !== 'LOCAL_ROUTING_INFEASIBLE') throw rerouteError;
+        // 网格是视觉优化；紧缩后的原几何已经通过完整审计时，不能因网格候选的
+        // 局部端口不足而丢弃整次自动排版。保留可读的精确布局，并明确告知用户。
+        snapped = compacted.geometry;
+        warnings.push('已完成自动整理；为保持连线接入段可读性，本区域未吸附到网格。');
+      }
+    }
     const result = { positions: snapped.positions, routes: new Map(snapped.routes) };
     const points = [...Object.values(result.positions).flatMap(p => [p, { x: p.x + WIDTH, y: p.y + HEIGHT }]),
       ...[...result.routes.values()].flatMap(route => route.points)];
@@ -46,7 +69,7 @@ function compactComponents(components, positions, baseline) {
   const gap = 80, origin = anchor(components.flatMap(graph => graph.nodes.map(node => node.id)));
   const rowWidth = Math.max(...blocks.map(block => block.width),
     Math.sqrt(blocks.reduce((sum, block) => sum + (block.width + gap) * (block.height + gap), 0)));
-  const result = { positions: {}, routes: new Map() }; let x = 0, y = 0, rowHeight = 0;
+  const result = { positions: {}, routes: new Map(), warnings }; let x = 0, y = 0, rowHeight = 0;
   for (const block of blocks) {
     if (x && x + block.width > rowWidth) { x = 0; y += rowHeight + gap; rowHeight = 0; }
     const dx = snap(origin.x + x - block.left), dy = snap(origin.y + y - block.top);
@@ -87,13 +110,13 @@ async function layoutAll(graph, positions, ELK, timings) {
     routes: new Map(result.geometry.routes.map(([id, route]) => [id, { points: route.points.map(shift) }])),
   };
   const components = connectedComponents(graph);
-  const compacted = compactComponents(components, positions, arranged);
+  const compacted = await compactComponents(components, positions, arranged);
   record('compactGridMs');
   if (!bundled) return compacted;
   const expanded = await routePairChannels({ graph: original, positions: compacted.positions, cachedRoutes: compacted.routes,
     edgeIds: original.edges.map(edge => edge.id) });
   record('channelsMs');
-  return expanded;
+  return { ...expanded, warnings: compacted.warnings };
 }
 
 async function layoutSelection(graph, positions, movableIds, ELK, cachedRoutes = []) {

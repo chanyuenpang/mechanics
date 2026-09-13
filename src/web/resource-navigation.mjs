@@ -1,9 +1,12 @@
 import { normalizeSearchTerm } from '../domain/identity.mjs';
 
 const text = value => String(value ?? '');
-const compareText = (left, right) => left < right ? -1 : left > right ? 1 : 0;
+// 侧栏是面向人阅读的文件列表：中文按本地化顺序，嵌入的编号按自然数排序。
+const textCollator = new Intl.Collator('zh-Hans-CN', { numeric: true, sensitivity: 'base' });
+const compareText = (left, right) => textCollator.compare(left, right);
 const normalized = value => normalizeSearchTerm(text(value));
 const normalizedPath = value => text(value).replaceAll('\\', '/').replace(/^\.\//u, '');
+const filename = path => normalizedPath(path).split('/').at(-1) ?? '';
 
 function uniqueIds(ids = []) {
   const result = [], seen = new Set();
@@ -49,8 +52,10 @@ function baseRows(resources, files, kind, currentId, recentIds) {
 }
 
 function compareRows(left, right) {
-  return compareText(normalized(left.fullPath), normalized(right.fullPath))
-    || compareText(normalized(left.name), normalized(right.name))
+  // 侧栏以用户实际看见的文件名称排序；磁盘路径仅用于同名时稳定消歧。
+  // 不能用技术文件名（例如 return-surge-...）作为首键，否则带编号的显示名称会显得乱序。
+  return compareText(normalized(left.name), normalized(right.name))
+    || compareText(normalized(filename(left.fullPath)), normalized(filename(right.fullPath)))
     || compareText(normalized(left.id), normalized(right.id))
     || compareText(normalized(left.fullPath), normalized(right.fullPath));
 }

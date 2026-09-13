@@ -193,13 +193,28 @@ async function inspectProject(body) {
   try {
     // 预检只判断 canonical 是否可打开；生成文档目录的问题由打开后的导出状态处理。
     const context = await projectContext(projectRoot, { allowMissingExport: true, allowUnavailableExport: true });
-    const workspace = await readWorkspace(context.workspaceRoot, { context });
+    const workspace = await readWorkspace(context.workspaceRoot, { context, isolateResources: true });
     return { result: { projectRoot: context.projectRoot, status: 'existing', workspaceRoot: context.workspaceRoot,
       workspaceName: workspace.manifest.name, workspaceId: workspace.manifest.id, requiredMetadata: [], willInitialize: false },
       // 既有工作区的内容可由另一个合法写入者持续变化。预检只确认“仍是同一个可打开的工作区”，
       // 不把规则 revision 当作打开凭据；真正读取由 open/store 在切换时完成。
       fingerprint: `existing:${workspace.manifest.id}` };
   } catch (error) {
+    // 版本升级属于“打开项目”的职责：预检必须允许有安全升级路径的工作区继续到 open，
+    // 不能在自动迁移前以当前版本的完整 schema 把它拒绝掉。
+    if (error?.code === 'WORKSPACE_VERSION_UNSUPPORTED') {
+      try {
+        const manifest = JSON.parse(await readFile(resolve(workspaceRoot, 'workspace.json'), 'utf8'));
+        if (manifest?.kind === 'workspace' && [10, 11].includes(manifest.schemaVersion)
+          && typeof manifest.id === 'string' && typeof manifest.name === 'string') {
+          return { result: { projectRoot, status: 'existing', workspaceRoot, workspaceName: manifest.name,
+            workspaceId: manifest.id, requiredMetadata: [], willInitialize: false, willUpgrade: true },
+          fingerprint: `existing:${manifest.id}:v${manifest.schemaVersion}` };
+        }
+      } catch {
+        // 保留原始校验错误，避免把损坏的 manifest 伪装成可升级项目。
+      }
+    }
     return { result: { projectRoot, status: 'invalid', workspaceRoot, error: error.code ?? 'PROJECT_INVALID', message: error.message } };
   }
 }

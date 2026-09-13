@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { access, cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, mkdtemp, readFile, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { startServer } from '../src/server/http.mjs';
 import { copyExampleFixture } from './example-fixture.mjs';
+import { readWorkspace } from '../src/server/workspace.mjs';
 
 const example = new URL('../examples/card-game/', import.meta.url);
 
@@ -12,6 +13,30 @@ async function post(origin, path, body, contentType = 'application/json') {
   const response = await fetch(origin + path, { method: 'POST', headers: { 'Content-Type': contentType },
     body: contentType === 'application/json' ? JSON.stringify(body) : String(body) });
   return { response, data: await response.json() };
+}
+
+async function downgradeFixtureToV10(projectRoot) {
+  const workspaceRoot = join(projectRoot, '.mechanics'), workspace = await readWorkspace(workspaceRoot);
+  const manifestPath = join(workspaceRoot, 'workspace.json'), manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  const rules = JSON.parse(await readFile(join(workspaceRoot, 'rules.json'), 'utf8'));
+  await rename(join(workspaceRoot, 'definitions.json'), join(workspaceRoot, 'definitions.graph.json'));
+  const definitionsPath = join(workspaceRoot, 'definitions.graph.json'), definitions = JSON.parse(await readFile(definitionsPath, 'utf8'));
+  definitions.schemaVersion = 5; delete definitions.tagDefinitions;
+  for (const node of definitions.nodes) delete node.tagIds;
+  await writeFile(definitionsPath, JSON.stringify(definitions, null, 2) + '\n');
+  for (const mechanic of workspace.mechanics) {
+    const path = join(workspaceRoot, workspace.files.find(file => file.kind === 'mechanic' && file.id === mechanic.id).path);
+    const legacy = { ...mechanic, schemaVersion: 6, nodeIds: mechanic.focusNodeIds, edges: rules.rules.filter(rule => mechanic.pinnedRuleIds.includes(rule.id)) };
+    delete legacy.focusNodeIds; delete legacy.pinnedRuleIds; delete legacy.nodeColors; delete legacy.nodeStyles;
+    await writeFile(path, JSON.stringify(legacy, null, 2) + '\n');
+  }
+  for (const view of workspace.views) {
+    const path = join(workspaceRoot, workspace.files.find(file => file.kind === 'view' && file.id === view.id).path);
+    await writeFile(path, JSON.stringify({ ...view, schemaVersion: 3 }, null, 2) + '\n');
+  }
+  const v10 = { ...manifest, schemaVersion: 10, definitions: 'definitions.graph.json' };
+  delete v10.rules; await writeFile(manifestPath, JSON.stringify(v10, null, 2) + '\n');
+  await unlink(join(workspaceRoot, 'rules.json'));
 }
 
 test('目录浏览只返回目录，回显规范路径并明确标记不可进入的符号链接', async t => {
@@ -90,6 +115,36 @@ test('项目预检区分 existing、missing、invalid，并要求匹配意图和
   assert.equal(invalid.data.selectionToken, undefined);
   const noToken = await post(server.origin, '/api/project/open', { projectRoot: existing, intent: 'existing' });
   assert.equal(noToken.response.status, 422); assert.equal(noToken.data.error, 'PROJECT_PREFLIGHT_REQUIRED');
+});
+
+test('预检允许 v10 工作区，并以兼容读模型打开而不自动迁移', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'mechanics-v10-preflight-'));
+  await copyExampleFixture(root); await downgradeFixtureToV10(root);
+  const server = await startServer({ port: 0, projectHistoryPath: join(root, 'user', 'projects.json') });
+  t.after(async () => { await server.close(); await rm(root, { recursive: true, force: true }); });
+  const preflight = await post(server.origin, '/api/project/preflight', { projectRoot: root });
+  assert.equal(preflight.response.status, 200); assert.equal(preflight.data.status, 'existing'); assert.equal(preflight.data.willUpgrade, undefined);
+  const opened = await post(server.origin, '/api/project/open', { projectRoot: root, selectionToken: preflight.data.selectionToken, intent: preflight.data.allowedIntent });
+  assert.equal(opened.response.status, 200, JSON.stringify(opened.data)); assert.equal(opened.data.manifest.schemaVersion, 12);
+  assert.equal(opened.data.compatibilityMode, true);
+  assert.equal(JSON.parse(await readFile(join(root, '.mechanics', 'workspace.json'), 'utf8')).schemaVersion, 10);
+});
+
+test('坏机制图不会阻断网页预检和项目打开', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'mechanics-degraded-project-'));
+  await copyExampleFixture(root);
+  const workspaceRoot = join(root, '.mechanics'), workspace = await readWorkspace(workspaceRoot);
+  const target = workspace.mechanics.find(item => item.id === 'hand');
+  const path = join(workspaceRoot, workspace.files.find(file => file.kind === 'mechanic' && file.id === target.id).path);
+  await writeFile(path, JSON.stringify({ ...target, focusNodeIds: [...target.focusNodeIds, 'player-damage'] }, null, 2));
+  const server = await startServer({ port: 0, projectHistoryPath: join(root, 'user', 'projects.json') });
+  t.after(async () => { await server.close(); await rm(root, { recursive: true, force: true }); });
+  const preflight = await post(server.origin, '/api/project/preflight', { projectRoot: root });
+  assert.equal(preflight.response.status, 200); assert.equal(preflight.data.status, 'existing');
+  const opened = await post(server.origin, '/api/project/open', { projectRoot: root, selectionToken: preflight.data.selectionToken, intent: 'existing' });
+  assert.equal(opened.response.status, 200, JSON.stringify(opened.data));
+  assert.equal(opened.data.workspaceState, 'degraded');
+  assert.ok(opened.data.resourceDiagnostics.some(item => item.path.endsWith('hand.mechanic.json') && /player-damage/.test(item.message)));
 });
 
 test('项目仅在成功激活后进入最近记录，并支持置顶、取消置顶和移除', async t => {

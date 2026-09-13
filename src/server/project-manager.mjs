@@ -95,7 +95,8 @@ export function createProjectManager({ onActivated = null } = {}) {
       catch (failure) { if (failure.code === 'INVALID_ID') fail('PROJECT_METADATA_REQUIRED', failure.message); throw failure; }
     }
     if (syncSkills) await registerProjectSkills(requested);
-    const context = await projectContext(requested, { allowMissingExport: true, allowUnavailableExport: true }), store = await createWorkspaceStore(context.workspaceRoot);
+    const context = await projectContext(requested, { allowMissingExport: true, allowUnavailableExport: true }),
+      store = await createWorkspaceStore(context.workspaceRoot, { isolateResources: true });
     let workspace;
     try { workspace = await store.ensurePublication(); } catch (error) { await store.close(); throw error; }
     const session = { token: randomUUID(), generation: ++generation, context, store, workspaceId: workspace.manifest.id,
@@ -131,7 +132,7 @@ export function createProjectManager({ onActivated = null } = {}) {
       if (typeof body?.referenceId !== 'string' || !body.referenceId) fail('REFERENCE_ID_REQUIRED', '进入关联项目必须提供关联条目 ID');
       const reference = (await listProjectReferences(source.context.projectRoot)).find(item => item.id === body.referenceId);
       if (!reference) fail('REFERENCE_NOT_DECLARED', `源项目未声明关联项目：${body.referenceId}`);
-      if (reference.status !== 'ready') fail('REFERENCE_UNAVAILABLE', `关联项目“${reference.name}”当前不可进入：${reference.status}`);
+      if (!['ready', 'migratable'].includes(reference.status)) fail('REFERENCE_UNAVAILABLE', `关联项目“${reference.name}”当前不可进入：${reference.status}`);
       return openStore({ projectRoot: reference.projectRoot, intent: 'existing' }, { activate: false, recordHistory: false, syncSkills: true });
     }),
     read: token => enqueue(async () => { const session = current(token); return attach(await session.store.read(), session); }),
@@ -180,7 +181,7 @@ export function createProjectManager({ onActivated = null } = {}) {
     }),
     readConceptDocs: (conceptId, token) => enqueue(async () => { const session = current(token); return attach(await readCatalogBrowser(session.context, await session.store.read(), conceptId), session); }),
     readDocumentExport: token => enqueue(async () => { const session = current(token); return attach(await session.store.documentExportStructure(), session); }),
-    save: body => call(body, store => store.save(body)), saveRulesAndMechanic: body => call(body, store => store.saveRulesAndMechanic(body)), deleteGlobalRule: body => call(body, store => store.deleteGlobalRule(body)), createMechanic: body => call(body, store => store.createMechanic(body)), createMechanicFolder: body => call(body, store => store.createMechanicFolder(body)), moveMechanic: body => call(body, store => store.moveMechanic(body)), moveMechanicFolder: body => call(body, store => store.moveMechanicFolder(body)), deleteMechanicFolder: body => call(body, store => store.deleteMechanicFolder(body)), deleteMechanic: body => call(body, store => store.deleteMechanic(body)), createView: body => call(body, store => store.createView(body)),
+    save: body => call(body, store => store.save(body)), saveRulesAndMechanic: body => call(body, store => store.saveRulesAndMechanic(body)), deleteGlobalRule: body => call(body, store => store.deleteGlobalRule(body)), removeMechanicNodes: body => call(body, store => store.removeMechanicNodes(body)), createMechanic: body => call(body, store => store.createMechanic(body)), createMechanicFolder: body => call(body, store => store.createMechanicFolder(body)), moveMechanic: body => call(body, store => store.moveMechanic(body)), moveMechanicFolder: body => call(body, store => store.moveMechanicFolder(body)), deleteMechanicFolder: body => call(body, store => store.deleteMechanicFolder(body)), deleteMechanic: body => call(body, store => store.deleteMechanic(body)), createView: body => call(body, store => store.createView(body)),
     openAgentEdit: body => enqueue(async () => {
       const session = await agentProject(body);
       if (typeof body?.mechanic !== 'string' || !body.mechanic) fail('AGENT_EDIT_SESSION_INVALID', '打开编辑会话必须提供机制 ID');

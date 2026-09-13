@@ -48,7 +48,7 @@ export function graphPositions(workspace, graph, positions = {}, mechanicId = nu
 function materializeView(workspace, snapshot, original, graph) {
   const positions = completeViewPositions(workspace, original, snapshot.positions);
   return { mechanicRegistrations: snapshot.mechanicRegistrations.map(item => structuredClone(item)), focusNodeIds: structuredClone(snapshot.focusNodeIds ?? []), pinnedRuleIds: structuredClone(snapshot.pinnedRuleIds ?? []), collapsedNodeIds: [], positions,
-    projectionPositions: structuredClone(snapshot.projectionPositions ?? {}), ...(snapshot.routeCache ? { routeCache: structuredClone(snapshot.routeCache) } : {}),
+    nodeColors: structuredClone(snapshot.nodeColors ?? {}), nodeStyles: structuredClone(snapshot.nodeStyles ?? {}), projectionPositions: structuredClone(snapshot.projectionPositions ?? {}), ...(snapshot.routeCache ? { routeCache: structuredClone(snapshot.routeCache) } : {}),
     structuralPresentation: snapshot.structuralPresentation };
 }
 
@@ -60,6 +60,8 @@ function updateViewProjection(workspace, snapshot) {
     pinnedRuleIds: structuredClone(snapshot.pinnedRuleIds ?? []),
     collapsedNodeIds: [],
     positions: completeViewPositions(workspace, original, snapshot.positions),
+    nodeColors: structuredClone(snapshot.nodeColors ?? {}),
+    nodeStyles: structuredClone(snapshot.nodeStyles ?? {}),
     projectionPositions: structuredClone(snapshot.projectionPositions ?? {}),
     ...(snapshot.routeCache ? { routeCache: structuredClone(snapshot.routeCache) } : {}),
     structuralPresentation: snapshot.structuralPresentation,
@@ -101,9 +103,15 @@ export function prepareOpening(workspace, requestedId) {
 }
 
 export async function readOpening(api, requestedId, cachedWorkspace = null) {
-  // 同一项目内的资源切换只切换已验证快照；最近打开资源属于本地 UI 状态，
-  // 不能因此重读或改写 canonical workspace.json。
-  return prepareOpening(cachedWorkspace ?? await api('/api/workspace'), requestedId);
+  // 同一项目内的普通资源切换复用已验证快照，避免为每次导航重读整个工作区。
+  // 但 Agent 或外部编辑器可能在页面打开后写入了此机制图：旧快照把它误判为空图时，
+  // 必须回读一次 canonical workspace，不能把“请引用概念”的空状态展示给用户。
+  const opened = prepareOpening(cachedWorkspace ?? await api('/api/workspace'), requestedId);
+  const requestedMechanic = typeof requestedId === 'object' && requestedId?.kind === 'mechanic' && requestedId.id !== null;
+  if (cachedWorkspace && requestedMechanic && opened.graph.nodes.length === 0) {
+    return prepareOpening(await api('/api/workspace'), requestedId);
+  }
+  return opened;
 }
 
 export async function createAndRememberView(api, revision, document, file) {

@@ -77,7 +77,18 @@ export async function listProjectReferences(sourceRoot, { bindingsFile, declarat
       const workspace = await readQuerySnapshot(context.workspaceRoot);
       if (workspace.manifest.id !== item.workspaceId) return { ...item, projectRoot: context.projectRoot, status: 'workspace-mismatch', actualWorkspaceId: workspace.manifest.id };
       return { ...item, projectRoot: context.projectRoot, status: 'ready', actualName: workspace.manifest.name };
-    } catch (error) { return { ...item, projectRoot, status: 'unavailable', message: error.message }; }
+    } catch (error) {
+      // 关联项目必须先经过统一 openStore 的安全迁移；这里不能提前用 v12 门禁把 v10/v11 永久判死。
+      if (error?.code === 'WORKSPACE_VERSION_UNSUPPORTED') {
+        try {
+          const manifest = JSON.parse(await readFile(resolve(projectRoot, WORKSPACE_DIRECTORY, 'workspace.json'), 'utf8'));
+          if (manifest?.kind === 'workspace' && [10, 11].includes(manifest.schemaVersion) && manifest.id === item.workspaceId) {
+            return { ...item, projectRoot, status: 'migratable', actualName: manifest.name, schemaVersion: manifest.schemaVersion };
+          }
+        } catch { /* 保留原始不可用错误 */ }
+      }
+      return { ...item, projectRoot, status: 'unavailable', message: error.message };
+    }
   }));
 }
 

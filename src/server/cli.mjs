@@ -22,7 +22,7 @@ mech init <项目目录> [--name <名称>] [--id <稳定ID>]
 mech sync [--project <项目目录>]（同步项目内受管 skill 与 JSON 工具）
 mech web [--project <项目目录>] [--port 4319]
 mech validate [--project <项目目录>]
-mech migrate --from 7 --to 8 | --from 8 --to 9 | --from 9 --to 10 | --from 10 --to 11 | --from 9 --to 9（悬空节点修复） --project <项目目录> [--revision <预览版本>] [--execute]（默认仅预览）
+mech migrate --from 7 --to 8 | --from 8 --to 9 | --from 9 --to 10 | --from 10 --to 12 | --from 11 --to 12 | --from 9 --to 9（悬空节点修复） --project <项目目录> [--revision <预览版本>] [--execute]（默认仅预览）
 mech migrate-project --project <旧项目目录> [--execute]（旧 .game-graph 的一键显式迁移）
 mech repair projection-positions --project <项目目录> [--revision <预览版本>] [--execute]（只删除已无规则引用的限定投影坐标）
 mech catalog [--project <项目目录>]（重建 mechanics Agent 文档）
@@ -71,7 +71,7 @@ try {
     project: { type: 'string' }, port: { type: 'string' }, name: { type: 'string' }, id: { type: 'string' }, from: { type: 'string' }, to: { type: 'string' }, execute: { type: 'boolean' },
     help: { type: 'boolean', short: 'h' }, version: { type: 'boolean', short: 'v' },
       ...Object.fromEntries(['connect', 'format', 'mechanic', 'view', 'revision', 'direction', 'hops', 'query', 'from', 'to', 'max-paths', 'max-depth', 'max-expansions',
-      'label', 'description', 'aliases', 'tags', 'custom-data', 'concept', 'source', 'target', 'source-qualifiers', 'target-qualifiers', 'relation', 'sign', 'text', 'inheritance', 'project-generation', 'session', 'previous-session', 'include-inherited', 'workspace-revision', 'parent', 'scope', 'folder', 'remove-isolated-concepts', 'manifest', 'library', 'entry', 'workspace-id', 'draft'].map(key => [key, { type: 'string' }])),
+      'label', 'description', 'aliases', 'tag-ids', 'custom-data', 'concept', 'source', 'target', 'source-qualifiers', 'target-qualifiers', 'relation', 'sign', 'text', 'inheritance', 'project-generation', 'session', 'previous-session', 'include-inherited', 'workspace-revision', 'parent', 'scope', 'folder', 'remove-isolated-concepts', 'manifest', 'library', 'entry', 'workspace-id', 'draft'].map(key => [key, { type: 'string' }])),
   }, allowPositionals: true });
   const [command, target] = positionals;
   if (values.help || (!command && !Object.keys(values).length)) console.log(usage);
@@ -110,7 +110,7 @@ try {
       if (values.project === '') throw new Error('--project 不能为空');
       const projectRoot = values.project !== undefined ? await realpath(resolve(values.project))
         : command === 'web' ? null : await findProject();
-      const context = projectRoot && !['sync', 'migrate-project'].includes(command) ? ['migrate', 'repair'].includes(command) ? { projectRoot, workspaceRoot: resolve(projectRoot, WORKSPACE_DIRECTORY) }
+      const context = projectRoot && !['sync', 'migrate-project', 'web'].includes(command) ? ['migrate', 'repair'].includes(command) ? { projectRoot, workspaceRoot: resolve(projectRoot, WORKSPACE_DIRECTORY) }
         : await projectContext(projectRoot, command === 'catalog' ? { createExportRoot: true }
           : { allowMissingExport: true, allowUnavailableExport: true }) : null;
       if (command === 'migrate-project') {
@@ -124,7 +124,7 @@ try {
         console.log(JSON.stringify(await repairProjectionPositions(context.workspaceRoot, { revision: values.revision, execute: values.execute === true }), null, 2));
       } else if (command === 'migrate') {
         const from = Number(values.from), to = Number(values.to);
-        if (!((from === 7 && to === 8) || (from === 8 && to ===9) || (from === 9 && to === 10) || (from === 10 && to === 11) || (from === 9 && to === 9))) throw Object.assign(new Error('migrate 仅支持 --from 7 --to 8、--from 8 --to 9、--from 9 --to 10、--from 10 --to 11 或 --from 9 --to 9'), { code: 'MIGRATION_VERSION_UNSUPPORTED' });
+        if (!((from === 7 && to === 8) || (from === 8 && to ===9) || (from === 9 && to === 10) || (from === 10 && to === 12) || (from === 11 && to === 12) || (from === 9 && to === 9))) throw Object.assign(new Error('migrate 仅支持 --from 7 --to 8、--from 8 --to 9、--from 9 --to 10、--from 10 --to 12、--from 11 --to 12 或 --from 9 --to 9'), { code: 'MIGRATION_VERSION_UNSUPPORTED' });
         console.log(JSON.stringify(await migrateWorkspace(context.workspaceRoot, { from, to, revision: values.revision, execute: values.execute === true }), null, 2));
       } else if (command === 'catalog') {
         const release = await acquireWorkspaceLock(context.workspaceRoot);

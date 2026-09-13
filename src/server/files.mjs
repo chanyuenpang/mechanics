@@ -14,6 +14,16 @@ export async function writeExclusive(path, text) {
   try { await handle.writeFile(text, 'utf8'); await handle.sync(); }
   finally { await handle.close(); }
 }
+async function replaceWithRetry(from, to) {
+  // Windows 可能在关闭文件句柄后的极短时间内仍拒绝替换；仅重试该类瞬时占用，最终错误仍完整暴露。
+  for (let attempt = 0; ; attempt++) {
+    try { await rename(from, to); return; }
+    catch (error) {
+      if (!['EPERM', 'EACCES', 'EBUSY'].includes(error.code) || attempt >= 4) throw error;
+      await new Promise(resolve => setTimeout(resolve, 20 * (attempt + 1)));
+    }
+  }
+}
 export async function commitFile(root, file, text, { create = false, extensions = ['.json'] } = {}) {
   const path = await workspacePath(root, file, { allowMissing: create, extensions });
   const temp = `${path}.${randomUUID()}.mechanics.tmp`;
@@ -22,7 +32,7 @@ export async function commitFile(root, file, text, { create = false, extensions 
     await writeExclusive(temp, text);
     await workspacePath(root, file, { allowMissing: create, extensions });
     // 新建用硬链接发布完整临时文件，原子拒绝同名目标；不先删除或覆盖。
-    if (create) await link(temp, path); else await rename(temp, path);
+    if (create) await link(temp, path); else await replaceWithRetry(temp, path);
     committed = true;
     if (create) await unlink(temp);
     if (await readFile(path, 'utf8') !== text) throw new Error('回读内容不一致');

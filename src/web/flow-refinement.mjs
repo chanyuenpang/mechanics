@@ -68,6 +68,7 @@ export function snapLayoutToGrid(graph, geometry) {
   const origin = { x: Math.min(...Object.values(geometry.positions).map(p => p.x)),
     y: Math.min(...Object.values(geometry.positions).map(p => p.y)) };
   const attempts = [];
+  let rerouteCandidate = null;
   for (let step = 0; step <= 10; step++) {
     const factor = 1 + step * 0.05;
     const scale = p => ({ x: origin.x + (p.x - origin.x) * factor, y: origin.y + (p.y - origin.y) * factor });
@@ -76,6 +77,9 @@ export function snapLayoutToGrid(graph, geometry) {
       return [node.id, { x: snap(center.x - W / 2), y: snap(center.y - H / 2) }];
     }));
     const candidate = { ...geometry, positions, routes: [] }; let blockedEdge = null;
+    // 即使旧折线路径在吸附后不再可用，也保留不重叠的节点候选，交给调用方完整重算路径。
+    // 节点网格与路径是两项独立约束；不能因为旧路径无法仿射变形就拒绝整个自动排版。
+    if (measureGeometry({ ...graph, edges: [] }, { positions, routes: [], sizes: geometry.sizes }).nodeOverlaps === 0) rerouteCandidate = positions;
     for (const edge of graph.edges) {
       const old = routes.get(edge.id).points, points = old.map(scale), ports = [];
       for (const [role, i, adjacent] of [['source', 0, 1], ['target', old.length - 1, old.length - 2]]) {
@@ -108,7 +112,7 @@ export function snapLayoutToGrid(graph, geometry) {
       && after.contacts <= before.contacts && after.overlaps <= before.overlaps + EPS) return candidate;
     attempts.push({ factor, metrics: after, shortEdges });
   }
-  throw Object.assign(new Error('自动排版放大并吸附后未通过几何检查，未提交。'), { attempts });
+  throw Object.assign(new Error('自动排版放大并吸附后未通过几何检查，未提交。'), { attempts, rerouteCandidate });
 }
 
 // 对一个独立区域按 x 从左往右反复收紧；节点、端口与拐点共用坐标约束。

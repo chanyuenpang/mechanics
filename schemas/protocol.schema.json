@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "urn:mechanics-tools:protocol:11",
-  "title": "Mechanics 工作区 v11、机制 v7、定义 v6、规则库 v1、视图 v4",
+  "$id": "urn:mechanics-tools:protocol:12",
+  "title": "Mechanics 工作区 v12、机制 v7、定义 v7、规则库 v1、视图 v4",
   "oneOf": [
     {
       "$ref": "#/definitions/workspace"
@@ -25,6 +25,7 @@
       "maxLength": 96,
       "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
     },
+    "tagId": { "type": "string", "minLength": 1, "maxLength": 160 },
     "text": {
       "type": "string",
       "minLength": 1,
@@ -76,6 +77,49 @@
       },
       "additionalProperties": {
         "$ref": "#/definitions/position"
+      }
+    },
+    "nodeColors": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/definitions/id"
+      },
+      "additionalProperties": {
+        "enum": [
+          "#E4EDF5",
+          "#EAE7F2",
+          "#F0E8EF",
+          "#E8F0EE",
+          "#EEEDE5",
+          "#E9EEF0",
+          "#F1EAE4",
+          "#E3EEF9",
+          "#ECE6F7",
+          "#F8E7EE",
+          "#E2F1EB",
+          "#F5EEDC",
+          "#E1F0F3",
+          "#F8E8DF",
+          "#D5E8F7",
+          "#E5DCF4",
+          "#F5DDE7",
+          "#D2EDE2",
+          "#F4E2BC",
+          "#D2EAEE",
+          "#F5DCD2"
+        ]
+      }
+    },
+    "nodeStyles": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/definitions/id"
+      },
+      "additionalProperties": {
+        "enum": [
+          "solid",
+          "transparent-dashed"
+        ]
       }
     },
     "routePath": {
@@ -197,7 +241,7 @@
       "properties": {
         "schemaVersion": {
           "enum": [
-            11
+            12
           ]
         },
         "kind": {
@@ -336,6 +380,12 @@
         "positions": {
           "$ref": "#/definitions/positions"
         },
+        "nodeColors": {
+          "$ref": "#/definitions/nodeColors"
+        },
+        "nodeStyles": {
+          "$ref": "#/definitions/nodeStyles"
+        },
         "structuralPresentation": {
           "enum": [
             "line",
@@ -433,11 +483,11 @@
         "agentLocked": {
           "type": "boolean"
         },
-        "tags": {
+        "tagIds": {
           "type": "array",
           "uniqueItems": true,
           "items": {
-            "$ref": "#/definitions/text"
+            "$ref": "#/definitions/tagId"
           }
         },
         "aliases": {
@@ -493,11 +543,11 @@
         "agentLocked": {
           "type": "boolean"
         },
-        "tags": {
+        "tagIds": {
           "type": "array",
           "uniqueItems": true,
           "items": {
-            "$ref": "#/definitions/text"
+            "$ref": "#/definitions/tagId"
           }
         },
         "aliases": {
@@ -538,11 +588,11 @@
         "agentLocked": {
           "type": "boolean"
         },
-        "tags": {
+        "tagIds": {
           "type": "array",
           "uniqueItems": true,
           "items": {
-            "$ref": "#/definitions/text"
+            "$ref": "#/definitions/tagId"
           }
         },
         "aliases": {
@@ -566,6 +616,11 @@
         }
       }
     },
+    "tagDefinition": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "displayName", "color"],
+      "properties": { "id": { "$ref": "#/definitions/tagId" }, "displayName": { "$ref": "#/definitions/text" }, "color": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" } }
+    },
     "definitionGraph": {
       "type": "object",
       "additionalProperties": false,
@@ -579,7 +634,7 @@
       "properties": {
         "schemaVersion": {
           "enum": [
-            6
+            7
           ]
         },
         "kind": {
@@ -588,6 +643,7 @@
         "workspaceId": {
           "$ref": "#/definitions/id"
         },
+        "tagDefinitions": { "type": "array", "items": { "$ref": "#/definitions/tagDefinition" } },
         "nodes": {
           "type": "array",
           "items": {
@@ -799,6 +855,9 @@
         "scope": {
           "$ref": "#/definitions/text"
         },
+        "ruleSelection": {
+          "const": "explicit"
+        },
         "focusNodeIds": {
           "$ref": "#/definitions/ids"
         },
@@ -807,6 +866,12 @@
         },
         "positions": {
           "$ref": "#/definitions/positions"
+        },
+        "nodeColors": {
+          "$ref": "#/definitions/nodeColors"
+        },
+        "nodeStyles": {
+          "$ref": "#/definitions/nodeStyles"
         },
         "projectionPositions": {
           "$ref": "#/definitions/projectionPositions"

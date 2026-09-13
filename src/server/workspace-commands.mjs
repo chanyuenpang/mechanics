@@ -52,10 +52,10 @@ export async function initProject(target, { name = '规则模型工作区', id =
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
   await preflightProjectSkills(projectRoot);
 
-  const manifest = { schemaVersion: 11, kind: 'workspace', id, name, definitions: 'definitions.json', rules: 'rules.json',
+  const manifest = { schemaVersion: 12, kind: 'workspace', id, name, definitions: 'definitions.json', rules: 'rules.json',
     agentExportPath: DEFAULT_AGENT_EXPORT_PATH, compositions: [],
     lastView: { graphIds: [], activeLayerId: null, collapsedNodeIds: [], positions: {} } };
-  const definitions = { schemaVersion: 6, kind: 'definitions', workspaceId: id, nodes: [], positions: {} };
+  const definitions = { schemaVersion: 7, kind: 'definitions', workspaceId: id, tagDefinitions: [], nodes: [], positions: {} };
   const rules = { schemaVersion: 1, kind: 'rules', workspaceId: id, rules: [] };
   validateWorkspace({ manifest, definitions, rules, mechanics: [] });
 

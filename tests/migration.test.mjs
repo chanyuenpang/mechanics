@@ -45,11 +45,11 @@ async function fixture(t) {
 }
 async function snapshot(root, files) { return Object.fromEntries(await Promise.all(files.map(async file => [file, await readFile(join(root, file), 'utf8')]))); }
 
-test('逐版本迁移必须显式提交：关系改名、限定词收回端点且不生成派生', async t => {
+test('逐版本迁移必须显式提交：兼容读取关系改名、限定词收回端点且不生成派生', async t => {
   const { workspace, files } = await fixture(t);
   const legacyPath = join(workspace, 'mechanics', 'hand.mechanic.json');
   const legacy = JSON.parse(await readFile(legacyPath, 'utf8')); legacy.edges[0].relation = 'belongsTo'; delete legacy.edges[0].sign; await writeFile(legacyPath, JSON.stringify(legacy));
-  await assert.rejects(readWorkspace(workspace), { code: 'WORKSPACE_VERSION_UNSUPPORTED' });
+  assert.equal((await readWorkspace(workspace)).compatibilityMode, true);
   const plan = await planV7ToV8Migration(workspace);
   assert.equal(plan.from, 7); assert.equal(plan.to, 8); assert.equal(plan.summary.derivedRulesCreated, 0);
   const migratedViewPlan = plan.documents.find(item => item.document.kind === 'view').document;
@@ -57,18 +57,18 @@ test('逐版本迁移必须显式提交：关系改名、限定词收回端点�
   assert.equal(migratedViewPlan.structuralPresentation, 'line');
   const outcome = await migrateWorkspace(workspace, { revision: plan.revision, execute: true });
   assert.equal(outcome.migrated, true); assert.equal(outcome.derivedRulesCreated, 0); assert.equal(outcome.renamedRelations, 1);
-  await assert.rejects(readWorkspace(workspace), { code: 'WORKSPACE_VERSION_UNSUPPORTED' });
+  assert.equal((await readWorkspace(workspace)).compatibilityMode, true);
   const v8ToV9 = await migrateWorkspace(workspace, { from: 8, to: 9 });
   assert.equal(v8ToV9.preview, true);
   await migrateWorkspace(workspace, { from: 8, to: 9, revision: v8ToV9.revision, execute: true });
   const v9ToV10 = await migrateWorkspace(workspace, { from: 9, to: 10 });
   assert.equal(v9ToV10.preview, true);
   await migrateWorkspace(workspace, { from: 9, to: 10, revision: v9ToV10.revision, execute: true });
-  const v10ToV11 = await migrateWorkspace(workspace, { from: 10, to: 11 });
-  await migrateWorkspace(workspace, { from: 10, to: 11, revision: v10ToV11.revision, execute: true });
+  const v10ToV12 = await migrateWorkspace(workspace, { from: 10, to: 12 });
+  await migrateWorkspace(workspace, { from: 10, to: 12, revision: v10ToV12.revision, execute: true });
   const migrated = await readWorkspace(workspace);
-  assert.equal(migrated.manifest.schemaVersion, 11);
-  assert.equal(migrated.definitions.schemaVersion, 6);
+  assert.equal(migrated.manifest.schemaVersion, 12);
+  assert.equal(migrated.definitions.schemaVersion, 7);
   assert.ok(migrated.mechanics.every(item => item.schemaVersion === 7));
   assert.ok(migrated.views.every(item => item.schemaVersion === 4 && item.structuralPresentation === 'line'));
   assert.ok(migrated.rules.rules.filter(item => item.relation === 'influence').every(item => item.inheritance.mode === 'none'));
@@ -146,7 +146,7 @@ test('旧项目迁移只在显式命令中识别旧根、旧技能和旧导出',
   assert.equal(result.execute, true);
   assert.equal(result.removedLegacyCatalog, exportRoot);
   const migratedManifest = JSON.parse(await readFile(join(root, '.mechanics', 'workspace.json'), 'utf8'));
-  assert.equal(migratedManifest.schemaVersion, 11);
+  assert.equal(migratedManifest.schemaVersion, 12);
   assert.equal(migratedManifest.agentExportPath, 'mechanics');
   await assert.rejects(lstat(join(root, '.game-graph')), { code: 'ENOENT' });
   await assert.rejects(lstat(join(root, '.agents', 'skills', 'game-mechanic-search')), { code: 'ENOENT' });

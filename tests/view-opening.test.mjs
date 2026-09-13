@@ -64,6 +64,20 @@ test('同一项目内切换机制复用已验证快照，不读取或写入工�
   assert.equal(await readFile(join(root, 'workspace.json'), 'utf8'), before);
 });
 
+test('外部写入让旧快照误判机制为空时，打开机制会回读一次最新工作区', async t => {
+  const { api } = await fixture(t);
+  const latest = await api('/api/workspace');
+  const stale = structuredClone(latest);
+  const hand = stale.mechanics.find(item => item.id === 'hand');
+  hand.focusNodeIds = [];
+  hand.pinnedRuleIds = [];
+  let requests = 0;
+  const opened = await readOpening(async (...args) => { requests++; return api(...args); }, { kind: 'mechanic', id: 'hand' }, stale);
+  assert.equal(requests, 1);
+  assert.ok(opened.graph.nodes.length > 0);
+  assert.equal(opened.activeId, 'hand');
+});
+
 test('打开 badge 视图携带结构展示设置，保存后重新打开仍保持且源文件字节不变', async t => {
   const { root, api } = await fixture(t);
   const initial = await api('/api/workspace');

@@ -29,7 +29,7 @@ function projectGraph(workspace) {
   const edges = workspace.rules.rules.map(rule => ({ ...structuredClone(rule), origin: { ruleId: rule.id } })).sort(byId);
   return { nodes, edges };
 }
-const nodeDTO = node => ({ id: node.id, label: node.label, description: node.description, aliases: structuredClone(node.aliases ?? []), tags: structuredClone(node.tags ?? []), ...(node.customData ? { customData: node.customData } : {}) });
+const nodeDTO = node => ({ id: node.id, label: node.label, description: node.description, aliases: structuredClone(node.aliases ?? []), tagIds: structuredClone(node.tagIds ?? []), ...(node.customData ? { customData: node.customData } : {}) });
 const refDTO = node => ({ id: node.id, label: node.label });
 
 function resolveConcept(nodes, key) {

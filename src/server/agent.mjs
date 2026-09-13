@@ -138,8 +138,8 @@ const mutationFields = {
     delete: ['view'],
   },
   concept: {
-    create: ['id', 'label', 'description', 'aliases', 'tags', 'custom-data'],
-    update: ['concept', 'label', 'description', 'aliases', 'tags', 'custom-data'],
+    create: ['id', 'label', 'description', 'aliases', 'tag-ids', 'custom-data'],
+    update: ['concept', 'label', 'description', 'aliases', 'tag-ids', 'custom-data'],
     delete: ['concept'],
   },
   rule: {
@@ -212,7 +212,7 @@ export async function runAgentMutation(resource, action, values) {
   } else if (resource === 'concept') {
     body.id = action === 'create' ? values.id : values.concept;
     for (const key of ['label', 'description']) if (values[key] !== undefined) body[key] = values[key];
-    for (const key of ['aliases', 'tags']) if (values[key] !== undefined) body[key] = parseStringArray(values[key], key);
+    for (const key of ['aliases', 'tag-ids']) if (values[key] !== undefined) body[key === 'tag-ids' ? 'tagIds' : key] = parseStringArray(values[key], key);
     if (values['custom-data'] !== undefined) body.customData = values['custom-data'];
   } else {
     for (const key of ['mechanic', 'source', 'target', 'relation']) if (values[key] !== undefined) body[key] = values[key];

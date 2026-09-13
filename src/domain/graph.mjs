@@ -6,10 +6,15 @@ export function composeProjection(workspace, { graphIds: selectedIds = [], focus
     if (!graph) throw new Error(`选中的机制图不存在：${id}`);
     return graph;
   });
+  for (const graph of graphs) if (graph.ruleSelection !== undefined && graph.ruleSelection !== 'explicit') {
+    throw Object.assign(new Error(`机制图 ${graph.id} 的规则选择模式无效：${String(graph.ruleSelection)}`), { code: 'RULE_SELECTION_INVALID' });
+  }
   const focus = new Set([...graphs.flatMap(graph => graph.focusNodeIds), ...focusNodeIds]);
-  const pinned = new Set(pinnedRuleIds);
+  // 显式图的焦点只声明节点；叠加其他图时也不扩大它的相邻规则范围。
+  const expandingFocus = new Set([...graphs.filter(graph => graph.ruleSelection !== 'explicit').flatMap(graph => graph.focusNodeIds), ...focusNodeIds]);
+  const pinned = new Set([...graphs.flatMap(graph => graph.pinnedRuleIds), ...pinnedRuleIds]);
   const rules = workspace.rules.rules;
-  const effectiveRules = rules.filter(rule => pinned.has(rule.id) || focus.has(rule.source) || focus.has(rule.target));
+  const effectiveRules = rules.filter(rule => pinned.has(rule.id) || expandingFocus.has(rule.source) || expandingFocus.has(rule.target));
   const referenced = new Set([...focus, ...effectiveRules.flatMap(rule => [rule.source, rule.target])]);
   const result = {
     graphIds,

@@ -1,6 +1,6 @@
 import { lstat, mkdir, readFile, realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import { assertDocument, ContractError } from '../domain/validate.mjs';
+import { ContractError } from '../domain/validate.mjs';
 
 export const WORKSPACE_DIRECTORY = '.mechanics';
 export const DEFAULT_AGENT_EXPORT_PATH = 'mechanics';
@@ -80,8 +80,11 @@ export async function projectContext(projectRoot, { requireWorkspace = true, cre
     catch (error) { fail(error.code === 'ENOENT' ? 'PROJECT_NOT_FOUND' : 'INVALID_JSON', `无法读取 ${WORKSPACE_DIRECTORY}/workspace.json：${error.message}`); }
     try { manifest = JSON.parse(raw); }
     catch (error) { fail('INVALID_JSON', `${WORKSPACE_DIRECTORY}/workspace.json 不是有效 JSON：${error.message}`); }
-    if (manifest?.schemaVersion !== 11) fail('WORKSPACE_VERSION_UNSUPPORTED', `只支持 Mechanics 工作区 v11；当前为 v${String(manifest?.schemaVersion)}`);
-    assertDocument(manifest, 'workspace', 'workspace.json');
+    // 项目上下文只负责定位工作区与导出目录，不拥有协议版本门禁。
+    // 兼容读取器随后决定概念、规则和拓扑是否可用；不能让展示协议版本阻断项目打开。
+    if (manifest?.kind !== 'workspace' || typeof manifest.id !== 'string' || typeof manifest.name !== 'string') {
+      fail('INVALID_WORKSPACE_MARKER', `${WORKSPACE_DIRECTORY}/workspace.json 缺少工作区身份。`);
+    }
   }
   // 导出目录是 canonical 的派生投影目标；缺失配置不再悄悄回填默认目录。
   // 新建工作区仍由 init 显式写入 DEFAULT_AGENT_EXPORT_PATH。

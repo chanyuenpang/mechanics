@@ -15,8 +15,8 @@ async function legacyVersion(projectRoot) {
   const legacyRoot = resolve(projectRoot, LEGACY_WORKSPACE_DIRECTORY);
   const { document } = await readDocument(legacyRoot, 'workspace.json');
   const version = document?.schemaVersion;
-  if (![7, 8, 9, 10, 11].includes(version)) fail('MIGRATION_VERSION_UNSUPPORTED', `旧工作区版本不受支持：v${String(version)}`);
-  return { legacyRoot, version };
+  if (![7, 8, 9, 10, 11, 12].includes(version)) fail('MIGRATION_VERSION_UNSUPPORTED', `旧工作区版本不受支持：v${String(version)}`);
+  return { legacyRoot, version, manifest: document };
 }
 
 const legacySkills = ['game-mechanic-search', 'game-mechanic-modeling'];
@@ -61,14 +61,13 @@ async function legacyCatalogCleanupPlan(projectRoot, manifest) {
 
 export async function migrateLegacyProject(project, { execute = false } = {}) {
   const projectRoot = await canonicalProjectRoot(project);
-  const { legacyRoot, version } = await legacyVersion(projectRoot);
-  const legacyWorkspace = await readWorkspace(legacyRoot, { context: {
-    projectRoot, workspaceRoot: legacyRoot, exportRoot: null, agentExportPath: null, exportStatus: 'unconfigured',
-  } });
+  const { legacyRoot, version, manifest: legacyManifest } = await legacyVersion(projectRoot);
   const removableLegacySkills = await legacySkillCleanupPlan(projectRoot);
-  const removableLegacyCatalog = await legacyCatalogCleanupPlan(projectRoot, legacyWorkspace.manifest);
+  const removableLegacyCatalog = await legacyCatalogCleanupPlan(projectRoot, legacyManifest);
   const steps = [];
-  for (let from = version; from < 11; from++) steps.push({ from, to: from + 1 });
+  for (let from = version; from < 10; from++) steps.push({ from, to: from + 1 });
+  if (version <= 10) steps.push({ from: 10, to: 12 });
+  else if (version === 11) steps.push({ from: 11, to: 12 });
   if (!execute) return { ok: true, execute: false, projectRoot, legacyRoot, version, steps, removableLegacySkills, removableLegacyCatalog,
     next: '使用 --execute 执行协议升级、根目录切换、skill/tool 注入与文档重建。' };
 

@@ -25,7 +25,7 @@ test('项目初始化原子创建固定工作区和默认 Agent 机制文档目�
   const result = await initProject(projectRoot, { name: '示例项目' });
   assert.equal(result.projectRoot, projectRoot);
   const manifest = JSON.parse(await readFile(join(projectRoot, '.mechanics/workspace.json'), 'utf8'));
-  assert.equal(manifest.schemaVersion, 11);
+  assert.equal(manifest.schemaVersion, 12);
   assert.equal(manifest.agentExportPath, 'mechanics');
   assert.match(await readFile(join(projectRoot, 'mechanics/AGENTS.md'), 'utf8'), /^# Mechanics Agent 文档使用规则/);
   assert.deepEqual((await readdir(join(projectRoot, 'mechanics'))).sort(), ['AGENTS.md', 'README.md', 'concepts.md']);

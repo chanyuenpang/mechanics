@@ -29,8 +29,8 @@ test('引用窗口把同名复用回调交给共享编辑器，且不创建候�
   const constructor = glossary.slice(glossary.indexOf('export class ConceptEditor'), glossary.indexOf('  field(', glossary.indexOf('export class ConceptEditor')));
   const picker = glossary.indexOf('export class ConceptPicker');
   const begin = glossary.slice(glossary.indexOf('  begin() {', picker), glossary.indexOf('  cancelForm() {', picker));
-  assert.match(constructor, /\{ mode, node, nodes, onSave, onCancel, onReuse \}/);
-  assert.match(constructor, /Object\.assign\(this, \{ host, mode, nodes, onSave, onCancel, onReuse,/);
+  assert.match(constructor, /\{ mode, node, nodes, tagDefinitions = \[\], onSave, onCancel, onReuse \}/);
+  assert.match(constructor, /Object\.assign\(this, \{ host, mode, nodes, tagDefinitions, onSave, onCancel, onReuse,/);
   assert.match(begin, /onReuse: id => \{ this\.session\.selected\.add\(id\); this\.cancelForm\(\); \}/);
   assert.doesNotMatch(begin, /session\.candidates\.push/);
 });
@@ -44,4 +44,12 @@ test('概念表以概念内容为主，并支持单行和表头批量 Agent 锁'
   assert.match(glossary, /remove\.className = 'term-delete'/);
   assert.match(glossary, /remove\.append\(icon\('trash'\)\)/);
   assert.match(app, /setLocks: \(ids, agentLocked\) => edit\(data => \{ const selected = new Set\(ids\);/);
+});
+
+test('标签页集中维护显示名与颜色，概念编辑器以彩色多选关联既有标签', () => {
+  assert.match(glossary, /id="glossary-tags"/);
+  assert.match(glossary, /picker\.type = 'color'/);
+  assert.match(glossary, /tagDefinitions: this\.tagDefinitions/);
+  assert.match(glossary, /button\.style\.setProperty\('--tag-color', tag\.color\)/);
+  assert.match(glossary, /ids\.has\(tag\.id\) \? ids\.delete\(tag\.id\) : ids\.add\(tag\.id\)/);
 });

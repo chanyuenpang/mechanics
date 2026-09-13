@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { conceptDuplicateModel, conceptEditorModel, conceptEditorOpenState, conceptLockModel, conceptPayloadFromForm, prepareConceptUpdate } from '../src/web/glossary.mjs';
 
-const base = { id: 'damage', label: '伤害', description: '造成生命损失', aliases: ['扣血'], tags: ['战斗'], agentLocked: false };
+const base = { id: 'damage', label: '伤害', description: '造成生命损失', aliases: ['扣血'], tagIds: ['战斗'], agentLocked: false };
 
 test('编辑器模型区分新建和编辑的身份字段与首焦点', () => {
   const create = conceptEditorModel('create');

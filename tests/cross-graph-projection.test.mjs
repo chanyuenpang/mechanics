@@ -17,13 +17,25 @@ const sampleRoot = fileURLToPath(new URL('../examples/card-game/.mechanics/', im
 test('全局规则按机制或视图显式引用做一跳投影，不复制规则', async () => {
   const workspace = await readWorkspace(sampleRoot);
   const graph = composeProjection(workspace, { graphIds: ['encounter'] });
-  assert.equal(graph.edges.length, workspace.rules.rules.filter(rule => workspace.mechanics.find(item => item.id === 'encounter').focusNodeIds.includes(rule.source)
-    || workspace.mechanics.find(item => item.id === 'encounter').focusNodeIds.includes(rule.target)).length);
+  const encounter = workspace.mechanics.find(item => item.id === 'encounter');
+  assert.equal(graph.edges.length, workspace.rules.rules.filter(rule => encounter.pinnedRuleIds.includes(rule.id)
+    || encounter.focusNodeIds.includes(rule.source) || encounter.focusNodeIds.includes(rule.target)).length);
   const view = { schemaVersion: 4, kind: 'view', workspaceId: workspace.manifest.id, id: 'damage-view', name: '伤害视图',
     mechanicRegistrations: [], focusNodeIds: ['damage'], pinnedRuleIds: [], collapsedNodeIds: [], positions: {}, structuralPresentation: 'line' };
   const direct = composeView(workspace, view);
   assert.deepEqual(direct.nodes.map(node => node.id).sort(), ['damage', 'health', 'melee']);
   assert.deepEqual(direct.edges.map(edge => edge.id).sort(), ['damage-2-health', 'melee-2-damage']);
+});
+
+test('仅固定规则的机制图会投影规则及其端点，不需要虚构焦点节点', async () => {
+  const workspace = await readWorkspace(sampleRoot);
+  const ruleId = workspace.rules.rules[0].id;
+  workspace.mechanics.push({ schemaVersion: 7, kind: 'mechanic', workspaceId: workspace.manifest.id, id: 'pinned-only', name: '固定规则总览',
+    scope: '测试', focusNodeIds: [], pinnedRuleIds: [ruleId], positions: {} });
+  const graph = composeProjection(workspace, { graphIds: ['pinned-only'] });
+  const rule = workspace.rules.rules.find(item => item.id === ruleId);
+  assert.deepEqual(graph.edges.map(edge => edge.id), [ruleId]);
+  assert.deepEqual(graph.nodes.map(node => node.id).sort(), [rule.source, rule.target].sort());
 });
 
 test('视图只能引用已有概念和已有规则', async () => {
@@ -50,7 +62,7 @@ test('删除全局规则会原子清理所有机制图与视图的固定引用',
   assert.equal(removed.views.some(item => item.pinnedRuleIds.includes(ruleId)), false);
 });
 
-test('v10 只可经显式迁移进入全局 rules.json，失败预览不会写入', async t => {
+test('v10 迁移直接进入当前规则库与标签表，失败预览不会写入', async t => {
   const root = await mkdtemp(join(tmpdir(), 'mechanics-v10-migrate-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   await copyExampleFixture(root);
@@ -62,6 +74,7 @@ test('v10 只可经显式迁移进入全局 rules.json，失败预览不会写�
   await rename(join(workspaceRoot, 'definitions.json'), join(workspaceRoot, 'definitions.graph.json'));
   const definitionsPath = join(workspaceRoot, 'definitions.graph.json');
   const definitions = JSON.parse(await readFile(definitionsPath, 'utf8'));
+  definitions.nodes[0].tags = ['战斗', '  核心  ', '战斗'];
   definitions.schemaVersion = 5; await writeFile(definitionsPath, JSON.stringify(definitions, null, 2) + '\n');
   for (const mechanic of sourceWorkspace.mechanics) {
     const path = join(workspaceRoot, 'mechanics', mechanic.id + '.mechanic.json');
@@ -72,13 +85,20 @@ test('v10 只可经显式迁移进入全局 rules.json，失败预览不会写�
   const v10 = { ...manifest, schemaVersion: 10, definitions: 'definitions.graph.json' };
   delete v10.rules; await writeFile(manifestPath, JSON.stringify(v10, null, 2) + '\n');
   await unlink(join(workspaceRoot, 'rules.json'));
-  const preview = await migrateWorkspace(workspaceRoot, { from: 10, to: 11 });
+  const preview = await migrateWorkspace(workspaceRoot, { from: 10, to: 12 });
   assert.equal(preview.preview, true);
   assert.equal(preview.rules, rules.rules.length);
-  await assert.rejects(readWorkspace(workspaceRoot), { code: 'WORKSPACE_VERSION_UNSUPPORTED' });
-  const executed = await migrateWorkspace(workspaceRoot, { from: 10, to: 11, revision: preview.revision, execute: true });
+  const compatible = await readWorkspace(workspaceRoot);
+  assert.equal(compatible.compatibilityMode, true);
+  assert.equal(compatible.rules.rules.length, rules.rules.length);
+  const executed = await migrateWorkspace(workspaceRoot, { from: 10, to: 12, revision: preview.revision, execute: true });
   assert.equal(executed.migrated, true);
   const migrated = await readWorkspace(workspaceRoot);
-  assert.equal(migrated.manifest.schemaVersion, 11);
+  assert.equal(migrated.manifest.schemaVersion, 12);
   assert.equal(migrated.rules.rules.length, rules.rules.length);
+  assert.deepEqual(migrated.definitions.tagDefinitions, [
+    { id: '战斗', displayName: '战斗', color: '#6B7280' },
+    { id: '核心', displayName: '核心', color: '#6B7280' },
+  ]);
+  assert.deepEqual(migrated.definitions.nodes[0].tagIds, ['战斗', '核心']);
 });

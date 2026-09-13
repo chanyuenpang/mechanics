@@ -9,7 +9,7 @@ export const parseAliases = value => normalizeAliases(Array.isArray(value) ? val
 export const parseTags = value => normalizeAliases(Array.isArray(value) ? value : String(value ?? '').split(/[\n,，]/u));
 export function matchingConcepts(nodes, query) {
   const words = normalized(query).split(/\s+/);
-  return nodes.filter(node => words.every(word => [node.label, node.id, ...(node.aliases ?? []), node.description, ...(node.tags ?? [])]
+  return nodes.filter(node => words.every(word => [node.label, node.id, ...(node.aliases ?? []), node.description, ...(node.tagIds ?? [])]
     .some(text => normalized(text).includes(word))));
 }
 export function sameNamedConcepts(nodes, label) { return nodes.filter(node => normalized(node.label) === normalized(label)); }
@@ -78,7 +78,7 @@ export function validateConcept(node) {
   }
   if (typeof node.agentLocked !== 'boolean') throw new Error('概念必须明确 agentLocked。');
   if (node.customData !== undefined && (typeof node.customData !== 'string' || node.customData.length > 16000)) throw new Error('自定义文本必须是字符串，且不能超过 16000 字。');
-  for (const [label, values] of [['别名', parseAliases(node.aliases)], ['标签', parseTags(node.tags)]]) {
+  for (const [label, values] of [['别名', parseAliases(node.aliases)], ['标签', parseTags(node.tagIds)]]) {
     const normalizedValues = values.map(normalized);
     if (new Set(normalizedValues).size !== normalizedValues.length) throw new Error(label + '归一化后不能重复。');
   }
@@ -145,7 +145,7 @@ export function conceptEditPresentation(node) {
 export function conceptEditorModel(mode, node = {}) {
   if (!['create', 'edit'].includes(mode)) throw new Error('概念编辑模式必须是新建或编辑。');
   return { mode, title: mode === 'create' ? '新建概念' : '编辑概念：' + node.label, idReadonly: mode === 'edit', firstField: mode === 'create' ? 'id' : 'label',
-    form: { id: node.id ?? '', label: node.label ?? '', description: node.description ?? '', aliases: node.aliases ?? [], tags: node.tags ?? [], customData: node.customData ?? '', agentLocked: node.agentLocked ?? false } };
+    form: { id: node.id ?? '', label: node.label ?? '', description: node.description ?? '', aliases: node.aliases ?? [], tagIds: node.tagIds ?? [], customData: node.customData ?? '', agentLocked: node.agentLocked ?? false } };
 }
 
 export function conceptLockModel(agentLocked) {
@@ -158,9 +158,9 @@ export function conceptShapeWarning() { return ''; }
 export function conceptEditorOpenState(openId, nextId) { return openId === nextId ? null : nextId; }
 export function conceptPayloadFromForm(values) {
   const node = { id: values.id?.trim(), label: values.label?.trim(), description: values.description?.trim(), agentLocked: values.agentLocked,
-    aliases: parseAliases(values.aliases), tags: parseTags(values.tags), customData: values.customData ?? '' };
+    aliases: parseAliases(values.aliases), tagIds: parseTags(values.tagIds), customData: values.customData ?? '' };
   if (!node.aliases.length) delete node.aliases;
-  if (!node.tags.length) delete node.tags;
+  if (!node.tagIds.length) delete node.tagIds;
   if (!node.customData) delete node.customData;
   validateConcept(node); return node;
 }
@@ -171,7 +171,7 @@ export function prepareConceptUpdate(definitions, id, values) {
   if (typeof values.agentLocked !== 'boolean') throw new Error('概念必须明确 agentLocked。');
   node.agentLocked = values.agentLocked;
   for (const key of ['label', 'description']) node[key] = values[key]?.trim();
-  for (const [key, parse] of [['aliases', parseAliases], ['tags', parseTags]]) {
+  for (const [key, parse] of [['aliases', parseAliases], ['tagIds', parseTags]]) {
     node[key] = parse(values[key]);
     if (!node[key].length) delete node[key];
   }
@@ -271,8 +271,8 @@ const action = (text, run, className = 'quiet') => {
 
 
 export class ConceptEditor {
-  constructor(host, { mode, node, nodes, onSave, onCancel, onReuse }) {
-    const model = conceptEditorModel(mode, node); Object.assign(this, { host, mode, nodes, onSave, onCancel, onReuse, allowDuplicate: false, form: model.form });
+  constructor(host, { mode, node, nodes, tagDefinitions = [], onSave, onCancel, onReuse }) {
+    const model = conceptEditorModel(mode, node); Object.assign(this, { host, mode, nodes, tagDefinitions, onSave, onCancel, onReuse, allowDuplicate: false, form: model.form });
     this.root = element('section', undefined, 'concept-editor'); this.root.setAttribute('aria-label', model.title); host.replaceChildren(this.root); this.render();
     queueMicrotask(() => this.root.querySelector('[data-editor-field="' + model.firstField + '"]')?.focus());
   }
@@ -281,14 +281,14 @@ export class ConceptEditor {
     input.value = Array.isArray(this.form[key]) ? this.form[key].join(', ') : this.form[key] ?? ''; input.required = ['id', 'label', 'description'].includes(key);
     if (key === 'id') { input.maxLength = 96; input.readOnly = this.mode === 'edit'; } else input.maxLength = key === 'customData' ? 16000 : 8000;
     if (type === 'textarea') input.rows = key === 'customData' ? 4 : 2;
-    input.oninput = () => { this.form[key] = key === 'aliases' ? parseAliases(input.value) : key === 'tags' ? parseTags(input.value) : input.value; if (key === 'label') { this.allowDuplicate = false; this.drawDuplicates(); } };
+    input.oninput = () => { this.form[key] = key === 'aliases' ? parseAliases(input.value) : input.value; if (key === 'label') { this.allowDuplicate = false; this.drawDuplicates(); } };
     wrap.append(element('span', label), input); return wrap;
   }
   render() {
     const title = element('h2', this.mode === 'create' ? '新建概念' : '编辑概念：' + this.form.label);
     const identity = element('fieldset', undefined, 'concept-editor-identity'); identity.append(element('legend', '身份'), this.field('名称', 'label'), this.field('稳定英文 ID', 'id'), this.field('概念含义', 'description', 'textarea'));
     const duplicateHost = element('div', undefined, 'concept-editor-duplicates'); identity.append(duplicateHost);
-    const discovery = element('fieldset', undefined, 'concept-editor-discovery'); discovery.append(element('legend', '检索信息'), this.field('别名', 'aliases'), this.field('标签', 'tags'));
+    const discovery = element('fieldset', undefined, 'concept-editor-discovery'); discovery.append(element('legend', '检索信息'), this.field('别名', 'aliases'), this.tagPicker());
     const customData = element('fieldset', undefined, 'concept-editor-custom-data'); customData.append(element('legend', '自定义文本'), this.field('自定义文本', 'customData', 'textarea'));
     const permission = element('fieldset', undefined, 'concept-editor-permission'), lock = conceptLockModel(this.form.agentLocked), descriptionId = 'concept-lock-description'; permission.append(element('legend', '修改权限'));
     const card = element('label', undefined, 'concept-lock-card'), toggle = element('input'); toggle.type = 'checkbox'; toggle.checked = lock.checked; toggle.setAttribute('role', 'switch'); toggle.setAttribute('aria-describedby', descriptionId); toggle.setAttribute('aria-label', 'Agent 修改锁');
@@ -296,6 +296,15 @@ export class ConceptEditor {
     const error = element('p', undefined, 'concept-editor-error danger'); error.setAttribute('role', 'alert'); error.hidden = true;
     const actions = element('div', undefined, 'concept-editor-actions'); const save = action(this.mode === 'create' ? '创建并引用' : '保存概念', () => { try { if (this.mode === 'create' && conceptDuplicateModel(this.nodes(), this.form.label, this.form.id).length && !this.allowDuplicate) throw new Error('请确认仍创建同名概念，或复用已有概念。'); this.onSave(this.form, { allowDuplicate: this.allowDuplicate }); } catch (cause) { error.textContent = cause.message; error.hidden = false; } }, 'primary'); actions.append(save, action('取消', () => this.onCancel()));
     this.root.replaceChildren(title, identity, discovery, customData, permission, error, actions); this.drawDuplicates();
+  }
+  tagPicker() {
+    const wrap = element('fieldset', undefined, 'concept-tag-picker'); wrap.append(element('legend', '标签'));
+    if (!this.tagDefinitions.length) { wrap.append(element('p', '暂无标签，请在概念表的标签页创建。', 'note')); return wrap; }
+    for (const tag of this.tagDefinitions) {
+      const button = action(tag.displayName, () => { const ids = new Set(this.form.tagIds ?? []); ids.has(tag.id) ? ids.delete(tag.id) : ids.add(tag.id); this.form.tagIds = [...ids]; this.render(); }, 'tag-choice');
+      button.style.setProperty('--tag-color', tag.color); button.classList.toggle('selected', (this.form.tagIds ?? []).includes(tag.id)); button.setAttribute('aria-pressed', String((this.form.tagIds ?? []).includes(tag.id))); wrap.append(button);
+    }
+    return wrap;
   }
   drawDuplicates() {
     const host = this.root.querySelector('.concept-editor-duplicates'); if (!host || this.mode !== 'create') return; host.replaceChildren();
@@ -344,11 +353,11 @@ export class ConceptPicker {
   }
   allNodes() { return [...this.definitions.nodes, ...this.session.candidates]; }
   begin() {
-    const node = { id: '', label: this.session.query.trim(), aliases: '', description: '', tags: '', agentLocked: false };
+    const node = { id: '', label: this.session.query.trim(), aliases: '', description: '', tagIds: [], agentLocked: false };
     this.session.allowDuplicate = false;
     this.get('.concept-form').hidden = false;
     for (const selector of ['.concept-search', '.concept-picked', '.concept-results', '.concept-new']) { const discovery = this.get(selector); discovery.hidden = true; discovery.inert = true; }
-    this.editor = new ConceptEditor(this.get('.concept-form'), { mode: 'create', node, nodes: () => this.allNodes(), onSave: (form, { allowDuplicate }) => { this.session.form = form; this.session.allowDuplicate = allowDuplicate; this.stage(); }, onCancel: () => this.cancelForm(), onReuse: id => { this.session.selected.add(id); this.cancelForm(); } });
+    this.editor = new ConceptEditor(this.get('.concept-form'), { mode: 'create', node, nodes: () => this.allNodes(), tagDefinitions: this.definitions.tagDefinitions ?? [], onSave: (form, { allowDuplicate }) => { this.session.form = form; this.session.allowDuplicate = allowDuplicate; this.stage(); }, onCancel: () => this.cancelForm(), onReuse: id => { this.session.selected.add(id); this.cancelForm(); } });
     this.session.form = this.editor.form;
   }
   cancelForm() { this.session.form = null; this.get('.concept-form').hidden = true; for (const selector of ['.concept-search', '.concept-picked', '.concept-results', '.concept-new']) { const discovery = this.get(selector); discovery.hidden = false; discovery.inert = false; } this.drawResults(); this.search.focus(); }
@@ -402,13 +411,15 @@ export class ConceptPicker {
 
 // 名词表只是统一定义草稿的编辑视图，不持有另一份节点数据。
 export class GlossaryTable {
-  constructor(container, { change, replace, add, remove, setLocks }) {
-    this.container = container; this.change = change; this.replace = replace; this.add = add; this.remove = remove; this.setLocks = setLocks;
-    container.innerHTML = `<div class="glossary-heading"><div><h1>概念表 <span id="glossary-count"></span></h1><p>直接编辑单元格 · 所有机制图共用这些概念</p></div><button id="glossary-add">新增概念</button></div>
+  constructor(container, { change, replace, add, remove, setLocks, updateTags }) {
+    this.container = container; this.change = change; this.replace = replace; this.add = add; this.remove = remove; this.setLocks = setLocks; this.updateTags = updateTags; this.mode = 'concepts';
+    container.innerHTML = `<div class="glossary-heading"><div><h1>概念表 <span id="glossary-count"></span></h1><p>直接编辑单元格 · 所有机制图共用这些概念</p></div><div><button id="glossary-concepts">概念</button><button id="glossary-tags" class="quiet">标签</button><button id="glossary-add">新增概念</button></div></div>
       <div class="glossary-tools"><input id="glossary-search" type="search" aria-label="搜索节点名词表" placeholder="搜索名称、ID 或定义…"><span>修改后 Ctrl S 保存</span></div>
       <div class="glossary-scroll"><table aria-label="统一节点名词表"><colgroup><col class="term-name"><col class="term-description"><col class="term-id"><col class="term-lock"><col class="term-actions"></colgroup><thead><tr><th scope="col">概念</th><th scope="col">概念含义</th><th scope="col">稳定 ID</th><th scope="col" class="term-lock-heading"><label><input id="glossary-lock-all" type="checkbox" aria-label="批量切换当前概念的 Agent 锁">Agent 锁</label></th><th scope="col">操作</th></tr></thead><tbody></tbody></table><div id="glossary-empty" hidden>没有匹配的概念</div><button id="glossary-add-row">新增一行</button></div>
       <div class="glossary-footer">名称与含义必填；别名和标签可用逗号或换行分隔。锁定后 Agent 不能修改或删除概念，网页仍可解锁。</div>`;
     this.search = container.querySelector('#glossary-search');
+    container.querySelector('#glossary-concepts').onclick = () => { this.mode = 'concepts'; this.draw(); };
+    container.querySelector('#glossary-tags').onclick = () => { this.mode = 'tags'; this.draw(); };
     this.lockAll = container.querySelector('#glossary-lock-all');
     this.lockAll.onchange = () => this.setLocks(this.matches.map(node => node.id), this.lockAll.checked);
     for (const id of ['glossary-add', 'glossary-add-row']) {
@@ -421,15 +432,23 @@ export class GlossaryTable {
     window.addEventListener('resize', this.fitTextareas);
     for (const id of ['glossary-add', 'glossary-add-row']) container.querySelector('#' + id).onclick = add;
   }
-  update(nodes, mechanics, pending) {
-    this.nodes = nodes; this.mechanics = mechanics; this.pending = pending;
+  update(nodes, mechanics, pending, tagDefinitions = []) {
+    this.nodes = nodes; this.mechanics = mechanics; this.pending = pending; this.tagDefinitions = tagDefinitions;
     for (const id of ['glossary-add', 'glossary-add-row']) this.container.querySelector('#' + id).disabled = !!pending;
     this.draw();
   }
   draw() {
+    if (this.mode === 'tags') return this.drawTags();
+    this.container.querySelector('#glossary-tag-add')?.remove();
+    this.container.querySelector('colgroup').innerHTML = '<col class="term-name"><col class="term-description"><col class="term-id"><col class="term-lock"><col class="term-actions">';
+    this.container.querySelector('thead tr').innerHTML = '<th scope="col">概念</th><th scope="col">概念含义</th><th scope="col">稳定 ID</th><th scope="col" class="term-lock-heading"><label><input id="glossary-lock-all" type="checkbox" aria-label="批量切换当前概念的 Agent 锁">Agent 锁</label></th><th scope="col">操作</th>';
+    this.lockAll = this.container.querySelector('#glossary-lock-all');
+    this.lockAll.onchange = () => this.setLocks(this.matches.map(node => node.id), this.lockAll.checked);
+    this.container.querySelector('#glossary-concepts').classList.add('primary'); this.container.querySelector('#glossary-tags').classList.remove('primary');
+    this.container.querySelector('#glossary-add').hidden = false; this.container.querySelector('#glossary-add-row').hidden = false;
     const body = this.container.querySelector('tbody'); body.replaceChildren();
     const query = this.search.value.trim().toLowerCase();
-    const matches = this.nodes.filter(node => [node.label, node.id, ...(node.aliases ?? []), node.description, ...(node.tags ?? [])]
+    const matches = this.nodes.filter(node => [node.label, node.id, ...(node.aliases ?? []), node.description, ...(node.tagIds ?? [])]
       .some(value => value.toLowerCase().includes(query)));
     this.matches = matches;
     const lockedCount = matches.filter(node => node.agentLocked).length;
@@ -455,13 +474,39 @@ export class GlossaryTable {
     }
     this.fitTextareas();
   }
+  drawTags() {
+    const body = this.container.querySelector('tbody'); body.replaceChildren();
+    this.container.querySelector('#glossary-concepts').classList.remove('primary'); this.container.querySelector('#glossary-tags').classList.add('primary');
+    this.container.querySelector('#glossary-add').hidden = true; this.container.querySelector('#glossary-add-row').hidden = true;
+    this.container.querySelector('#glossary-count').textContent = `${this.tagDefinitions.length} 个标签`;
+    this.container.querySelector('#glossary-empty').hidden = true;
+    this.container.querySelector('colgroup').innerHTML = '<col class="term-id"><col class="term-name"><col class="term-actions">';
+    this.container.querySelector('thead tr').innerHTML = '<th scope="col">稳定 ID</th><th scope="col">显示名</th><th scope="col">颜色</th>';
+    for (const tag of this.tagDefinitions) {
+      const row = document.createElement('tr');
+      const id = document.createElement('td'); id.append(element('code', tag.id));
+      const label = document.createElement('td'), input = document.createElement('input'); input.value = tag.displayName; input.disabled = !!this.pending; input.onchange = () => this.updateTags(this.tagDefinitions.map(item => item.id === tag.id ? { ...item, displayName: input.value.trim() } : item)); label.append(input);
+      const color = document.createElement('td'), picker = document.createElement('input'); picker.type = 'color'; picker.value = tag.color; picker.disabled = !!this.pending; picker.oninput = () => this.updateTags(this.tagDefinitions.map(item => item.id === tag.id ? { ...item, color: picker.value } : item)); color.append(picker);
+      row.append(id, label, color); body.append(row);
+    }
+    this.container.querySelector('#glossary-tag-add')?.remove();
+    const add = document.createElement('button'); add.id = 'glossary-tag-add'; add.textContent = '新增标签'; add.disabled = !!this.pending;
+    add.onclick = () => {
+      const row = document.createElement('tr'), idCell = document.createElement('td'), nameCell = document.createElement('td'), colorCell = document.createElement('td');
+      const id = document.createElement('input'), displayName = document.createElement('input'), color = document.createElement('input'), confirm = document.createElement('button');
+      id.placeholder = '标签 ID'; displayName.placeholder = '显示名'; color.type = 'color'; color.value = '#6b7280'; confirm.textContent = '添加';
+      confirm.onclick = () => { const nextId = id.value.trim(), nextName = displayName.value.trim(); if (!nextId || !nextName) return; this.updateTags([...this.tagDefinitions, { id: nextId, displayName: nextName, color: color.value }]); };
+      idCell.append(id); nameCell.append(displayName); colorCell.append(color, confirm); row.append(idCell, nameCell, colorCell); body.append(row); id.focus();
+    };
+    this.container.querySelector('.glossary-scroll').append(add);
+  }
   openQualifierSettings(row, node) {
     if (this.pending) return;
     if (this.editorRow) this.editorRow.remove();
     this.editingId = conceptEditorOpenState(this.editingId, node.id);
     if (!this.editingId) return;
     const editor = document.createElement('tr'), cell = document.createElement('td'); cell.colSpan = 5; cell.className = 'concept-editor-row'; editor.append(cell); row.after(editor); this.editorRow = editor;
-    new ConceptEditor(cell, { mode: 'edit', node, nodes: () => this.nodes, onSave: form => { const nextNode = prepareConceptUpdate({ nodes: [node] }, node.id, form).nodes[0]; this.replace(node.id, nextNode); this.editingId = null; this.editorRow = null; editor.remove(); this.draw(); }, onCancel: () => { this.editingId = null; this.editorRow = null; editor.remove(); this.draw(); } });
+    new ConceptEditor(cell, { mode: 'edit', node, nodes: () => this.nodes, tagDefinitions: this.tagDefinitions, onSave: form => { const nextNode = prepareConceptUpdate({ nodes: [node] }, node.id, form).nodes[0]; this.replace(node.id, nextNode); this.editingId = null; this.editorRow = null; editor.remove(); this.draw(); }, onCancel: () => { this.editingId = null; this.editorRow = null; editor.remove(); this.draw(); } });
     return;
   }
   focusNode(id) {

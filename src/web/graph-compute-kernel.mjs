@@ -11,7 +11,7 @@ export async function computeGraphTask(request, { ELK = globalThis.ELK } = {}) {
   if (request.kind === 'layout') {
     const result = await arrangeGraphWithRoutes({ graph, positions,
       selectedIds: request.payload.selectedIds ?? [], cachedRoutes: mapEntries(request.payload.cachedRoutes), ELK });
-    return { positions: result.positions, routes: [...result.routes] };
+    return { positions: result.positions, routes: [...result.routes], warnings: result.warnings ?? [] };
   }
   const movedIds = request.payload.movedIds ?? [];
   const result = await routeLocalGraph({ ...request.payload, cachedRoutes: mapEntries(request.payload.cachedRoutes) });

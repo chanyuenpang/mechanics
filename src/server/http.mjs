@@ -46,6 +46,10 @@ const assets = new Map([
 
 export async function startServer({ projectRoot = null, workspaceRoot = null, port = 4319, preferencesPath, projectHistoryPath, directoryPicker = createNativeDirectoryPicker() }) {
   if (workspaceRoot) throw new Error('startServer 只接受 projectRoot；工作区固定为项目内 .mechanics');
+  // Schema 在进程启动时由 AJV 固定。网页资源也必须在同一时刻固定，避免包文件被更新后，
+  // 旧校验器向浏览器发送新版页面，从而出现“可编辑但不能保存”的协议撕裂。
+  const servedAssets = new Map(await Promise.all([...assets].map(async ([path, [source, type]]) =>
+    [path, { content: await readFile(source), type }])));
   const projectHistory = createProjectHistory(projectHistoryPath);
   const projectPreflight = createProjectPreflight();
   const projects = createProjectManager({ onActivated: project => projectHistory.record(project) });
@@ -113,7 +117,7 @@ export async function startServer({ projectRoot = null, workspaceRoot = null, po
         }
         if (request.method === 'GET' && url.pathname === '/api/preferences') { send(200, await preferences.read()); return; }
         if (request.method === 'POST' && ['/api/directories/pick', '/api/project/open', '/api/project/select', '/api/project/reference-enter', '/api/project/preflight', '/api/project/settings', '/api/project/export-path', '/api/document-export/settings', '/api/document-export/generate', '/api/projects/pin',
-          '/api/projects/remove', '/api/save', '/api/rules-and-mechanic', '/api/rules/delete', '/api/local-ui-state', '/api/project-references/bind', '/api/project-references/declare', '/api/project-references/remove', '/api/mechanics', '/api/mechanic-folders', '/api/mechanic-folder-move', '/api/mechanic-folder-delete', '/api/mechanic-move', '/api/mechanic-delete', '/api/views', '/api/preferences', '/api/agent/session', '/api/agent/mutation', '/api/agent/draft'].includes(url.pathname)) {
+          '/api/projects/remove', '/api/save', '/api/rules-and-mechanic', '/api/rules/delete', '/api/mechanic-nodes/remove', '/api/local-ui-state', '/api/project-references/bind', '/api/project-references/declare', '/api/project-references/remove', '/api/mechanics', '/api/mechanic-folders', '/api/mechanic-folder-move', '/api/mechanic-folder-delete', '/api/mechanic-move', '/api/mechanic-delete', '/api/views', '/api/preferences', '/api/agent/session', '/api/agent/mutation', '/api/agent/draft'].includes(url.pathname)) {
           if (!(request.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
             send(415, { error: 'JSON_REQUIRED', message: '写入必须使用 application/json' }); return;
           }
@@ -157,6 +161,7 @@ export async function startServer({ projectRoot = null, workspaceRoot = null, po
           if (url.pathname === '/api/agent/mutation') { send(200, await projects.mutateAgent(body)); return; }
           if (url.pathname === '/api/rules-and-mechanic') { send(200, await projects.saveRulesAndMechanic(body)); return; }
           if (url.pathname === '/api/rules/delete') { send(200, await projects.deleteGlobalRule(body)); return; }
+          if (url.pathname === '/api/mechanic-nodes/remove') { send(200, await projects.removeMechanicNodes(body)); return; }
           if (url.pathname === '/api/mechanic-folders') { send(200, await projects.createMechanicFolder(body)); return; }
           if (url.pathname === '/api/mechanic-move') { send(200, await projects.moveMechanic(body)); return; }
           if (url.pathname === '/api/mechanic-folder-move') { send(200, await projects.moveMechanicFolder(body)); return; }
@@ -167,9 +172,9 @@ export async function startServer({ projectRoot = null, workspaceRoot = null, po
         send(405, { error: 'METHOD_NOT_ALLOWED', message: '此接口不支持该操作' }); return;
       }
       if (request.method !== 'GET') { send(405, { error: 'METHOD_NOT_ALLOWED', message: '静态资源只支持读取' }); return; }
-      const asset = assets.get(url.pathname);
+      const asset = servedAssets.get(url.pathname);
       if (!asset) { send(404, { error: 'NOT_FOUND', message: '没有此资源' }); return; }
-      send(200, await readFile(asset[0]), asset[1]);
+      send(200, asset.content, asset.type);
     } catch (error) {
       // 不返回部分工作区，不把失败替换为空数据或内置示例。
       const status = ['REVISION_CONFLICT', 'REFERENCE_REVISION_CONFLICT', 'FILE_EXISTS', 'DUPLICATE_ID', 'WORKSPACE_LOCKED', 'PROJECT_REQUIRED', 'PROJECT_CHANGED',

@@ -190,20 +190,20 @@ test('Agent 自动排版仅保存网页同算法生成的整图坐标，并受�
 test('三级 CLI 创建概念；update 是字段 patch，JSON 数组可清空且禁止修改 ID 与锁', async t => {
   const { projectRoot, root } = await fixture(t), before = await readWorkspace(root);
   const created = json(await offline(projectRoot, ['concept', 'create', '--id', 'focus', '--label', '专注', '--description', '可投入行动的专注。',
-    '--aliases', '["集中"]', '--tags', '["资源"]', '--custom-data', '来源：设计草案', '--revision', definitionsRevision(before)]));
+    '--aliases', '["集中"]', '--tag-ids', '[]', '--custom-data', '来源：设计草案', '--revision', definitionsRevision(before)]));
   assert.equal(created.canonicalCommitted, true);
   assert.equal(created.workspaceId, before.manifest.id);
   assert.match(created.resourceRevision, /^[a-f0-9]{64}$/u);
   assert.notEqual(created.resourceRevision, definitionsRevision(before));
   let workspace = await readWorkspace(root), concept = workspace.definitions.nodes.find(node => node.id === 'focus');
-  assert.deepEqual(concept, { id: 'focus', label: '专注', description: '可投入行动的专注。', aliases: ['集中'], tags: ['资源'], customData: '来源：设计草案', agentLocked: false });
+  assert.deepEqual(concept, { id: 'focus', label: '专注', description: '可投入行动的专注。', aliases: ['集中'], tagIds: [], customData: '来源：设计草案', agentLocked: false });
 
   const updated = json(await offline(projectRoot, ['concept', 'update', '--concept', 'focus', '--description', '用于维持复杂行动。',
-    '--aliases', '[]', '--tags', '[]', '--revision', created.resourceRevision]));
+    '--aliases', '[]', '--tag-ids', '[]', '--revision', created.resourceRevision]));
   workspace = await readWorkspace(root); concept = workspace.definitions.nodes.find(node => node.id === 'focus');
   assert.equal(concept.label, '专注');
   assert.equal(concept.description, '用于维持复杂行动。');
-  assert.deepEqual(concept.aliases, []); assert.deepEqual(concept.tags, []);
+  assert.deepEqual(concept.aliases, []); assert.deepEqual(concept.tagIds, []);
   assert.equal(concept.customData, '来源：设计草案');
   const clearedCustomData = json(await offline(projectRoot, ['concept', 'update', '--concept', 'focus', '--custom-data', '', '--revision', updated.resourceRevision]));
   workspace = await readWorkspace(root); concept = workspace.definitions.nodes.find(node => node.id === 'focus');
@@ -211,7 +211,7 @@ test('三级 CLI 创建概念；update 是字段 patch，JSON 数组可清空且
   assert.notEqual(clearedCustomData.resourceRevision, created.resourceRevision);
 
   for (const args of [
-    ['--id', 'renamed'], ['--agent-locked', 'true'], ['--aliases', '不是 JSON'], ['--tags', '{}'],
+    ['--id', 'renamed'], ['--agent-locked', 'true'], ['--aliases', '不是 JSON'], ['--tag-ids', '{}'],
   ]) {
     const rejected = await failure(offline(projectRoot, ['concept', 'update', '--concept', 'focus', ...args, '--revision', updated.resourceRevision]));
     assert.ok(['ERR_PARSE_ARGS_UNKNOWN_OPTION', 'AGENT_MUTATION_INVALID'].includes(rejected.body.error), JSON.stringify(rejected.body));
@@ -335,7 +335,7 @@ test('在线 mutation 同时要求 resource revision 与 projectGeneration，并
   try {
     const current = await (await fetch(server.origin + '/api/workspace')).json();
     const body = { projectRoot, projectGeneration: current.projectGeneration, revision: definitionsRevision(current), resource: 'concept', action: 'create',
-      id: 'focus', label: '专注', description: '可投入行动的专注。', aliases: [], tags: [] };
+      id: 'focus', label: '专注', description: '可投入行动的专注。', aliases: [], tagIds: [] };
     const post = value => fetch(server.origin + '/api/agent/mutation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
     const noGeneration = await post({ ...body, projectGeneration: undefined });
     assert.equal(noGeneration.status, 409); assert.equal((await noGeneration.json()).error, 'PROJECT_CHANGED');
@@ -419,7 +419,7 @@ test('catalog 后台发布不阻塞 canonical mutation，CLI 不重试已提交�
   await mkdir(join(projectRoot, 'mechanics'), { recursive: true });
   await writeFile(join(projectRoot, 'mechanics', 'user-owned.txt'), '不能由生成器清理');
   const accepted = json(await offline(projectRoot, ['concept', 'create', '--id', 'focus', '--label', '专注', '--description', '可投入行动的专注。',
-    '--aliases', '[]', '--tags', '[]', '--revision', definitionsRevision(before)]));
+    '--aliases', '[]', '--tag-ids', '[]', '--revision', definitionsRevision(before)]));
   assert.equal(accepted.canonicalCommitted, true);
   assert.equal(accepted.workspaceId, before.manifest.id);
   assert.match(accepted.resourceRevision, /^[a-f0-9]{64}$/u);

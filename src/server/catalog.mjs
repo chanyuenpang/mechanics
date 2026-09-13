@@ -22,20 +22,24 @@ function stable(value) {
 const stableJson = value => JSON.stringify(stable(value));
 const hash = value => createHash('sha256').update(stableJson(value)).digest('hex');
 const sorted = values => [...values].sort((a, b) => String(a).localeCompare(String(b)));
-const conceptSemantic = node => ({ id: node.id, label: node.label, aliases: sorted(node.aliases ?? []),
-  description: node.description, tags: sorted(node.tags ?? []),
+const tagKey = value => String(value).normalize('NFKC').trim().replace(/\s+/gu, ' ').toLocaleLowerCase();
+const conceptSemantic = (node, tagLookup = new Map()) => ({ id: node.id, label: node.label, aliases: sorted(node.aliases ?? []),
+  description: node.description, tagIds: sorted(node.tagIds ?? []),
+  tags: sorted((node.tagIds ?? []).map(id => tagLookup.get(tagKey(id))?.displayName ?? id)),
   ...(node.baseConceptId ? { baseConceptId: node.baseConceptId, qualifiers: structuredClone(node.qualifiers) } : {}) });
 
 export function catalogSemanticModel(workspace) {
+  const tagLookup = new Map((workspace.definitions.tagDefinitions ?? []).map(tag => [tagKey(tag.id), tag]));
   return {
     workspaceId: workspace.manifest.id,
-    concepts: workspace.definitions.nodes.map(conceptSemantic).sort((a, b) => a.id.localeCompare(b.id)),
+    concepts: workspace.definitions.nodes.map(node => conceptSemantic(node, tagLookup)).sort((a, b) => a.id.localeCompare(b.id)),
     rules: workspace.rules.rules.map(edge => ({ id: edge.id, source: edge.source, target: edge.target, relation: edge.relation,
       ...(edge.relation === 'influence' ? { sign: edge.sign, inheritance: edge.inheritance } : {}), ruleText: edge.ruleText ?? '' }))
       .sort((a, b) => a.id.localeCompare(b.id)),
     mechanics: workspace.mechanics.map(mechanic => ({
       id: mechanic.id,
       focusNodeIds: sorted(mechanic.focusNodeIds), pinnedRuleIds: sorted(mechanic.pinnedRuleIds),
+      ...(mechanic.ruleSelection !== undefined ? { ruleSelection: mechanic.ruleSelection } : {}),
     })).sort((a, b) => a.id.localeCompare(b.id)),
     views: workspace.views.map(view => ({ id: view.id, focusNodeIds: sorted(view.focusNodeIds), pinnedRuleIds: sorted(view.pinnedRuleIds),
       mechanicRegistrations: view.mechanicRegistrations.map(item => ({ mechanicId: item.mechanicId, visible: item.visible })) }))
@@ -84,6 +88,7 @@ function exportPlan(workspace) {
 }
 
 export function buildCatalog(workspace) {
+  const tagLookup = new Map((workspace.definitions.tagDefinitions ?? []).map(tag => [tagKey(tag.id), tag]));
   const rawPlan = exportPlan(workspace);
   const projectMechanic = mechanic => {
     const graph = composeProjection(workspace, { graphIds: [mechanic.id] });
@@ -108,7 +113,7 @@ export function buildCatalog(workspace) {
     ...plan.viewDocuments.flatMap(view => view.mechanics)];
   const selectedConceptIds = new Set([...selectedMechanics.flatMap(mechanic => mechanic.nodeIds),
     ...plan.viewDocuments.flatMap(view => view.nodeIds)]);
-  const concepts = new Map(workspace.definitions.nodes.filter(node => selectedConceptIds.has(node.id)).map(node => [node.id, conceptSemantic(node)]));
+  const concepts = new Map(workspace.definitions.nodes.filter(node => selectedConceptIds.has(node.id)).map(node => [node.id, conceptSemantic(node, tagLookup)]));
   const incident = new Map([...concepts.keys()].map(id => [id, { incoming: [], outgoing: [] }]));
   for (const mechanic of selectedMechanics) {
     for (const edge of mechanic.edges) {

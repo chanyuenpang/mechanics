@@ -73,7 +73,7 @@ try {
   assert.equal(search.readingContract.version, 9);
   assert.equal(search.resolution.status, 'not_found');
   const created = JSON.parse(command(process.execPath, [cli, 'agent', 'concept', 'create', '--project', workspace,
-    '--id', 'package-focus', '--label', '打包专注', '--description', '隔离安装验收使用的概念。', '--aliases', '[]', '--tags', '[]',
+    '--id', 'package-focus', '--label', '打包专注', '--description', '隔离安装验收使用的概念。', '--aliases', '[]',
     '--revision', scopes.resourceRevisions.definitions], temporary));
   assert.equal(created.canonicalCommitted, true);
   assert.match(created.resourceRevision, /^[a-f0-9]{64}$/u);

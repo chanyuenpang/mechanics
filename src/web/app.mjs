@@ -14,6 +14,15 @@ const $ = id => document.getElementById(id);
 const clone = value => structuredClone(value);
 const json = value => JSON.stringify(value);
 const arrow = edge => edge.relation === 'specializes' ? ' is-a→ ' : edge.sign === 1 ? ' ＋→ ' : edge.sign === -1 ? ' −→ ' : ' ？→ ';
+const NODE_COLOR_OPTIONS = [
+  { color: null, label: '默认' },
+  { color: '#D5E8F7', label: '浅蓝' }, { color: '#E5DCF4', label: '浅紫' }, { color: '#F5DDE7', label: '玫瑰' },
+  { color: '#D2EDE2', label: '薄荷' }, { color: '#F4E2BC', label: '沙金' }, { color: '#D2EAEE', label: '浅青' }, { color: '#F5DCD2', label: '陶粉' },
+];
+const NODE_STYLE_OPTIONS = [
+  { value: 'solid', label: '白色实线' },
+  { value: 'transparent-dashed', label: '透明虚线' },
+];
 let lastRelation = 1;
 const el = (tag, text, className) => {
   const item = document.createElement(tag);
@@ -31,7 +40,7 @@ const iconAction = (name, run, className = 'icon-button') => {
 function toggleWithKeyboard(event) {
   if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.currentTarget.click(); }
 }
-let workspace, activeId = null, draft, baseline, visible = [], viewRegistrations = [], viewFocusNodeIds = [], viewPinnedRuleIds = [], viewPositions = {}, scopedPositions = {}, viewRouteCache = null;
+let workspace, activeId = null, draft, baseline, visible = [], viewRegistrations = [], viewFocusNodeIds = [], viewPinnedRuleIds = [], viewPositions = {}, viewNodeColors = {}, viewNodeStyles = {}, scopedPositions = {}, viewRouteCache = null;
 let selection = null, graph, original, history = [], future = [], pending = 0, viewState = 'saved', writeQueue = Promise.resolve();
 let screen = 'mechanic', viewId = null, opening = false, arranging = false, autosave, legacy = false;
 let computeState = null, arrangeSequence = 0, geometryEpoch = 0;
@@ -107,7 +116,7 @@ function renderCanvasFilePath() {
   control.title = `点击复制路径：${path}`;
   control.setAttribute('aria-label', `复制文件路径：${path}`);
 }
-const viewSnapshot = () => ({ mechanicRegistrations: viewRegistrations.map(item => clone(item)), focusNodeIds: clone(viewFocusNodeIds), pinnedRuleIds: clone(viewPinnedRuleIds), collapsedNodeIds: [], positions: clone(viewPositions), projectionPositions: clone(scopedPositions), ...(viewRouteCache ? { routeCache: clone(viewRouteCache) } : {}), structuralPresentation: workspace.views.find(item => item.id === viewId)?.structuralPresentation });
+const viewSnapshot = () => ({ mechanicRegistrations: viewRegistrations.map(item => clone(item)), focusNodeIds: clone(viewFocusNodeIds), pinnedRuleIds: clone(viewPinnedRuleIds), collapsedNodeIds: [], positions: clone(viewPositions), nodeColors: clone(viewNodeColors), nodeStyles: clone(viewNodeStyles), projectionPositions: clone(scopedPositions), ...(viewRouteCache ? { routeCache: clone(viewRouteCache) } : {}), structuralPresentation: workspace.views.find(item => item.id === viewId)?.structuralPresentation });
 const contextKey = () => viewId !== null ? 'view/' + viewId : legacy ? 'legacy' : 'mechanic/' + activeId;
 const rememberCamera = () => { if (!definitionMode()) cameras.set(contextKey(), clone(canvas.camera)); };
 const restoreCamera = () => { if (cameras.has(contextKey())) { canvas.camera = clone(cameras.get(contextKey())); canvas.transform(); } };
@@ -403,6 +412,8 @@ function assignSnapshot(snapshot) {
   viewPinnedRuleIds = clone(snapshot.pinnedRuleIds ?? []);
   visible = viewRegistrations.filter(item => item.visible).map(item => item.mechanicId);
   viewPositions = clone(snapshot.positions);
+  viewNodeColors = clone(snapshot.nodeColors ?? {});
+  viewNodeStyles = clone(snapshot.nodeStyles ?? {});
   scopedPositions = clone(snapshot.projectionPositions ?? {});
   viewRouteCache = clone(snapshot.routeCache ?? null);
 }
@@ -441,6 +452,27 @@ function field(container, label, value, { multiline = false, readonly = false, r
 }
 function detail(container, label, text) {
   const item = el('div', undefined, 'detail'); item.append(el('strong', label), el('p', text)); container.append(item);
+}
+function nodeStylePicker(container, current, onChange) {
+  const item = el('div', undefined, 'detail node-style-picker'); item.append(el('strong', '节点风格'));
+  const choices = el('div', undefined, 'node-style-choices');
+  for (const option of NODE_STYLE_OPTIONS) {
+    const choice = button(option.label, () => onChange(option.value), `node-style-choice node-style-${option.value}`);
+    choice.setAttribute('aria-pressed', String(current === option.value));
+    choices.append(choice);
+  }
+  item.append(choices); container.append(item);
+}
+function nodeColorPicker(container, current, onChange) {
+  const item = el('div', undefined, 'detail node-color-picker'); item.append(el('strong', '节点颜色'));
+  const choices = el('div', undefined, 'node-color-choices');
+  for (const option of NODE_COLOR_OPTIONS) {
+    const choice = button('', () => onChange(option.color), 'node-color-choice');
+    choice.setAttribute('aria-label', option.label); choice.title = option.label; choice.setAttribute('aria-pressed', String(current === option.color));
+    if (option.color) choice.style.setProperty('--node-color', option.color); else choice.classList.add('is-default');
+    choices.append(choice);
+  }
+  item.append(choices); container.append(item);
 }
 function qualifierRowsFromCanonical(qualifiers = []) {
   return qualifiers.map(qualifier => qualifierFormRowFromCanonical(qualifier));
@@ -934,7 +966,7 @@ function render(withInspector = true, { preserveRoutes = false } = {}) {
   if (table) {
     $('file-kind').textContent = '全局'; $('file-name').textContent = '共享概念'; $('file-name').title = filePath();
     renderCanvasFilePath();
-    glossary.update(draft.nodes, workspace.mechanics, pending); renderSidebar(); updateStatus(); $('inspector').hidden = true; return Promise.resolve(true);
+    glossary.update(draft.nodes, workspace.mechanics, pending, workspace.definitions.tagDefinitions ?? []); renderSidebar(); updateStatus(); $('inspector').hidden = true; return Promise.resolve(true);
   }
   try {
     const positions = projection();
@@ -943,7 +975,7 @@ function render(withInspector = true, { preserveRoutes = false } = {}) {
     if (restoredRoutes) canvas.primeRoutes(graph, positions, restoredRoutes);
     const routing = canvas.update(graph, positions, activeId, selection, definitionMode(), { preserveRoutes,
       deferRouting: opening && !restoredRoutes,
-      structuralPresentation: viewMode() ? workspace.views.find(item => item.id === viewId).structuralPresentation : 'line' });
+      structuralPresentation: viewMode() ? workspace.views.find(item => item.id === viewId).structuralPresentation : 'line', tagDefinitions: workspace.definitions.tagDefinitions ?? [], nodeColors: viewMode() ? viewNodeColors : draft?.nodeColors ?? {}, nodeStyles: viewMode() ? viewNodeStyles : draft?.nodeStyles ?? {} });
     $('file-kind').textContent = viewMode() ? '视图' : legacy ? '旧记录' : '机制';
     $('file-name').textContent = viewMode() ? workspace.views.find(item => item.id === viewId).name : legacy ? '待保存的叠加' : activeId === null ? '未选择机制' : draft.name;
     $('file-name').title = filePath();
@@ -977,12 +1009,36 @@ function inspect() {
     $('inspector-title').textContent = '新建连线';
     panel.append(el('strong', '点击节点新建连线', 'linking-heading'),
       el('p', `已选择起点：${name(selection.id)}。点击目标节点后会立即创建当前默认类型的连线。`, 'note'),
-      el('p', '关闭此面板即可取消本次连线。', 'note'));
+      button('取消连线', cancelLinking, 'quiet'));
     return;
   }
   if (selection.type === 'nodes') {
-    $('inspector-title').textContent = `已选择 ${selection.ids.length} 个节点`;
-    detail(panel, '选中节点', selection.ids.map(name).join('、'));
+    const ids = selection.ids.filter(id => graph.nodes.some(node => node.id === id));
+    $('inspector-title').textContent = `已选择 ${ids.length} 个节点`;
+    detail(panel, '选中节点', ids.map(name).join('、'));
+    const nodeColors = viewMode() ? viewNodeColors : draft?.nodeColors ?? {};
+    const nodeStyles = viewMode() ? viewNodeStyles : draft?.nodeStyles ?? {};
+    const common = values => values.every(value => value === values[0]) ? values[0] : undefined;
+    const applyStyles = style => {
+      const change = data => {
+        data.nodeStyles ??= {};
+        for (const id of ids) if (style === 'solid') delete data.nodeStyles[id]; else data.nodeStyles[id] = style;
+        if (!Object.keys(data.nodeStyles).length) delete data.nodeStyles;
+      };
+      if (viewMode()) editView(change, { keepSelection: true, preserveRoutes: true });
+      else edit(change, { topology: false });
+    };
+    const applyColors = color => {
+      const change = data => {
+        data.nodeColors ??= {};
+        for (const id of ids) if (color) data.nodeColors[id] = color; else delete data.nodeColors[id];
+        if (!Object.keys(data.nodeColors).length) delete data.nodeColors;
+      };
+      if (viewMode()) editView(change, { keepSelection: true, preserveRoutes: true });
+      else edit(change, { topology: false });
+    };
+    nodeStylePicker(panel, common(ids.map(id => nodeStyles[id] ?? 'solid')), applyStyles);
+    nodeColorPicker(panel, common(ids.map(id => nodeColors[id] ?? null)), applyColors);
     panel.append(el('p', '拖动任一选中节点可整体移动；Shift 单击增减成员，Esc 清空选择。一次撤销恢复整组位置。', 'note'));
     return;
   }
@@ -1011,8 +1067,8 @@ function inspect() {
     if (edge.sourceQualifiers?.length) detail(panel, '源参与者限定', qualifierText(edge.sourceQualifiers));
     if (edge.targetQualifiers?.length) detail(panel, '目标参与者限定', qualifierText(edge.targetQualifiers));
     if (edge.relation === 'specializes') detail(panel, '特化 / 是某种语义', '具体概念沿箭头指向上位概念，表示“是某种”；不写入影响符号或继承设置。');
-    const owned = !viewMode() && edge.steps.length === 1;
-    if (owned) {
+    const direct = edge.steps.length === 1;
+    if (direct) {
       const id = edge.steps[0].ruleId ?? edge.id, originalEdge = workspace.rules.rules.find(item => item.id === id);
       field(panel, '关系', originalEdge.relation === 'specializes' ? 'specializes' : String(originalEdge.sign), {
         options: [['1', '＋ 正向影响'], ['-1', '− 负向影响'], ['random', '？ 随机影响'], ['specializes', 'is-a 特化 / 是某种（具体 → 上位）']],
@@ -1044,7 +1100,7 @@ function inspect() {
       }).catch(showError); } });
       customData.maxLength = 16000;
       panel.append(button('删除此连线', () => removeSelection(), 'danger'));
-    } else panel.append(el('p', '视图中的源规则只读；请打开对应机制文件编辑。', 'note'));
+    } else panel.append(el('p', '这是由多条直接规则聚合出的关系；请打开其中一条直接规则编辑。', 'note'));
     edge.steps.forEach(step => {
       detail(panel, '全局规则 / ' + (step.ruleId ?? step.id), name(step.source) + arrow(step) + name(step.target)
         + (step.relation === 'specializes' ? '\n特化 / 是某种关系' : step.ruleText?.trim() ? '\n规则：' + step.ruleText : '\n规则：未填写'));
@@ -1068,7 +1124,28 @@ function inspect() {
   const structure = conceptStructurePresentation(node, workspace.definitions.nodes);
   detail(panel, '概念形态', structure.shape);
   if (node.aliases?.length) detail(panel, '别名', node.aliases.join('、'));
-  if (node.tags?.length) detail(panel, '标签', node.tags.join('、'));
+  const tagNames = (node.tagIds ?? []).map(id => workspace.definitions.tagDefinitions?.find(tag => tag.id === id)?.displayName ?? id);
+  if (tagNames.length) detail(panel, '标签', tagNames.join('、'));
+  const nodeColors = viewMode() ? viewNodeColors : draft?.nodeColors ?? {};
+  const nodeStyles = viewMode() ? viewNodeStyles : draft?.nodeStyles ?? {};
+  nodeStylePicker(panel, nodeStyles[node.id] ?? 'solid', style => {
+    const change = data => {
+      data.nodeStyles ??= {};
+      if (style === 'solid') delete data.nodeStyles[node.id]; else data.nodeStyles[node.id] = style;
+      if (!Object.keys(data.nodeStyles).length) delete data.nodeStyles;
+    };
+    if (viewMode()) editView(change, { keepSelection: true, preserveRoutes: true });
+    else edit(change, { topology: false });
+  });
+  nodeColorPicker(panel, nodeColors[node.id] ?? null, color => {
+    const change = data => {
+      data.nodeColors ??= {};
+      if (color) data.nodeColors[node.id] = color; else delete data.nodeColors[node.id];
+      if (!Object.keys(data.nodeColors).length) delete data.nodeColors;
+    };
+    if (viewMode()) editView(change, { keepSelection: true, preserveRoutes: true });
+    else edit(change, { topology: false });
+  });
   if (node.customData) detail(panel, '自定义文本', node.customData);
   detail(panel, 'Agent 锁', node.agentLocked ? '已锁定；Agent 不能修改或删除此概念' : '未锁定');
   if (!legacy) panel.append(button('修改概念', () => editConcept(node.id)));
@@ -1121,7 +1198,7 @@ async function editConcept(id) {
   try {
     await dialog('修改概念', container => {
       fields = el('div'); container.append(fields);
-      editor = new ConceptEditor(fields, { mode: 'edit', node, nodes: () => workspace.definitions.nodes,
+      editor = new ConceptEditor(fields, { mode: 'edit', node, nodes: () => workspace.definitions.nodes, tagDefinitions: workspace.definitions.tagDefinitions ?? [],
         onSave: form => { conceptEditDirty = true; $('dialog-form').requestSubmit(); },
         onCancel: () => $('dialog').close('cancel') });
       container.append(el('p', '保存到共享概念表，所有引用此概念的机制都会更新；当前机制草稿不受影响。', 'note'));
@@ -1142,7 +1219,7 @@ async function editConcept(id) {
   } finally { conceptEditDirty = false; $('dialog-content').onkeydown = null; }
 }
 async function removeSelection() {
-  if (!selection || busy() || viewMode() || legacy || autosave.blocked) return;
+  if (!selection || busy() || legacy || autosave.blocked) return;
   if (selection.type === 'edge') {
     const edge = graph.edges.find(item => item.id === selection.id);
     if (edge?.steps.length !== 1) return;
@@ -1156,21 +1233,30 @@ async function removeSelection() {
     render();
     return;
   }
-  if (selection.type !== 'node') return;
-  const id = selection.id;
+  if (selection.type !== 'node' && selection.type !== 'nodes') return;
+  const ids = selection.type === 'nodes' ? canvas.selectedIds() : [selection.id];
+  const id = ids[0];
   if (definitionMode()) {
     const owners = workspace.mechanics.filter(item => item.focusNodeIds.includes(id));
     if (owners.length) throw new Error('节点仍被以下图层引用，不能删除定义：' + owners.map(item => item.name).join('、'));
-  } else if (!draft?.focusNodeIds.includes(id)) return;
+  } else if (ids.some(item => !draft?.focusNodeIds.includes(item))) return;
   const accepted = await dialog(definitionMode() ? '确认删除概念？' : '移出当前图层？', container => {
-    container.append(el('p', definitionMode() ? '将删除“' + name(id) + '”的共享定义。此操作会在保存后生效；删除前仍会检查机制和视图引用。' : '移除 ' + name(id) + ' 以及当前图层中连接它的关系。其他图层和共享定义不变。', 'note'));
+    container.append(el('p', definitionMode() ? '将删除“' + name(id) + '”的共享定义。此操作会在保存后生效；删除前仍会检查机制和视图引用。' : `从当前图层移除 ${ids.length} 个节点；只会清理已无任何引用的概念。`, 'note'));
   }, () => true, definitionMode() ? '删除概念' : '确认移除');
   if (!accepted) return;
+  if (!definitionMode()) {
+    const result = await write(revision => api('/api/mechanic-nodes/remove', { revision, mechanicId: activeId, nodeIds: ids }));
+    selection = null; draft = clone(workspace.mechanics.find(item => item.id === activeId)); baseline = clone(draft);
+    $('tool-hint').textContent = `已移出 ${result.removedFromGraphIds.length} 个节点；清理 ${result.prunedConceptIds.length} 个孤立概念。`;
+    render(); return;
+  }
   selection = null;
   edit(data => {
     if (definitionMode()) data.nodes = data.nodes.filter(item => item.id !== id);
     else data.focusNodeIds = data.focusNodeIds.filter(item => item !== id);
     delete data.positions[id];
+    delete data.nodeColors?.[id];
+    delete data.nodeStyles?.[id];
   });
 }
 async function addNode() {
@@ -1390,7 +1476,7 @@ async function addTerm() {
   let editor;
   await dialog('新增概念', container => {
     const host = el('div'); container.append(host);
-    editor = new ConceptEditor(host, { mode: 'create', node: {}, nodes: () => workspace.definitions.nodes,
+    editor = new ConceptEditor(host, { mode: 'create', node: {}, nodes: () => workspace.definitions.nodes, tagDefinitions: workspace.definitions.tagDefinitions ?? [],
       onSave: () => $('dialog-form').requestSubmit(), onCancel: () => $('dialog').close('cancel') });
   }, () => {
     const node = conceptPayloadFromForm(editor.form);
@@ -1423,6 +1509,7 @@ const glossary = new GlossaryTable($('glossary'), {
   change: (id, key, value) => edit(data => { data.nodes.find(node => node.id === id)[key] = value; }, { refresh: false }),
   replace: (id, nextNode) => edit(data => { const index = data.nodes.findIndex(node => node.id === id); if (index < 0) throw new Error('概念已不存在，请重新读取。'); data.nodes[index] = structuredClone(nextNode); }),
   setLocks: (ids, agentLocked) => edit(data => { const selected = new Set(ids); for (const node of data.nodes) if (selected.has(node.id)) node.agentLocked = agentLocked; }),
+  updateTags: tagDefinitions => edit(data => { data.tagDefinitions = structuredClone(tagDefinitions); }),
   add: () => { void addTerm().catch(showError); },
   remove: id => { selection = { type: 'node', id }; void removeSelection().catch(showError); },
   locate: id => {
@@ -1480,6 +1567,7 @@ async function commitSettledGeometry(result, { recordHistory = false } = {}) {
   }
   $('error').hidden = true;
   render(true, { preserveRoutes: true });
+  if (result.warnings?.length) $('tool-hint').textContent = result.warnings.join(' ');
   if ((edited && recordHistory || result.persistRouteCache) && viewMode()) await persistView();
   // 旧文件首次打开时没有路线快照。后台补算完成后只写入派生快照；这不会改变
   // 节点、规则或布局，但可让之后的打开直接复用路径。
@@ -1497,7 +1585,8 @@ const canvas = new GraphCanvas($('canvas'), {
     void addNode().catch(showError);
   },
   select: value => { selection = value; render(); },
-  canMove: id => !busy() && !autosave.blocked && !legacy && !definitionMode() && (isEndpointProjection(graph?.nodes.find(node => node.id === id)) || viewMode() || !!draft?.focusNodeIds.includes(id)),
+  // 画布节点的位置只写入当前机制图或视图，绝不回写共享概念定义。
+  canMove: id => !busy() && !autosave.blocked && !legacy && !definitionMode() && !!graph?.nodes.some(node => node.id === id),
   move: positions => {
     const regular = {}, scoped = {};
     for (const [id, point] of Object.entries(positions)) (isEndpointProjection(graph?.nodes.find(node => node.id === id)) ? scoped : regular)[id] = point;
@@ -1535,6 +1624,9 @@ async function autoLayout({ fitView = false } = {}) {
       isCurrent: () => graphGeometryKey(graph, projection()) === geometryKey });
     if (request !== arrangeSequence) return;
     await commitSettledGeometry(result, { recordHistory: true });
+    // “自动整理”是明确的用户提交操作：节点坐标与路线缓存必须一并落盘，
+    // 不能只留在浏览器草稿里等待用户发现保存按钮。
+    if (!viewMode()) await saveDraft();
     if (fitView && request === arrangeSequence) canvas.fit();
   } catch (error) {
     if (!computeCancelled(error)) throw error;
@@ -1567,6 +1659,10 @@ async function activateSourceProject(opened) {
   sourceProject = opened;
   browserWorkspace = opened;
   await applyBrowsingWorkspace(opened, { restoreSourceState: true });
+  if (opened.workspaceState === 'degraded') {
+    const files = opened.resourceDiagnostics?.map(item => `${item.path}：${item.message}`).join('\n') ?? '存在无法读取的机制资源。';
+    showError(new Error(`项目已打开；以下资源被隔离，未参与编辑、查询或文档发布：\n${files}`));
+  }
 }
 
 async function activateSourceNavigation(opened) {
@@ -1977,7 +2073,6 @@ $('toggle-inspector').onclick = () => {
   inspectorCollapsed = !inspectorCollapsed;
   saveUiPreference('mechanics:inspector-collapsed', inspectorCollapsed); inspect();
 };
-$('close-inspector').onclick = () => { if (selection?.type === 'linking') cancelLinking(); else { selection = null; render(); } };
 $('diagnostics').onclick = () => { selection = { type: 'diagnostics' }; inspect(); };
 $('dismiss-error').onclick = () => { $('error').hidden = true; };
 $('close-dialog').onclick = $('cancel-dialog').onclick = () => $('dialog').close('cancel');

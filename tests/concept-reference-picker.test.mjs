@@ -6,7 +6,7 @@ const node = (id, extra = {}) => ({ id, label: '概念 ' + id, description: '定
 
 test('picker 在 150 项中按 label、ID、别名、描述和标签检索，且每个候选都可被 ID 找到', () => {
   const nodes = Array.from({ length: 150 }, (_, index) => node('concept-' + String(index).padStart(3, '0')));
-  nodes[17] = node('concept-017', { label: '火焰伤害', aliases: ['灼烧'], description: '持续生命损失', tags: ['元素'] });
+  nodes[17] = node('concept-017', { label: '火焰伤害', aliases: ['灼烧'], description: '持续生命损失', tagIds: ['元素'] });
   for (const item of nodes) assert.deepEqual(conceptReferencePickerCandidates(nodes, { query: item.id }).map(candidate => candidate.id), [item.id]);
   assert.deepEqual(conceptReferencePickerCandidates(nodes, { query: '火焰' }).map(candidate => candidate.id), ['concept-017']);
   assert.deepEqual(conceptReferencePickerCandidates(nodes, { query: '灼烧' }).map(candidate => candidate.id), ['concept-017']);

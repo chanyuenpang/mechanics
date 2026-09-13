@@ -99,6 +99,30 @@ test('结构和引用错误明确拒绝，不修补原始数据', () => {
   }
 });
 
+test('节点颜色与风格只属于机制图或视图的呈现数据，不可写入概念', () => {
+  const colored = structuredClone(source);
+  colored.mechanics[0].nodeColors = { melee: '#D5E8F7' };
+  colored.mechanics[0].nodeStyles = { melee: 'transparent-dashed' };
+  if (colored.views[0]) colored.views[0].nodeColors = { melee: '#E5DCF4' };
+  if (colored.views[0]) colored.views[0].nodeStyles = { melee: 'solid' };
+  validateWorkspace(colored);
+  const legacyColor = structuredClone(colored);
+  legacyColor.mechanics[0].nodeColors.melee = '#E4EDF5';
+  validateWorkspace(legacyColor);
+  const invalidColor = structuredClone(colored);
+  invalidColor.mechanics[0].nodeColors.melee = '#FFFFFF';
+  assert.throws(() => validateWorkspace(invalidColor), { code: 'INVALID_DOCUMENT' });
+  const invalidStyle = structuredClone(colored);
+  invalidStyle.mechanics[0].nodeStyles.melee = 'outline';
+  assert.throws(() => validateWorkspace(invalidStyle), { code: 'INVALID_DOCUMENT' });
+  const invalidConcept = structuredClone(colored);
+  invalidConcept.definitions.nodes[0].nodeColors = { melee: '#E4EDF5' };
+  assert.throws(() => validateWorkspace(invalidConcept), { code: 'INVALID_DOCUMENT' });
+  const invalidConceptStyle = structuredClone(colored);
+  invalidConceptStyle.definitions.nodes[0].nodeStyles = { melee: 'transparent-dashed' };
+  assert.throws(() => validateWorkspace(invalidConceptStyle), { code: 'INVALID_DOCUMENT' });
+});
+
 
 test('概念与规则都只能保存受限长度的自定义文本', () => {
   const valid = structuredClone(source);
@@ -162,8 +186,8 @@ test('视图可保存暂时隐藏或后续出现的定义节点坐标', () => {
 
 test('工具可处理无任何卡牌概念的另一游戏工作区', () => {
   const data = {
-    manifest: { schemaVersion: 11, kind: 'workspace', id: 'platform-game', name: '跳跃游戏', definitions: 'definitions.json', rules: 'rules.json', agentExportPath: 'mechanics', compositions: [] },
-    definitions: { schemaVersion: 6, kind: 'definitions', workspaceId: 'platform-game', nodes: ['jump', 'fall'].map(id => ({ id, label: id, description: '测试概念', agentLocked: false })), positions: {} },
+    manifest: { schemaVersion: 12, kind: 'workspace', id: 'platform-game', name: '跳跃游戏', definitions: 'definitions.json', rules: 'rules.json', agentExportPath: 'mechanics', compositions: [] },
+    definitions: { schemaVersion: 7, kind: 'definitions', workspaceId: 'platform-game', tagDefinitions: [], nodes: ['jump', 'fall'].map(id => ({ id, label: id, description: '测试概念', agentLocked: false })), positions: {} },
     rules: { schemaVersion: 1, kind: 'rules', workspaceId: 'platform-game', rules: [{ id: 'jump-2-fall', source: 'jump', target: 'fall', relation: 'influence', sign: -1, inheritance: { mode: 'none' }, ruleText: '及时起跳' }] },
     mechanics: [{ schemaVersion: 7, kind: 'mechanic', workspaceId: 'platform-game', id: 'jump-rule', name: '跳跃规则', scope: '假设模型', focusNodeIds: ['jump', 'fall'], pinnedRuleIds: ['jump-2-fall'], positions: {} }],
   };

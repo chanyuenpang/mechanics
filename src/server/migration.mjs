@@ -232,8 +232,18 @@ export async function planV10ToV11Migration(workspaceRoot) {
     });
     seen.set(pair, rule.id);
   }
-  const nextManifest = { ...structuredClone(manifest), schemaVersion: 11, definitions: 'definitions.json', rules: 'rules.json' };
-  const nextDefinitions = { ...structuredClone(definitions), schemaVersion: 6 };
+  const normalizeTag = value => String(value).normalize('NFKC').trim().replace(/\s+/gu, ' ').toLocaleLowerCase();
+  const tags = new Map();
+  for (const node of definitions.nodes) for (const raw of node.tags ?? []) {
+    const id = String(raw).normalize('NFKC').trim().replace(/\s+/gu, ' '), key = normalizeTag(raw);
+    if (key && !tags.has(key)) tags.set(key, { id, displayName: id, color: '#6B7280' });
+  }
+  const nextManifest = { ...structuredClone(manifest), schemaVersion: 12, definitions: 'definitions.json', rules: 'rules.json' };
+  const nextDefinitions = { ...structuredClone(definitions), schemaVersion: 7, tagDefinitions: [...tags.values()], nodes: definitions.nodes.map(node => {
+    const { tags: rawTags, ...next } = node;
+    const tagIds = [...new Map((rawTags ?? []).map(raw => [normalizeTag(raw), tags.get(normalizeTag(raw))?.id]).filter(([, id]) => id)).values()];
+    return tagIds.length ? { ...next, tagIds } : next;
+  }) };
   const nextRules = { schemaVersion: 1, kind: 'rules', workspaceId: manifest.id, rules };
   const nextMechanics = mechanics.map(mechanic => ({ schemaVersion: 7, kind: 'mechanic', workspaceId: mechanic.workspaceId,
     id: mechanic.id, name: mechanic.name, scope: mechanic.scope, focusNodeIds: [...mechanic.nodeIds],
@@ -246,12 +256,48 @@ export async function planV10ToV11Migration(workspaceRoot) {
     ...views.map((item, index) => ({ kind: 'view', id: item.id, path: discovered.viewPaths[index] }))];
   const candidate = { manifest: nextManifest, definitions: nextDefinitions, rules: nextRules, mechanics: nextMechanics, views: nextViews, files };
   try { validateWorkspace(candidate); } catch (error) { fail('MIGRATION_VALIDATION_FAILED', 'v10 → v11 候选未通过全量校验：' + error.message, error); }
-  return { root, from: 10, to: 11, revision: revisionOf(snapshots, discovered.directories), documents: [
+  return { root, from: 10, to: 12, revision: revisionOf(snapshots, discovered.directories), documents: [
     { path: 'workspace.json', document: nextManifest }, { path: 'definitions.json', document: nextDefinitions, create: true },
     { path: 'rules.json', document: nextRules, create: true }, { path: manifest.definitions, delete: true },
     ...nextMechanics.map(document => ({ path: files.find(item => item.kind === 'mechanic' && item.id === document.id)?.path, document })),
     ...nextViews.map(document => ({ path: files.find(item => item.kind === 'view' && item.id === document.id)?.path, document })),
-  ], summary: { workspace: 1, definitions: 1, rules: rules.length, mechanics: nextMechanics.length, views: nextViews.length } };
+  ], summary: { workspace: 1, definitions: 1, rules: rules.length, mechanics: nextMechanics.length, views: nextViews.length, tags: tags.size } };
+}
+
+// v12 将自由文本标签收束为 definitions 内由稳定 ID 引用的工作区资产。
+export async function planV11ToV12Migration(workspaceRoot) {
+  const root = await realpath(resolve(workspaceRoot));
+  const snapshots = new Map();
+  const read = async file => { const result = await readDocument(root, file); snapshots.set(file, result.raw); return result.document; };
+  const manifest = await read('workspace.json');
+  if (manifest?.kind !== 'workspace' || manifest.schemaVersion !== 11) fail('MIGRATION_VERSION_UNSUPPORTED', '迁移只支持 workspace v11 → v12；当前工作区版本为 v' + String(manifest?.schemaVersion));
+  const definitions = await read(manifest.definitions), rules = await read(manifest.rules), discovered = await discover(root), mechanics = [], views = [];
+  for (const path of discovered.mechanicPaths) mechanics.push(await read(path));
+  for (const path of discovered.viewPaths) views.push(await read(path));
+  if (definitions?.schemaVersion !== 6 || rules?.schemaVersion !== 1 || mechanics.some(item => item?.schemaVersion !== 7) || views.some(item => item?.schemaVersion !== 4)) {
+    fail('MIGRATION_VERSION_UNSUPPORTED', '迁移只接受 definitions v6、rules v1、mechanic v7 与 view v4 的完整 v11 工作区');
+  }
+  const tags = new Map();
+  const normalizeTag = value => String(value).normalize('NFKC').trim().replace(/\s+/gu, ' ').toLocaleLowerCase();
+  for (const node of definitions.nodes) for (const raw of node.tags ?? []) {
+    const id = String(raw).normalize('NFKC').trim().replace(/\s+/gu, ' '), key = normalizeTag(raw);
+    if (!key) continue;
+    if (!tags.has(key)) tags.set(key, { id, displayName: id, color: '#6B7280' });
+  }
+  const nextManifest = { ...structuredClone(manifest), schemaVersion: 12 };
+  const nextDefinitions = { ...structuredClone(definitions), schemaVersion: 7,
+    tagDefinitions: [...tags.values()], nodes: definitions.nodes.map(node => {
+      const { tags: rawTags, ...next } = node;
+      const tagIds = [...new Map((rawTags ?? []).map(raw => [normalizeTag(raw), tags.get(normalizeTag(raw))?.id]).filter(([, id]) => id)).values()];
+      return tagIds.length ? { ...next, tagIds } : next;
+    }) };
+  const files = [{ kind: 'workspace', id: manifest.id, path: 'workspace.json' }, { kind: 'definitions', path: manifest.definitions }, { kind: 'rules', path: manifest.rules },
+    ...mechanics.map((item, index) => ({ kind: 'mechanic', id: item.id, path: discovered.mechanicPaths[index] })), ...views.map((item, index) => ({ kind: 'view', id: item.id, path: discovered.viewPaths[index] }))];
+  const candidate = { manifest: nextManifest, definitions: nextDefinitions, rules, mechanics, views, files };
+  try { validateWorkspace(candidate); } catch (error) { fail('MIGRATION_VALIDATION_FAILED', 'v11 → v12 候选未通过全量校验：' + error.message, error); }
+  return { root, from: 11, to: 12, revision: revisionOf(snapshots, discovered.directories), documents: [
+    { path: 'workspace.json', document: nextManifest }, { path: manifest.definitions, document: nextDefinitions }
+  ], summary: { workspace: 1, definitions: 1, tags: tags.size } };
 }
 
 // 只修复一次已确认的跨文件半提交：definitions 已删除、机制仍保留无规则节点引用。

@@ -25,16 +25,21 @@ test('追踪候选仅包含当前图的直接与间接下游；环、自身、�
 
 test('修改概念只保存指定定义文案，稳定ID、布局、其余定义和机制文件不变', async t => {
   const { root, workspace, store } = await fixture(t), original = structuredClone(workspace.definitions);
+  original.tagDefinitions = [
+    { id: '战斗', displayName: '战斗', color: '#6B7280' },
+    { id: '核心', displayName: '核心', color: '#6B7280' },
+  ];
+  workspace.definitions.tagDefinitions = structuredClone(original.tagDefinitions);
   const target = original.nodes[0], files = ['workspace.json', ...workspace.files.filter(item => item.kind === 'mechanic').map(item => item.path)];
   const before = await Promise.all(files.map(file => readFile(join(root, file), 'utf8')));
   const next = prepareConceptUpdate(original, target.id, {
     id: 'cannot-change', label: '修改后名称', description: '修改后含义',
-    aliases: '修改别名', tags: '战斗, 核心', agentLocked: true,
+    aliases: '修改别名', tagIds: '战斗, 核心', agentLocked: true,
   });
   assert.deepEqual(workspace.definitions, original);
   assert.equal(next.nodes[0].id, target.id); assert.deepEqual(next.positions, original.positions);
   assert.equal(next.nodes[0].agentLocked, true);
-  assert.deepEqual(next.nodes[0].tags, ['战斗', '核心']);
+  assert.deepEqual(next.nodes[0].tagIds, ['战斗', '核心']);
   assert.deepEqual(next.nodes.slice(1), original.nodes.slice(1));
   await store.save({ revision: workspace.revision, kind: 'definitions', document: next });
   assert.equal((await store.read()).definitions.nodes[0].label, '修改后名称');
@@ -71,7 +76,7 @@ test('仅引用已有概念不写定义；同名不同 ID 可并存，名称/含
   const existing = workspace.definitions.nodes.find(item => !draft.focusNodeIds.includes(item.id));
   const plan = prepareReference({ workspace, draft, selected: [existing.id, existing.id], candidates: [], positions, center: { x: 0, y: 0 } });
   await new ReferenceCommit(plan).run(() => assert.fail('不应写定义'), next => { assert.equal(next.focusNodeIds.filter(id => id === existing.id).length, 1); return true; });
-  const a = { ...node('name-a', '概念'), tags: ['资源'] }, b = node('name-b', ' 概念 ');
+  const a = { ...node('name-a', '概念'), tagIds: ['资源'] }, b = node('name-b', ' 概念 ');
   assert.equal(sameNamedConcepts([a, b], '概念').length, 2);
   assert.deepEqual(matchingConcepts([a, b], 'name-a 定义'), [a]);
   assert.deepEqual(matchingConcepts([a, b], '资源'), [a]);
@@ -80,14 +85,18 @@ test('仅引用已有概念不写定义；同名不同 ID 可并存，名称/含
 
 test('网页概念搜索与编辑保留自然语言别名', async t => {
   const { workspace } = await fixture(t), id = workspace.definitions.nodes[0].id;
+  workspace.definitions.tagDefinitions = [
+    { id: '战斗', displayName: '战斗', color: '#6B7280' },
+    { id: '资源', displayName: '资源', color: '#6B7280' },
+  ];
   const original = workspace.definitions.nodes.find(node => node.id === id);
   const next = prepareConceptUpdate(workspace.definitions, id, {
     label: original.label, description: original.description, agentLocked: original.agentLocked,
     aliases: '抽卡, draw card\n摸牌',
-    tags: '战斗, 资源',
+    tagIds: '战斗, 资源',
   });
   assert.deepEqual(next.nodes.find(node => node.id === id).aliases, ['抽卡', 'draw card', '摸牌']);
-  assert.deepEqual(next.nodes.find(node => node.id === id).tags, ['战斗', '资源']);
+  assert.deepEqual(next.nodes.find(node => node.id === id).tagIds, ['战斗', '资源']);
   assert.ok(matchingConcepts(next.nodes, 'DRAW CARD').some(node => node.id === id));
 });
 test('缺必填项、重复 ID、未知引用在保存前拒绝', async t => {

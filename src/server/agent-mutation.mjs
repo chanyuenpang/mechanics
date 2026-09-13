@@ -57,8 +57,8 @@ function externalConceptReferences(workspace, id) {
 function mutateConcept(workspace, body) {
   const actions = new Set(['create', 'update', 'delete']);
   if (!actions.has(body.action)) fail('AGENT_MUTATION_INVALID', 'concept action 必须是 create、update 或 delete');
-  const fields = body.action === 'create' ? ['id', 'label', 'description', 'aliases', 'tags', 'customData']
-    : body.action === 'update' ? ['id', 'label', 'description', 'aliases', 'tags', 'customData'] : ['id'];
+  const fields = body.action === 'create' ? ['id', 'label', 'description', 'aliases', 'tagIds', 'customData']
+    : body.action === 'update' ? ['id', 'label', 'description', 'aliases', 'tagIds', 'customData'] : ['id'];
   allowed(body, fields); assertRevision(workspace, body, 'definitions');
   const id = requiredString(body, 'id');
   try { assertSemanticId(id, '概念 ID '); } catch (error) { fail('INVALID_SEMANTIC_ID', error.message); }
@@ -67,17 +67,17 @@ function mutateConcept(workspace, body) {
     if (existing) fail('DUPLICATE_ID', `概念已存在：${id}`);
     const node = { id, label: requiredString(body, 'label'), description: requiredString(body, 'description'), agentLocked: false };
     if (has(body, 'aliases')) node.aliases = stringArray(body, 'aliases');
-    if (has(body, 'tags')) node.tags = stringArray(body, 'tags');
+    if (has(body, 'tagIds')) node.tagIds = stringArray(body, 'tagIds');
     if (has(body, 'customData') && customData(body, 'customData')) node.customData = customData(body, 'customData');
     workspace.definitions.nodes.push(node);
   } else {
     if (!existing) fail('NODE_NOT_FOUND', `概念不存在：${id}`);
     if (existing.agentLocked) fail('CONCEPT_AGENT_LOCKED', `概念 ${id} 已被用户冻结，Agent 不能修改或删除`);
     if (body.action === 'update') {
-      const changed = ['label', 'description', 'aliases', 'tags', 'customData'].filter(key => has(body, key));
+      const changed = ['label', 'description', 'aliases', 'tagIds', 'customData'].filter(key => has(body, key));
       if (!changed.length) fail('AGENT_MUTATION_INVALID', 'concept update 至少需要一个可编辑字段');
       for (const key of changed) {
-        if (['aliases', 'tags'].includes(key)) existing[key] = stringArray(body, key);
+        if (['aliases', 'tagIds'].includes(key)) existing[key] = stringArray(body, key);
         else if (key === 'customData') { const value = customData(body, key); if (value) existing[key] = value; else delete existing[key]; }
         else existing[key] = requiredString(body, key);
       }
@@ -89,11 +89,11 @@ function mutateConcept(workspace, body) {
       if (blockers.length) fail('CONCEPT_REFERENCED', `概念 ${id} 仍被规则、视图或组合引用；请先清理这些引用`, { references: blockers });
       const companionMechanics = [];
       for (const mechanic of workspace.mechanics) if (mechanic.focusNodeIds.includes(id) || has(mechanic.positions, id)) {
-        mechanic.focusNodeIds = mechanic.focusNodeIds.filter(nodeId => nodeId !== id); delete mechanic.positions[id]; companionMechanics.push(mechanic);
+        mechanic.focusNodeIds = mechanic.focusNodeIds.filter(nodeId => nodeId !== id); delete mechanic.positions[id]; delete mechanic.nodeColors?.[id]; delete mechanic.nodeStyles?.[id]; companionMechanics.push(mechanic);
       }
       const companionViews = [];
       for (const view of workspace.views) if (has(view.positions, id) || view.collapsedNodeIds.includes(id)) {
-        delete view.positions[id]; view.collapsedNodeIds = view.collapsedNodeIds.filter(nodeId => nodeId !== id); companionViews.push(view);
+        delete view.positions[id]; delete view.nodeColors?.[id]; delete view.nodeStyles?.[id]; view.collapsedNodeIds = view.collapsedNodeIds.filter(nodeId => nodeId !== id); companionViews.push(view);
       }
       workspace.definitions.nodes = workspace.definitions.nodes.filter(node => node.id !== id);
       delete workspace.definitions.positions[id];

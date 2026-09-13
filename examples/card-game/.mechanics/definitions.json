@@ -1,7 +1,8 @@
 {
-  "schemaVersion": 6,
+  "schemaVersion": 7,
   "kind": "definitions",
   "workspaceId": "sample-card-game",
+  "tagDefinitions": [],
   "nodes": [
     {
       "id": "turn-start",

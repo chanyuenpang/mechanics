@@ -40,7 +40,7 @@ test('联合排版引擎失败仍释放资源，并把原始错误传出', async
 
 test('空图与带自环的独立节点保留画布专用自环合同', async () => {
   const empty = await computeGraphTask({ kind: 'layout', payload: { graph: { nodes: [], edges: [] }, positions: {} } }, { ELK });
-  assert.deepEqual(empty, { positions: {}, routes: [] });
+  assert.deepEqual(empty, { positions: {}, routes: [], warnings: [] });
   const graph = { nodes: [{ id: 'a' }], edges: [{ id: 'loop', source: 'a', target: 'a' }] };
   const result = await computeGraphTask({ kind: 'layout', payload: { graph, positions: { a: { x: 20, y: 40 } } } }, { ELK });
   assert.deepEqual(result.positions, { a: { x: 20, y: 40 } });

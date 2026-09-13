@@ -3,6 +3,7 @@ import { resolve, relative, isAbsolute, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { assertDocument, validateWorkspace, ContractError } from '../domain/validate.mjs';
 import { resolvePresentationReferences } from '../domain/presentation.mjs';
+import { compatibilityWorkspace } from './compatibility.mjs';
 import { projectContext, projectRootFromWorkspace } from './project-context.mjs';
 
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -10,13 +11,15 @@ const semanticHash = value => createHash('sha256').update(JSON.stringify(value))
 
 export function workspaceResourceRevisions(workspace) {
   const nodes = [...workspace.definitions.nodes].sort((a, b) => a.id.localeCompare(b.id));
+  const tagDefinitions = [...(workspace.definitions.tagDefinitions ?? [])].sort((a, b) => a.id.localeCompare(b.id));
   const mechanics = Object.fromEntries([...workspace.mechanics]
     .sort((a, b) => a.id.localeCompare(b.id))
     .map(mechanic => [mechanic.id, semanticHash({
       focusNodeIds: [...mechanic.focusNodeIds].sort(),
       pinnedRuleIds: [...mechanic.pinnedRuleIds].sort(),
+      ...(mechanic.ruleSelection !== undefined ? { ruleSelection: mechanic.ruleSelection } : {}),
     })]));
-  return { definitions: semanticHash({ nodes }), rules: semanticHash({ rules: workspace.rules.rules }), mechanics };
+  return { definitions: semanticHash({ nodes, tagDefinitions }), rules: semanticHash({ rules: workspace.rules.rules }), mechanics };
 }
 export function assertRelativeFile(file, extensions = ['.json']) {
   if (typeof file !== 'string' || file.length > 512 || !extensions.some(extension => file.endsWith(extension)) || isAbsolute(file)
@@ -102,7 +105,7 @@ export async function discover(root) {
   return { mechanicPaths: mechanicPaths.sort(), viewPaths: viewPaths.sort(), directories: directories.sort() };
 }
 // override 只供显式迁移验证候选配置使用，HTTP 不开放此参数。
-export async function readWorkspace(workspaceRoot, { context = null } = {}) {
+export async function readWorkspace(workspaceRoot, { context = null, isolateResources = false } = {}) {
   if (!workspaceRoot) throw new ContractError('WORKSPACE_REQUIRED', '必须指定或定位工作区目录');
   const root = await realpath(resolve(workspaceRoot));
   const snapshots = new Map(), physicalFiles = new Set();
@@ -112,31 +115,77 @@ export async function readWorkspace(workspaceRoot, { context = null } = {}) {
     if (physicalFiles.has(identity)) throw new ContractError('DUPLICATE_FILE', '同一文件被重复引用：' + file);
     physicalFiles.add(identity); snapshots.set(file, raw); return document;
   }
-  const manifest = await read('workspace.json');
-  if (manifest.kind === 'workspace' && manifest.schemaVersion !== 11) {
-    throw new ContractError('WORKSPACE_VERSION_UNSUPPORTED', '只支持 Mechanics 工作区 v11；当前文件为 v' + String(manifest.schemaVersion) + '。');
+  const rawManifest = await read('workspace.json');
+  const rawDefinitions = await read(rawManifest.definitions);
+  let rawRules = null;
+  if (typeof rawManifest.rules === 'string') {
+    try { rawRules = await read(rawManifest.rules); }
+    catch (error) {
+      // v10 及更早版本没有独立规则库；其他版本缺少声明的核心文件仍应显式失败。
+      if (!(rawManifest.schemaVersion < 11 && error.code === 'ENOENT')) throw error;
+    }
   }
-  assertDocument(manifest, 'workspace', 'workspace.json');
+  const { mechanicPaths, viewPaths, directories } = await discover(root);
+  const rawMechanics = [], rawViews = [];
+  for (const file of mechanicPaths) rawMechanics.push({ document: await read(file), path: file });
+  for (const file of viewPaths) rawViews.push({ document: await read(file), path: file });
+  const compatible = compatibilityWorkspace({ manifest: rawManifest, definitions: rawDefinitions, rawRules, rawMechanics, rawViews });
+  const { manifest, definitions, rules } = compatible;
   context ??= await projectContext(await projectRootFromWorkspace(root), { manifest, createExportRoot: false,
     allowMissingExport: true, allowUnavailableExport: true });
   if (context.workspaceRoot !== root && (process.platform !== 'win32' || context.workspaceRoot.toLowerCase() !== root.toLowerCase())) {
     throw new ContractError('PROJECT_CONTEXT_MISMATCH', '工作区不属于当前项目上下文：' + root);
   }
-  const definitions = await read(manifest.definitions);
-  const rules = await read(manifest.rules);
-  const { mechanicPaths, viewPaths, directories } = await discover(root);
-  const mechanics = [], views = [];
-  for (const [paths, documents, kind] of [[mechanicPaths, mechanics, 'mechanic'], [viewPaths, views, 'view']]) {
-    for (const file of paths) { const document = await read(file); assertDocument(document, kind, file); documents.push(document); }
+  // 基础资料是项目的唯一核心合同；机制图和视图只是引用这些事实的阅读、编辑资源。
+  // 兼容解码完成后仍以当前跨文件规则验证核心拓扑。
+  validateWorkspace({ manifest, definitions, rules, mechanics: [], views: [], files: [] }, { validateResourceReferences: false });
+  const mechanics = [], views = [], mechanicFiles = [], viewFiles = [];
+  const resourceDiagnostics = [];
+  const resourceManifest = { ...manifest, compositions: [] };
+  delete resourceManifest.exportSelections;
+  delete resourceManifest.lastView;
+  const validateMechanic = (document, file) => validateWorkspace({ manifest: resourceManifest, definitions, rules,
+    mechanics: [document], views: [], files: [{ kind: 'mechanic', id: document.id, path: file }] });
+  for (const item of compatible.mechanics) {
+    const { document, path: file } = item;
+    try { assertDocument(document, 'mechanic', file); validateMechanic(document, file); mechanics.push(document); mechanicFiles.push(file); }
+    catch (error) {
+      if (!isolateResources) throw error;
+      resourceDiagnostics.push({ kind: 'mechanic', path: file, code: error.code ?? 'RESOURCE_INVALID', message: error.message });
+    }
+  }
+  for (const item of compatible.views) {
+    const { document, path: file } = item;
+    try {
+      assertDocument(document, 'view', file);
+      validateWorkspace({ manifest: resourceManifest, definitions, rules, mechanics, views: [...views, document], files: [
+        ...mechanics.map((item, index) => ({ kind: 'mechanic', id: item.id, path: mechanicFiles[index] })),
+        ...views.map((item, index) => ({ kind: 'view', id: item.id, path: viewFiles[index] })),
+        { kind: 'view', id: document.id, path: file }
+      ] });
+      views.push(document); viewFiles.push(file);
+    } catch (error) {
+      if (!isolateResources) throw error;
+      resourceDiagnostics.push({ kind: 'view', path: file, code: error.code ?? 'RESOURCE_INVALID', message: error.message });
+    }
   }
   const files = [{ kind: 'workspace', id: manifest.id, path: 'workspace.json' },
     { kind: 'definitions', path: manifest.definitions },
     { kind: 'rules', path: manifest.rules },
-    ...mechanics.map((graph, index) => ({ kind: 'mechanic', id: graph.id, path: mechanicPaths[index] })),
-    ...views.map((view, index) => ({ kind: 'view', id: view.id, path: viewPaths[index] }))];
+    ...mechanics.map((graph, index) => ({ kind: 'mechanic', id: graph.id, path: mechanicFiles[index] })),
+    ...views.map((view, index) => ({ kind: 'view', id: view.id, path: viewFiles[index] }))];
   // 先严格验证所有会改变领域模型的事实，再解析不拥有存在性事实的展示状态。
   // 解析只产生内存快照，项目打开不会因此悄悄改写用户文件。
-  const validated = validateWorkspace({ manifest, definitions, rules, mechanics, views, files });
+  const healthyMechanicIds = new Set(mechanics.map(item => item.id));
+  const healthyViewIds = new Set(views.map(item => item.id));
+  const presentationManifest = structuredClone(manifest);
+  if (isolateResources) {
+    presentationManifest.compositions = manifest.compositions.filter(view => view.graphIds.every(id => healthyMechanicIds.has(id)));
+    if (manifest.exportSelections !== undefined) presentationManifest.exportSelections = manifest.exportSelections.filter(selection => selection.kind === 'folder'
+      || (selection.kind === 'mechanic' ? healthyMechanicIds.has(selection.mechanicId) : healthyViewIds.has(selection.viewId)));
+    if (manifest.lastView?.viewId && !healthyViewIds.has(manifest.lastView.viewId)) delete presentationManifest.lastView;
+  }
+  const validated = validateWorkspace({ manifest: presentationManifest, definitions, rules, mechanics, views, files });
   const { workspace, diagnostics: presentationDiagnostics } = resolvePresentationReferences({ ...validated, files });
   const hash = createHash('sha256');
   for (const [file, raw] of [...snapshots].sort(([a], [b]) => a.localeCompare(b))) hash.update(JSON.stringify([file, raw]));
@@ -144,5 +193,7 @@ export async function readWorkspace(workspaceRoot, { context = null } = {}) {
   hash.update(JSON.stringify(directories));
   return { ...workspace, projectRoot: context.projectRoot, workspaceRoot: root, agentExportRoot: context.exportRoot,
     agentExportPath: context.agentExportPath, agentExportStatus: context.exportStatus, agentExportError: context.exportError,
-    files, directories, presentationDiagnostics, revision: hash.digest('hex'), resourceRevisions: workspaceResourceRevisions(workspace) };
+    files, directories, presentationDiagnostics: [...compatible.compatibilityDiagnostics, ...presentationDiagnostics], resourceDiagnostics, compatibilityMode: compatible.compatibilityMode,
+    workspaceState: resourceDiagnostics.length ? 'degraded' : 'ready',
+    revision: hash.digest('hex'), resourceRevisions: workspaceResourceRevisions(workspace) };
 }

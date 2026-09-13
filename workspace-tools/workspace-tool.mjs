@@ -21,13 +21,14 @@ async function snapshot() { const manifest = await parse(join(workspace, 'worksp
   return { manifest, definitions, rules, mechanics, folders: await readFolders(mechanicsRoot), nodes, edges, revision, nodeMap: new Map(nodes.map(node => [node.id, node])) }; }
 const operator = edge => edge.relation === 'specializes' ? 'is-a>' : edge.sign === 1 ? '+>' : edge.sign === -1 ? '->' : '?>';
 const guide = () => ({
-  contractVersion: 3,
+  contractVersion: 4,
   commands: ['scopes', 'search', 'node', 'impact', 'draft open', 'draft validate', 'draft save'],
   workflow: ['scopes', 'draft open（目标不存在时携带名称与范围）', '编辑 definitions.json、rules.json 与 mechanic.json 三份草稿', 'draft validate', 'draft save'],
-  conceptTemplate: { id: 'stable-concept-id', label: '概念名称', description: '概念定义。', agentLocked: false },
+  conceptTemplate: { id: 'stable-concept-id', label: '概念名称', description: '概念定义。', tagIds: ['existing-tag-id'], agentLocked: false },
   influenceRuleTemplate: { id: 'source-concept-2-target-concept', source: 'source-concept', target: 'target-concept', relation: 'influence', sign: 1, inheritance: { mode: 'none' }, ruleText: '源概念如何影响目标概念。' },
   specializesRuleTemplate: { id: 'subtype-concept-2-supertype-concept', source: 'subtype-concept', target: 'supertype-concept', relation: 'specializes' },
-  constraints: ['所有持久化 ID 使用英文小写 kebab-case', '规则只存于 rules.json，ID 固定为 source-2-target', '同一有向端点对在全工作区只能有一条规则', 'mechanic 只保存 focusNodeIds 与 pinnedRuleIds；引用任一端点会投影该规则', '限定词只属于 influence 规则端点', 'node 的 upstream 只表示发现上游的遍历方向；paths 中的 nodes、steps、chain 与 effect 始终按规则声明的 source → target 方向返回', '草稿不允许 positions、projectionPositions 或 routeCache', 'save 前必须 validate；save 不执行自动排版或文档导出'],
+  mechanicSelection: { optionalField: 'ruleSelection', allowedValue: 'explicit', whenOmitted: '按 focusNodeIds 展开一跳规则并合入 pinnedRuleIds', whenExplicit: '节点保留 focusNodeIds 与固定规则端点；只投影 pinnedRuleIds 的规则，不展开相邻规则' },
+  constraints: ['概念标签只引用 definitions.tagDefinitions 中已存在的 tagIds；显示名和颜色只在标签表维护', '所有持久化 ID 使用英文小写 kebab-case', '规则只存于 rules.json，ID 固定为 source-2-target', '同一有向端点对在全工作区只能有一条规则', 'mechanic 用 focusNodeIds 与 pinnedRuleIds 选择投影；省略 ruleSelection 时展开焦点邻接规则，explicit 时只投影固定规则与焦点节点', '限定词只属于 influence 规则端点', 'node 的 upstream 只表示发现上游的遍历方向；paths 中的 nodes、steps、chain 与 effect 始终按规则声明的 source → target 方向返回', '草稿不允许 positions、projectionPositions 或 routeCache', 'save 前必须 validate；save 不执行自动排版或文档导出'],
 });
 const semanticId = value => typeof value === 'string' && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u.test(value);
 const text = (value, field) => {
@@ -90,18 +91,28 @@ const inheritance = (value, location) => {
   if (!Number.isInteger(value.maxSpecializationHops) || value.maxSpecializationHops < 1 || value.maxSpecializationHops > 8) fail('DRAFT_VALIDATION_FAILED', `${location}.maxSpecializationHops 必须是 1–8 的整数`);
 };
 function validateDefinitions(document, workspaceId) {
-  only(document, ['schemaVersion', 'kind', 'workspaceId', 'nodes', 'positions'], ['schemaVersion', 'kind', 'workspaceId', 'nodes', 'positions'], 'definitions');
-  if (document.schemaVersion !== 6 || document.kind !== 'definitions' || document.workspaceId !== workspaceId) fail('DRAFT_VALIDATION_FAILED', 'definitions 的版本、类型或 workspaceId 无效');
+  only(document, ['schemaVersion', 'kind', 'workspaceId', 'nodes', 'positions'], ['schemaVersion', 'kind', 'workspaceId', 'tagDefinitions', 'nodes', 'positions'], 'definitions');
+  if (document.schemaVersion !== 7 || document.kind !== 'definitions' || document.workspaceId !== workspaceId) fail('DRAFT_VALIDATION_FAILED', 'definitions 的版本、类型或 workspaceId 无效');
   noDraftGeometry(document, 'definitions');
+  const normalizedTag = value => String(value).normalize('NFKC').trim().replace(/\s+/gu, ' ').toLocaleLowerCase();
+  const tags = new Set();
+  array(document.tagDefinitions ?? [], 'definitions.tagDefinitions').forEach((tag, index) => {
+    only(tag, ['id', 'displayName', 'color'], ['id', 'displayName', 'color'], `definitions.tagDefinitions[${index}]`);
+    if (typeof tag.id !== 'string' || !tag.id.trim() || tag.id.length > 160 || !normalizedTag(tag.id) || tags.has(normalizedTag(tag.id))) fail('DRAFT_VALIDATION_FAILED', `definitions.tagDefinitions[${index}].id 无效或重复`);
+    if (typeof tag.displayName !== 'string' || !tag.displayName.trim() || tag.displayName.length > 8000) fail('DRAFT_VALIDATION_FAILED', `definitions.tagDefinitions[${index}].displayName 无效`);
+    if (typeof tag.color !== 'string' || !/^#[0-9a-f]{6}$/iu.test(tag.color)) fail('DRAFT_VALIDATION_FAILED', `definitions.tagDefinitions[${index}].color 必须是 #RRGGBB`);
+    tags.add(normalizedTag(tag.id));
+  });
   const nodes = new Map(), aliases = new Set();
   array(document.nodes, 'definitions.nodes').forEach((node, index) => {
-    only(node, ['id', 'label', 'description', 'agentLocked'], ['id', 'label', 'description', 'agentLocked', 'customData', 'tags', 'aliases'], `definitions.nodes[${index}]`);
+    only(node, ['id', 'label', 'description', 'agentLocked'], ['id', 'label', 'description', 'agentLocked', 'customData', 'tagIds', 'aliases'], `definitions.nodes[${index}]`);
     draftId(node.id, `definitions.nodes[${index}].id`); draftText(node.label, `definitions.nodes[${index}].label`); draftText(node.description, `definitions.nodes[${index}].description`);
     if (typeof node.agentLocked !== 'boolean') fail('DRAFT_VALIDATION_FAILED', `definitions.nodes[${index}].agentLocked 必须是布尔值`);
     if (node.customData !== undefined && (typeof node.customData !== 'string' || node.customData.length > 16000)) fail('DRAFT_VALIDATION_FAILED', `definitions.nodes[${index}].customData 无效`);
-    for (const field of ['tags', 'aliases']) if (node[field] !== undefined) {
+    for (const field of ['tagIds', 'aliases']) if (node[field] !== undefined) {
       array(node[field], `definitions.nodes[${index}].${field}`); if (new Set(node[field]).size !== node[field].length || node[field].some(item => typeof item !== 'string' || !item.trim())) fail('DRAFT_VALIDATION_FAILED', `definitions.nodes[${index}].${field} 必须是不重复的非空文本`);
     }
+    for (const tagId of node.tagIds ?? []) if (!tags.has(normalizedTag(tagId))) fail('TAG_REFERENCE_NOT_FOUND', `definitions.nodes[${index}] 引用了不存在的标签：${tagId}`);
     if (nodes.has(node.id)) fail('DRAFT_VALIDATION_FAILED', `definitions.nodes 的 ID 重复：${node.id}`); nodes.set(node.id, node);
   });
   const ids = new Set([...nodes.keys()].map(value => value.toLowerCase()));
@@ -132,7 +143,8 @@ function validateRules(document, workspaceId, nodes) {
   for (const id of outgoing.keys()) visit(id);
 }
 function validateMechanic(document, workspaceId, nodes, rules) {
-  only(document, ['schemaVersion', 'kind', 'workspaceId', 'id', 'name', 'scope', 'focusNodeIds', 'pinnedRuleIds', 'positions'], ['schemaVersion', 'kind', 'workspaceId', 'id', 'name', 'scope', 'focusNodeIds', 'pinnedRuleIds', 'positions'], 'mechanic');
+  only(document, ['schemaVersion', 'kind', 'workspaceId', 'id', 'name', 'scope', 'focusNodeIds', 'pinnedRuleIds', 'positions'], ['schemaVersion', 'kind', 'workspaceId', 'id', 'name', 'scope', 'focusNodeIds', 'pinnedRuleIds', 'positions', 'ruleSelection'], 'mechanic');
+  if (document.ruleSelection !== undefined && document.ruleSelection !== 'explicit') fail('DRAFT_VALIDATION_FAILED', 'mechanic.ruleSelection 只允许 explicit，省略时按焦点邻接展开');
   if (document.schemaVersion !== 7 || document.kind !== 'mechanic' || document.workspaceId !== workspaceId) fail('DRAFT_VALIDATION_FAILED', 'mechanic 的版本、类型或 workspaceId 无效');
   draftId(document.id, 'mechanic.id'); draftText(document.name, 'mechanic.name'); draftText(document.scope, 'mechanic.scope'); noDraftGeometry(document, 'mechanic');
   const focused = uniqueIds(array(document.focusNodeIds, 'mechanic.focusNodeIds'), 'mechanic.focusNodeIds');
@@ -193,7 +205,8 @@ async function saveDraft(id, validateOnly = false) { const folder = join(drafts,
     if (validateOnly) return { valid: true, draftId: id, revision: data.revision };
     const definitions = structuredClone(draftDefinitions.value), rules = structuredClone(draftRules.value), document = structuredClone(draftMechanic.value);
     definitions.positions = retainedPositions(data.definitions.value.positions, new Set(definitions.nodes.map(node => node.id)));
-    const projectedNodeIds = new Set([...document.focusNodeIds, ...rules.rules.filter(rule => document.focusNodeIds.includes(rule.source) || document.focusNodeIds.includes(rule.target) || document.pinnedRuleIds.includes(rule.id)).flatMap(rule => [rule.source, rule.target])]);
+    const projectedNodeIds = new Set([...document.focusNodeIds, ...rules.rules.filter(rule => document.pinnedRuleIds.includes(rule.id)
+      || (document.ruleSelection !== 'explicit' && (document.focusNodeIds.includes(rule.source) || document.focusNodeIds.includes(rule.target)))).flatMap(rule => [rule.source, rule.target])]);
     document.positions = retainedPositions(mechanic?.value.positions, projectedNodeIds);
     const targetMechanicPath = meta.targetFile;
     const temporaryDefinitions = data.definitions.path + '.' + randomUUID() + '.tmp', temporaryRules = data.rules.path + '.' + randomUUID() + '.tmp', temporaryMechanic = targetMechanicPath + '.' + randomUUID() + '.tmp';
@@ -228,7 +241,7 @@ async function saveDraft(id, validateOnly = false) { const folder = join(drafts,
   }); }
 async function main() { const { positionals, options } = args(process.argv.slice(2)), [command, action] = positionals; if (!command) fail('TOOL_INVALID', '需要命令'); const data = ['scopes','search','node','impact'].includes(command) ? await snapshot() : null;
   if (command === 'guide') return guide();
-  if (command === 'scopes') return { workspaceId: data.manifest.value.id, revision: data.revision, folders: data.folders, mechanics: data.mechanics.map(item => ({ id: item.value.id, name: item.value.name, file: relative(root, item.path) })) };
+  if (command === 'scopes') return { workspaceId: data.manifest.value.id, revision: data.revision, definitionsRevision: data.definitions.revision, tags: data.definitions.value.tagDefinitions ?? [], folders: data.folders, mechanics: data.mechanics.map(item => ({ id: item.value.id, name: item.value.name, file: relative(root, item.path) })) };
   if (command === 'search') { if (options.query) { const r = resolveNode(data.nodes, options.query); return r.status === 'resolved' ? { revision: data.revision, concept: r.node, matchedBy: r.matchedBy } : { revision: data.revision, resolution: r }; } if (!options.from || !options.to) fail('TOOL_INVALID', 'search 需要 --query 或 --from --to'); const a = resolveNode(data.nodes, options.from), b = resolveNode(data.nodes, options.to); if (a.status !== 'resolved' || b.status !== 'resolved') return { revision: data.revision, from: a, to: b, rules: null }; const direct = (x,y) => data.edges.filter(edge => edge.source === x.id && edge.target === y.id).map(edge => ({ id: edge.id, operator: operator(edge), ruleText: edge.ruleText ?? '', origin: edge.origin })); return { revision: data.revision, from: a.node, to: b.node, rules: { forward: direct(a.node,b.node), reverse: direct(b.node,a.node) } }; }
   if (command === 'impact') { if (!options.from || !options.to || !data.nodeMap.has(options.from) || !data.nodeMap.has(options.to)) fail('NODE_NOT_FOUND', 'impact 需要已有 --from 与 --to'); const result = paths(data.edges, options.from, options.to, Number(options['max-depth'] ?? 16)).map(path => compact(path, data.nodeMap)); return { revision: data.revision, counts: { returned: result.length }, paths: result }; }
   if (command === 'node') {

@@ -26,7 +26,7 @@ async function fixture(t) {
 test('机制文档共享单一词典，且词典只保留已导出规则涉及的概念', async () => {
   const workspace = await readWorkspace(exampleWorkspace);
   workspace.definitions.nodes.find(node => node.id === 'health').aliases = ['生命', 'hit points'];
-  workspace.definitions.nodes.push({ id: 'unused', label: '未引用概念', description: '保留全局定义', aliases: [], tags: [], agentLocked: false });
+  workspace.definitions.nodes.push({ id: 'unused', label: '未引用概念', description: '保留全局定义', aliases: [], tagIds: [], agentLocked: false });
   const mechanics = workspace.files.filter(file => file.kind === 'mechanic');
   mechanics[0].path = '机制/基础/first.mechanic.json';
   mechanics[1].path = '机制/基础/second.mechanic.json';

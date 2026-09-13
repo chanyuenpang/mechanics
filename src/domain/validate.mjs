@@ -52,7 +52,7 @@ function validateRuleQualifiers(qualifiers, nodes, location) {
   }
 }
 
-export function validateWorkspace({ manifest, definitions, rules, mechanics, views = [], files = [] }) {
+export function validateWorkspace({ manifest, definitions, rules, mechanics, views = [], files = [] }, { validateResourceReferences = true } = {}) {
   assertDocument(manifest, 'workspace', 'workspace.json');
   assertDocument(definitions, 'definitions', manifest.definitions);
   assertDocument(rules, 'rules', manifest.rules);
@@ -69,6 +69,15 @@ export function validateWorkspace({ manifest, definitions, rules, mechanics, vie
     if (problem) throw new ContractError('INVALID_SEMANTIC_ID', `持久化领域 ID ${problem}：${id}`);
   }
   const nodes = unique(definitions.nodes, '节点定义图');
+  const tagIds = new Set();
+  for (const tag of definitions.tagDefinitions ?? []) {
+    const normalized = normalizeSearchTerm(tag.id);
+    if (tagIds.has(normalized)) throw new ContractError('DUPLICATE_TAG_ID', `标签 ID 归一化后重复：${tag.id}`);
+    tagIds.add(normalized);
+  }
+  for (const node of definitions.nodes) for (const tagId of node.tagIds ?? []) if (!tagIds.has(normalizeSearchTerm(tagId))) {
+    throw new ContractError('TAG_REFERENCE_NOT_FOUND', `概念 ${node.id} 引用了不存在的标签：${tagId}`);
+  }
   const canonicalIds = new Set(definitions.nodes.map(node => normalizeSearchTerm(node.id)));
   for (const node of definitions.nodes) {
     const aliases = node.aliases ?? [], normalized = aliases.map(normalizeSearchTerm);
@@ -97,12 +106,13 @@ export function validateWorkspace({ manifest, definitions, rules, mechanics, vie
   }
   unique(rules.rules, '规则库');
   assertSpecializes(rules.rules);
-  for (const graph of mechanics) {
+  if (validateResourceReferences) for (const graph of mechanics) {
     graph.focusNodeIds.forEach(id => requireReference(nodes, id, graph.id));
     graph.pinnedRuleIds.forEach(id => requireReference(new Set(rules.rules.map(rule => rule.id)), id, graph.id));
   }
   unique(manifest.compositions, '叠加组合');
   const viewIds = unique(views, '视图文件');
+  if (!validateResourceReferences) return { manifest, definitions, rules, mechanics, views };
   const exportSelections = manifest.exportSelections;
   if (exportSelections !== undefined) {
     const mechanismFolders = new Map(mechanics.map(graph => {

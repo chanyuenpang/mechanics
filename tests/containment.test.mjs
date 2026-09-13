@@ -8,8 +8,8 @@ const specializes = (source, target) => ({ id: source + '-2-' + target, source, 
 function workspace(edges) {
   const ids = ['base', 'specific', 'other'];
   return {
-    manifest: { schemaVersion: 11, kind: 'workspace', id: 'sample', name: '测试', definitions: 'definitions.json', rules: 'rules.json', agentExportPath: 'mechanics', compositions: [] },
-    definitions: { schemaVersion: 6, kind: 'definitions', workspaceId: 'sample', nodes: ids.map(id => ({ id, label: id, description: '测试', agentLocked: false })), positions: {} },
+    manifest: { schemaVersion: 12, kind: 'workspace', id: 'sample', name: '测试', definitions: 'definitions.json', rules: 'rules.json', agentExportPath: 'mechanics', compositions: [] },
+    definitions: { schemaVersion: 7, kind: 'definitions', workspaceId: 'sample', nodes: ids.map(id => ({ id, label: id, description: '测试', agentLocked: false })), tagDefinitions: [], positions: {} },
     rules: { schemaVersion: 1, kind: 'rules', workspaceId: 'sample', rules: edges },
     mechanics: [{ schemaVersion: 7, kind: 'mechanic', workspaceId: 'sample', id: 'rule', name: '机制', scope: '人工构造', focusNodeIds: ids, pinnedRuleIds: edges.map(edge => edge.id), positions: {} }],
     views: [],

@@ -61,6 +61,30 @@ test('视图查询独立匹配名称、ID、完整路径，当前与最近顺序
   assert.deepEqual(buildViewNavigation(workspace, { query: '世界' }).items.map(item => item.id), ['world']);
 });
 
+test('机制库与视图列表始终按侧栏显示名称排序，不受创建或最近打开顺序影响', () => {
+  const workspace = {
+    views: [view('late', '先创建'), view('early', '后创建')],
+    mechanics: [mechanic('late-mechanic', '先创建'), mechanic('early-mechanic', '后创建')],
+    files: [
+      file('view', 'late', 'views/zeta.view.json'), file('view', 'early', 'views/alpha.view.json'),
+      file('mechanic', 'late-mechanic', 'mechanics/任意/zeta.mechanic.json'), file('mechanic', 'early-mechanic', 'mechanics/任意/alpha.mechanic.json'),
+    ],
+  };
+  assert.deepEqual(buildViewNavigation(workspace).items.map(item => item.id), ['early', 'late']);
+  assert.deepEqual(treeMechanics(buildMechanicNavigation(workspace).tree).map(item => item.id), ['early-mechanic', 'late-mechanic']);
+});
+
+test('显示名称排序优先于技术文件名，同名才按文件路径稳定消歧', () => {
+  const workspace = {
+    views: [view('later', '20 回澜剑诀'), view('earlier', '03 剑式位视图'), view('same-a', '同名'), view('same-b', '同名')],
+    files: [
+      file('view', 'later', 'views/alpha.view.json'), file('view', 'earlier', 'views/zeta.view.json'),
+      file('view', 'same-a', 'views/a.view.json'), file('view', 'same-b', 'views/b.view.json'),
+    ],
+  };
+  assert.deepEqual(buildViewNavigation(workspace).items.map(item => item.id), ['earlier', 'later', 'same-a', 'same-b']);
+});
+
 test('机制空查询提供 current/recent 快捷项和压缩 mechanics 根的目录树，保留完整路径与 scope', () => {
   const workspace = {
     mechanics: [mechanic('root', '根机制', '全局'), mechanic('hand', '手牌', '战斗'), mechanic('enemy', '敌人', '关卡')],
@@ -72,7 +96,7 @@ test('机制空查询提供 current/recent 快捷项和压缩 mechanics 根的�
   };
   const result = buildMechanicNavigation(workspace, { currentId: 'hand', recentIds: ['enemy', 'root'] });
   assert.equal(result.mode, 'browse'); assert.equal(result.commonRoot, 'mechanics/');
-  assert.deepEqual(result.featured.map(item => item.id), ['enemy', 'hand', 'root']);
+  assert.deepEqual(result.featured.map(item => item.id), ['enemy', 'root', 'hand']);
   assert.equal(result.items.length, 0); assert.equal(result.tree[0].kind, 'directory');
   assert.equal(result.tree[0].name, 'combat'); assert.equal(result.tree[0].fullPath, 'mechanics/combat/');
   const rows = treeMechanics(result.tree);
@@ -121,7 +145,7 @@ test('100 视图和 200 机制投影完整、确定且视图与机制 query 互�
   assert.deepEqual(first, second);
   assert.equal(first.views.items.length, 100); assert.equal(first.mechanics.items.length, 200);
   assert.deepEqual(first.views.items.slice(0, 3).map(item => item.id), ['view-000', 'view-001', 'view-002']);
-  assert.deepEqual(first.mechanics.items.slice(0, 3).map(item => item.id), ['mechanic-000', 'mechanic-010', 'mechanic-020']);
+  assert.deepEqual(first.mechanics.items.slice(0, 3).map(item => item.id), ['mechanic-000', 'mechanic-001', 'mechanic-002']);
   const separated = buildResourceNavigation(workspace, { viewQuery: 'view-099', mechanicQuery: 'mechanic-001' });
   assert.deepEqual(separated.views.items.map(item => item.id), ['view-099']);
   assert.deepEqual(separated.mechanics.items.map(item => item.id), ['mechanic-001']);
