@@ -1644,10 +1644,10 @@ autosave = new ViewAutosave(write, body => api('/api/save', body), state => { vi
 async function applyBrowsingWorkspace(opened, { restoreSourceState }) {
   let candidate = prepareOpening(opened);
   if (workspace) rememberCamera();
-  workspace = opened; viewId = candidate.viewId; legacy = candidate.legacy;
+  workspace = opened;
   $('concept-docs').hidden = true; $('stage').hidden = false;
   cameras.clear(); implicitPositions.clear();
-  sidebarState.page = viewId !== null ? 'views' : 'mechanics'; sidebarState.detailViewId = null;
+  sidebarState.detailViewId = null;
   sidebarState.queries.views = ''; sidebarState.queries.mechanics = ''; sidebarState.folders.clear();
   if (restoreSourceState) {
     try {
@@ -1655,6 +1655,9 @@ async function applyBrowsingWorkspace(opened, { restoreSourceState }) {
       if (sidebarState.lastOpened) candidate = prepareOpening(opened, sidebarState.lastOpened);
     } catch (error) { console.warn('最近打开记录未恢复：', error); sidebarState.recentViews = []; sidebarState.recentMechanics = []; sidebarState.lastOpened = null; }
   }
+  // 最近记录可能把默认机制换成视图（或反向）；模式必须与最终候选快照一起切换。
+  viewId = candidate.viewId; legacy = candidate.legacy;
+  sidebarState.page = viewId !== null ? 'views' : 'mechanics';
   assignLayer(candidate.activeId); assignSnapshot(candidate.snapshot); graphHistory = null;
   rememberRecent(viewId !== null ? 'view' : 'mechanic', viewId ?? candidate.activeId);
   autosave.reset(); $('startup-help').hidden = true; $('error').hidden = true;

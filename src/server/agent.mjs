@@ -19,7 +19,9 @@ export async function runAgent(command, values) {
   if (format !== 'json') throw new Error('Agent 查询只支持 --format json');
   const request = { command };
   const numbers = { hops: 'hops', 'max-paths': 'maxPaths', 'max-depth': 'maxDepth', 'max-expansions': 'maxExpansions' };
-  for (const [key, value] of Object.entries(options)) request[numbers[key] ?? key] = numbers[key] ? (/^\d+$/.test(value) ? Number(value) : NaN) : value;
+  const flags = { 'include-inherited': 'includeInherited' };
+  for (const [key, value] of Object.entries(options)) request[numbers[key] ?? flags[key] ?? key] =
+    numbers[key] ? (/^\d+$/.test(value) ? Number(value) : NaN) : flags[key] ? value !== 'false' : value;
   validateQuery(request);
   if (command === 'guide' && connect === undefined) {
     if (project !== undefined) throw new Error('agent guide 不读取项目，请省略 --project');

@@ -47,6 +47,48 @@ export function enumerateImpactPaths({ edges, from, to, maxDepth = 16, maxPaths 
     expandedStates, truncationReasons: [truncatedByPaths ? 'maxPaths' : null, depthLimited ? 'maxDepth' : null, expansionLimited ? 'maxExpansions' : null].filter(Boolean) };
 }
 
+// 分类透传：从子概念沿 specializes 上溯，列出每个上位概念，并附上上位概念自身的声明边。
+// 这只是发现与上下文——它不声称子概念取得了这些 influence，也不把分类边折算成影响。
+export function taxonomyContext({ edges, from, hops = 1, maxAncestors = 64, maxDeclarations = 200 }) {
+  const parents = new Map();
+  for (const edge of edges) if (edge.relation === 'specializes') {
+    if (!parents.has(edge.source)) parents.set(edge.source, []);
+    parents.get(edge.source).push(edge.target);
+  }
+  const influence = edges.filter(edge => edge.relation === 'influence');
+  const ancestors = [], visited = new Set([from]);
+  let frontier = [{ id: from, path: [from] }];
+  while (frontier.length && ancestors.length < maxAncestors) {
+    const next = [];
+    for (const item of [...frontier].sort((a, b) => a.id.localeCompare(b.id))) {
+      if (item.path.length - 1 >= hops) continue;
+      for (const parent of [...(parents.get(item.id) ?? [])].sort()) {
+        if (visited.has(parent)) continue;
+        visited.add(parent);
+        const path = [...item.path, parent];
+        ancestors.push({ id: parent, hops: path.length - 1, isaPath: path });
+        next.push({ id: parent, path });
+      }
+    }
+    frontier = next;
+  }
+  const declarations = [];
+  for (const ancestor of ancestors) {
+    for (const edge of influence) {
+      if (edge.source !== ancestor.id && edge.target !== ancestor.id) continue;
+      if (declarations.length >= maxDeclarations) break;
+      declarations.push({ ancestorId: ancestor.id, hops: ancestor.hops, isaPath: ancestor.isaPath, edgeId: edge.id,
+        source: edge.source, target: edge.target, operator: operatorFor(edge), sign: edge.sign ?? null,
+        ruleText: edge.ruleText ?? '',
+        ...(edge.sourceQualifiers?.length ? { sourceQualifiers: structuredClone(edge.sourceQualifiers) } : {}),
+        ...(edge.targetQualifiers?.length ? { targetQualifiers: structuredClone(edge.targetQualifiers) } : {}) });
+    }
+  }
+  return { from, ancestors, declarations,
+    interpretation: 'classificationContextOnly',
+    note: '分类透传只列出上位概念及其声明边，供发现与上下文使用；子概念并不因此取得这些影响，也不参与正负号结论。' };
+}
+
 export function enumerateNodePaths({ edges, center, direction, hops = 1, maxPaths = 50, maxExpansions = 10000 }) {
   const reverse = direction === 'upstream', adjacent = new Map();
   for (const edge of sorted(edges)) {

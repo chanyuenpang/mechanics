@@ -1,16 +1,27 @@
 import { QUERY_API_VERSION, SEMANTICS_VERSION, readingContract, queryGuide } from './query-contract.mjs';
 import { normalizeSearchTerm } from './identity.mjs';
-import { compactPath, enumerateImpactPaths, enumerateNodePaths } from './query-paths.mjs';
+import { compactPath, enumerateImpactPaths, enumerateNodePaths, taxonomyContext } from './query-paths.mjs';
 
 const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
 const limits = { hops: [1, 64], maxPaths: [50, 500], maxDepth: [16, 64], maxExpansions: [10000, 100000] };
-const fields = { guide: [], scopes: ['revision'], search: ['revision', 'query', 'from', 'to'], node: ['revision', 'id', 'direction', 'hops', 'maxPaths', 'maxExpansions'], impact: ['revision', 'from', 'to', 'maxPaths', 'maxDepth', 'maxExpansions'] };
+const fields = { guide: [], scopes: ['revision'], search: ['revision', 'query', 'from', 'to'], node: ['revision', 'id', 'direction', 'hops', 'maxPaths', 'maxExpansions', 'includeInherited'], impact: ['revision', 'from', 'to', 'maxPaths', 'maxDepth', 'maxExpansions', 'includeInherited'] };
+
+// 配对绑定模板由工具拥有，不是可执行的战斗规则；它只说明"上限概念裁剪资源概念的留存值"。
+// 具体数值、来源与例外仍由作者写在规则文字或内容配置里。
+const RETENTION_TEMPLATE = {
+  id: 'retention-pair',
+  ruleText: '上限概念的持有者在自身回合开始时，按上限概念当前层数裁剪资源概念的留存值，随后上限概念减少 1 层；上限为零时资源完整清零。',
+};
 const byId = (a, b) => String(a.id).localeCompare(String(b.id));
 
 export function validateQuery(request) {
   if (!request || typeof request !== 'object' || Array.isArray(request) || !Object.hasOwn(fields, request.command)) fail('QUERY_INVALID', '需要 guide、scopes、search、node 或 impact 查询');
   for (const key of Object.keys(request)) {
     if (key !== 'command' && !fields[request.command].includes(key)) fail('QUERY_INVALID', '不支持查询参数：' + key);
+    if (key === 'includeInherited') {
+      if (typeof request[key] !== 'boolean' && request[key] !== 'true' && request[key] !== 'false') fail('QUERY_INVALID', 'includeInherited 必须是布尔值');
+      continue;
+    }
     if (Object.hasOwn(limits, key)) { if (!Number.isInteger(request[key]) || request[key] < 1 || request[key] > limits[key][1]) fail('QUERY_INVALID', `${key} 超出整数范围`); }
     else if (key !== 'command' && (typeof request[key] !== 'string' || !request[key].trim())) fail('QUERY_INVALID', `${key} 必须是非空字符串`);
   }
@@ -47,6 +58,71 @@ function resolveConcept(nodes, key) {
 }
 
 const directRuleDTO = (edge, nodeMap) => ({ id: edge.id, source: refDTO(nodeMap.get(edge.source)), target: refDTO(nodeMap.get(edge.target)), operator: edge.relation === 'specializes' ? 'is-a>' : edge.sign === 1 ? '+>' : edge.sign === -1 ? '->' : '?>', ...(edge.relation === 'influence' ? { ruleText: edge.ruleText ?? '' } : {}), ...(edge.sourceQualifiers?.length ? { sourceQualifiers: structuredClone(edge.sourceQualifiers) } : {}), ...(edge.targetQualifiers?.length ? { targetQualifiers: structuredClone(edge.targetQualifiers) } : {}), origin: edge.origin });
+// 显式请求继承时才计算派生边：它只由一等配对绑定生成，因此两端各自的 is-a 特化
+// 永远不会产生交叉配对。派生边不落盘、不级联，且与作者声明的同端点规则不并存。
+function derivedRetentionEdges(workspace, nodeMap) {
+  const saved = new Set(workspace.rules.rules.map(rule => `${rule.source}\u0000${rule.target}`));
+  const edges = [...retentionBindingEdges(workspace, nodeMap, saved), ...specializeEndpointEdges(workspace, saved)];
+  return edges.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+// inheritance.mode === 'specializeEndpoint' 的显式继承：只对声明的端点沿 is-a 向下替换，
+// 未声明的端点保持原样。同一后代若存在多条特化路径则判为歧义并显式失败。
+function specializeEndpointEdges(workspace, saved) {
+  const children = new Map();
+  for (const rule of workspace.rules.rules) if (rule.relation === 'specializes') {
+    if (!children.has(rule.target)) children.set(rule.target, new Set());
+    children.get(rule.target).add(rule.source);
+  }
+  const expand = (id, hops, ruleId) => {
+    const reached = new Map([[id, [id]]]);
+    let frontier = [id];
+    for (let hop = 0; hop < hops && frontier.length; hop++) {
+      const next = [];
+      for (const current of [...frontier].sort()) for (const child of [...(children.get(current) ?? [])].sort()) {
+        if (reached.has(child)) {
+          const existing = reached.get(child);
+          if (existing.length !== reached.get(current).length + 1) continue;
+          throw Object.assign(new Error(`规则 ${ruleId} 的特化路径存在歧义：${child} 可由多条等长路径到达`), { code: 'SPECIALIZATION_AMBIGUOUS' });
+        }
+        reached.set(child, [...reached.get(current), child]);
+        next.push(child);
+      }
+      frontier = next;
+    }
+    return reached;
+  };
+  const edges = [];
+  for (const rule of workspace.rules.rules) {
+    const policy = rule.inheritance;
+    if (rule.relation !== 'influence' || !policy || policy.mode !== 'specializeEndpoint') continue;
+    const sources = policy.endpoints.includes('source') ? expand(rule.source, policy.maxSpecializationHops, rule.id) : new Map([[rule.source, [rule.source]]]);
+    const targets = policy.endpoints.includes('target') ? expand(rule.target, policy.maxSpecializationHops, rule.id) : new Map([[rule.target, [rule.target]]]);
+    for (const [source, sourcePath] of sources) for (const [target, targetPath] of targets) {
+      if (source === rule.source && target === rule.target) continue;
+      if (saved.has(`${source}\u0000${target}`)) continue;
+      edges.push({ id: `inherit:${rule.id}:${source}:${target}`, source, target, relation: 'influence', sign: rule.sign,
+        ruleText: rule.ruleText ?? '', derived: true,
+        origin: { ruleId: rule.id, mode: policy.mode, maxSpecializationHops: policy.maxSpecializationHops },
+        specializationPath: { source: sourcePath, target: targetPath },
+        substitutedEndpoint: [...(source === rule.source ? [] : ['source']), ...(target === rule.target ? [] : ['target'])] });
+    }
+  }
+  return edges;
+}
+
+function retentionBindingEdges(workspace, nodeMap, saved) {
+  const edges = [];
+  for (const binding of workspace.rules.retentionBindings ?? []) {
+    if (!nodeMap.has(binding.capConceptId) || !nodeMap.has(binding.resourceConceptId)) continue;
+    if (saved.has(`${binding.capConceptId}\u0000${binding.resourceConceptId}`)) continue;
+    edges.push({ id: `binding:${binding.id}`, source: binding.capConceptId, target: binding.resourceConceptId,
+      relation: 'influence', sign: 1, ruleText: RETENTION_TEMPLATE.ruleText, derived: true,
+      origin: { bindingId: binding.id, mechanismConceptId: binding.mechanismConceptId, templateId: RETENTION_TEMPLATE.id } });
+  }
+  return edges;
+}
+
 function meta(workspace, command) { return { queryApiVersion: QUERY_API_VERSION, semanticsVersion: SEMANTICS_VERSION, readingContract: { version: readingContract().version }, workspaceId: workspace.manifest.id, revision: workspace.revision, ...(Number.isInteger(workspace.projectGeneration) ? { projectGeneration: workspace.projectGeneration } : {}), savedOnly: true, command }; }
 function compactResult(result, trace, nodeMap) { return { ...result, counts: { returned: trace.paths.length, found: trace.found, total: trace.totalExact ? trace.found : null, totalExact: trace.totalExact }, expandedStates: trace.expandedStates, completeWithinBounds: !trace.truncationReasons.length, truncationReasons: trace.truncationReasons, paths: trace.paths.map(path => compactPath(path, nodeMap)) }; }
 
@@ -69,11 +145,14 @@ export function queryWorkspace(workspace, request) {
     const direction = request.direction ?? 'both', hops = request.hops ?? 1, maxPaths = request.maxPaths ?? limits.maxPaths[0], maxExpansions = request.maxExpansions ?? limits.maxExpansions[0], traces = {};
     if (direction !== 'downstream') traces.upstream = enumerateNodePaths({ edges: graph.edges, center: center.id, direction: 'upstream', hops, maxPaths, maxExpansions });
     if (direction !== 'upstream') traces.downstream = enumerateNodePaths({ edges: graph.edges, center: center.id, direction: 'downstream', hops, maxPaths, maxExpansions });
-    return { ...result, center: refDTO(center), direction, hops, paths: Object.fromEntries(Object.entries(traces).map(([key, trace]) => [key, compactResult({}, trace, nodeMap)])) };
+    return { ...result, center: refDTO(center), direction, hops, paths: Object.fromEntries(Object.entries(traces).map(([key, trace]) => [key, compactResult({}, trace, nodeMap)])),
+      taxonomy: taxonomyContext({ edges: graph.edges, from: center.id, hops }) };
   }
   const from = nodeMap.get(request.from), to = nodeMap.get(request.to);
   if (!from || !to) fail('NODE_NOT_FOUND', 'impact 的 from 或 to 概念 ID 不存在');
-  const trace = enumerateImpactPaths({ edges: graph.edges, from: from.id, to: to.id, maxPaths: request.maxPaths ?? limits.maxPaths[0], maxDepth: request.maxDepth ?? limits.maxDepth[0], maxExpansions: request.maxExpansions ?? limits.maxExpansions[0] });
-  return { ...compactResult(result, trace, nodeMap), from: refDTO(from), to: refDTO(to) };
+  const inherited = request.includeInherited === true || request.includeInherited === 'true' ? derivedRetentionEdges(workspace, nodeMap) : [];
+  const trace = enumerateImpactPaths({ edges: [...graph.edges, ...inherited], from: from.id, to: to.id, maxPaths: request.maxPaths ?? limits.maxPaths[0], maxDepth: request.maxDepth ?? limits.maxDepth[0], maxExpansions: request.maxExpansions ?? limits.maxExpansions[0] });
+  return { ...compactResult(result, trace, nodeMap), from: refDTO(from), to: refDTO(to),
+    includedDerivedEdges: inherited.map(edge => ({ id: edge.id, source: edge.source, target: edge.target, origin: edge.origin })) };
 }
 export const formatQueryText = result => JSON.stringify(result, null, 2);

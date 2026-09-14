@@ -669,7 +669,19 @@
         "schemaVersion": { "const": 1 },
         "kind": { "const": "rules" },
         "workspaceId": { "$ref": "#/definitions/id" },
-        "rules": { "type": "array", "items": { "$ref": "#/definitions/edge" } }
+        "rules": { "type": "array", "items": { "$ref": "#/definitions/edge" } },
+        "retentionBindings": { "type": "array", "items": { "$ref": "#/definitions/retentionBinding" } }
+      }
+    },
+    "retentionBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "mechanismConceptId", "resourceConceptId", "capConceptId"],
+      "properties": {
+        "id": { "$ref": "#/definitions/id" },
+        "mechanismConceptId": { "$ref": "#/definitions/id" },
+        "resourceConceptId": { "$ref": "#/definitions/id" },
+        "capConceptId": { "$ref": "#/definitions/id" }
       }
     },
     "inheritance": {

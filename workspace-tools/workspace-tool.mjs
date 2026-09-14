@@ -133,7 +133,7 @@ function validateDefinitions(document, workspaceId) {
   return nodes;
 }
 function validateRules(document, workspaceId, nodes) {
-  only(document, ['schemaVersion', 'kind', 'workspaceId', 'rules'], ['schemaVersion', 'kind', 'workspaceId', 'rules'], 'rules');
+  only(document, ['schemaVersion', 'kind', 'workspaceId', 'rules'], ['schemaVersion', 'kind', 'workspaceId', 'rules', 'retentionBindings'], 'rules');
   if (document.schemaVersion !== 1 || document.kind !== 'rules' || document.workspaceId !== workspaceId) fail('DRAFT_VALIDATION_FAILED', 'rules 的版本、类型或 workspaceId 无效');
   const edgeIds = new Set(), pairs = new Set(), specializes = [];
   array(document.rules, 'rules.rules').forEach((edge, index) => {
@@ -149,6 +149,27 @@ function validateRules(document, workspaceId, nodes) {
     else fail('DRAFT_VALIDATION_FAILED', `${location}.relation 无效`);
     if (edge.ruleText !== undefined && (typeof edge.ruleText !== 'string' || edge.ruleText.length > 8000)) fail('DRAFT_VALIDATION_FAILED', `${location}.ruleText 无效`);
     if (edge.customData !== undefined && (typeof edge.customData !== 'string' || edge.customData.length > 16000)) fail('DRAFT_VALIDATION_FAILED', `${location}.customData 无效`);
+  });
+  // 配对绑定是一等事实：它把"哪个上限概念约束哪个资源概念"写死，
+  // 因此两端各自的 is-a 特化不会产生交叉配对。
+  const bindings = document.retentionBindings ?? [];
+  array(bindings, 'rules.retentionBindings');
+  const bindingIds = new Set(), resourceRoles = new Map(), capRoles = new Map();
+  bindings.forEach((binding, index) => {
+    const location = `rules.retentionBindings[${index}]`;
+    only(binding, ['id', 'mechanismConceptId', 'resourceConceptId', 'capConceptId'], ['id', 'mechanismConceptId', 'resourceConceptId', 'capConceptId'], location);
+    draftId(binding.id, `${location}.id`);
+    if (bindingIds.has(binding.id)) fail('DRAFT_VALIDATION_FAILED', `${location}.id 重复`);
+    bindingIds.add(binding.id);
+    for (const key of ['mechanismConceptId', 'resourceConceptId', 'capConceptId']) {
+      draftId(binding[key], `${location}.${key}`);
+      if (!nodes.has(binding[key])) fail('DRAFT_VALIDATION_FAILED', `${location}.${key} 必须是已有概念`);
+    }
+    if (binding.resourceConceptId === binding.capConceptId) fail('DRAFT_VALIDATION_FAILED', `${location} 的资源概念与上限概念不能相同`);
+    for (const [role, seen, id] of [['resource', resourceRoles, binding.resourceConceptId], ['cap', capRoles, binding.capConceptId]]) {
+      if (seen.has(id)) fail('DRAFT_VALIDATION_FAILED', `${location} 的概念 ${id} 已被 ${seen.get(id)} 用作 ${role}；同一角色只能绑定一次`);
+      seen.set(id, binding.id);
+    }
   });
   const outgoing = new Map(), visiting = new Set(), visited = new Set();
   for (const edge of specializes) (outgoing.get(edge.source) ?? outgoing.set(edge.source, []).get(edge.source)).push(edge.target);

@@ -71,7 +71,8 @@ try {
     project: { type: 'string' }, port: { type: 'string' }, name: { type: 'string' }, id: { type: 'string' }, from: { type: 'string' }, to: { type: 'string' }, execute: { type: 'boolean' },
     help: { type: 'boolean', short: 'h' }, version: { type: 'boolean', short: 'v' },
       ...Object.fromEntries(['connect', 'format', 'mechanic', 'view', 'revision', 'direction', 'hops', 'query', 'from', 'to', 'max-paths', 'max-depth', 'max-expansions',
-      'label', 'description', 'aliases', 'tag-ids', 'custom-data', 'concept', 'source', 'target', 'source-qualifiers', 'target-qualifiers', 'relation', 'sign', 'text', 'inheritance', 'project-generation', 'session', 'previous-session', 'include-inherited', 'workspace-revision', 'parent', 'scope', 'folder', 'remove-isolated-concepts', 'manifest', 'library', 'entry', 'workspace-id', 'draft'].map(key => [key, { type: 'string' }])),
+      'label', 'description', 'aliases', 'tag-ids', 'custom-data', 'concept', 'source', 'target', 'source-qualifiers', 'target-qualifiers', 'relation', 'sign', 'text', 'inheritance', 'project-generation', 'session', 'previous-session', 'workspace-revision', 'parent', 'scope', 'folder', 'remove-isolated-concepts', 'manifest', 'library', 'entry', 'workspace-id', 'draft'].map(key => [key, { type: 'string' }])),
+    'include-inherited': { type: 'boolean' },
   }, allowPositionals: true });
   const [command, target] = positionals;
   if (values.help || (!command && !Object.keys(values).length)) console.log(usage);

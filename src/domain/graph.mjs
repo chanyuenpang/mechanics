@@ -59,7 +59,8 @@ export function assertSpecializes(edges) {
   for (const node of adjacent.keys()) visit(node);
 }
 
-// 路径查询只遍历显式 influence；specializes 仅是结构声明，当前不产生派生规则。
+// graph.mjs 只处理作者声明的边。is-a 仍是结构声明，不在这里派生规则；
+// 分类透传上下文与由配对绑定生成的派生边由 domain/query-paths.mjs 在显式请求时计算。
 function traversableEdges(graph) {
   return graph.edges.filter(edge => edge.relation === 'influence');
 }

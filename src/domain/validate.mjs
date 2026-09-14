@@ -63,7 +63,8 @@ export function validateWorkspace({ manifest, definitions, rules, mechanics, vie
     if (document.workspaceId !== manifest.id) throw new ContractError('WORKSPACE_MISMATCH', '文档所属工作区与清单不一致');
   }
   const semanticIds = [manifest.id, ...manifest.compositions.map(item => item.id), ...definitions.nodes.map(item => item.id),
-    ...rules.rules.map(rule => rule.id), ...mechanics.map(item => item.id), ...views.map(item => item.id)];
+    ...rules.rules.map(rule => rule.id), ...(rules.retentionBindings ?? []).map(binding => binding.id),
+    ...mechanics.map(item => item.id), ...views.map(item => item.id)];
   for (const id of semanticIds) {
     const problem = semanticIdProblem(id);
     if (problem) throw new ContractError('INVALID_SEMANTIC_ID', `持久化领域 ID ${problem}：${id}`);
@@ -106,6 +107,23 @@ export function validateWorkspace({ manifest, definitions, rules, mechanics, vie
   }
   unique(rules.rules, '规则库');
   assertSpecializes(rules.rules);
+  // 配对绑定是一等事实：它把"哪个上限概念约束哪个资源概念"写死，
+  // 因此两端各自的 is-a 特化永远不会产生交叉配对。
+  const retentionBindings = rules.retentionBindings ?? [];
+  unique(retentionBindings, '配对绑定');
+  const boundResources = new Map(), boundCaps = new Map();
+  for (const binding of retentionBindings) {
+    const location = `配对绑定 ${binding.id}`;
+    for (const key of ['mechanismConceptId', 'resourceConceptId', 'capConceptId']) requireReference(nodes, binding[key], `${location}.${key}`);
+    if (binding.resourceConceptId === binding.capConceptId) {
+      throw new ContractError('RETENTION_BINDING_INVALID', `${location} 的资源概念与上限概念不能相同：${binding.resourceConceptId}`);
+    }
+    for (const [role, seen, id] of [['resource', boundResources, binding.resourceConceptId], ['cap', boundCaps, binding.capConceptId]]) {
+      if (seen.has(id)) throw new ContractError('RETENTION_BINDING_DUPLICATE_ROLE',
+        `概念 ${id} 已被配对绑定 ${seen.get(id)} 用作 ${role}；同一角色在全工作区只能绑定一次`);
+      seen.set(id, binding.id);
+    }
+  }
   if (validateResourceReferences) for (const graph of mechanics) {
     graph.focusNodeIds.forEach(id => requireReference(nodes, id, graph.id));
     graph.pinnedRuleIds.forEach(id => requireReference(new Set(rules.rules.map(rule => rule.id)), id, graph.id));
