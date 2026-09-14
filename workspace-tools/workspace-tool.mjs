@@ -9,7 +9,20 @@ const workspace = join(root, '.mechanics'), drafts = join(workspace, '.agent-dra
 const fail = (code, message, details = {}) => { throw Object.assign(new Error(message), { code, details }); };
 const hash = value => createHash('sha256').update(value).digest('hex');
 const json = async path => { try { return { path, raw: await readFile(path, 'utf8') }; } catch (error) { fail(error.code === 'ENOENT' ? 'WORKSPACE_FILE_MISSING' : 'WORKSPACE_READ_FAILED', `无法读取 ${path}`); } };
-const parse = async path => { const file = await json(path); try { return { ...file, value: JSON.parse(file.raw), revision: hash(file.raw) }; } catch { fail('INVALID_JSON', `JSON 无法解析：${path}`); } };
+// 展示字段（坐标、配色、连线路径）由网页管理，草稿保存时也会保留磁盘上的既有坐标：
+// 因此资源版本只覆盖语义内容，浏览器打开图时补算布局不得作废一份仍然有效的草稿。
+const presentationFields = new Set(['positions', 'projectionPositions', 'routeCache', 'nodeColors', 'nodeStyles']);
+const withoutPresentation = value => {
+  if (Array.isArray(value)) return value.map(withoutPresentation);
+  if (value === null || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !presentationFields.has(key)).map(([key, item]) => [key, withoutPresentation(item)]));
+};
+const semanticText = document => {
+  if (document?.kind !== 'workspace') return JSON.stringify(withoutPresentation(document));
+  const { lastView, ...rest } = document;
+  return JSON.stringify(withoutPresentation(rest));
+};
+const parse = async path => { const file = await json(path); try { const value = JSON.parse(file.raw); return { ...file, value, revision: hash(semanticText(value)) }; } catch { fail('INVALID_JSON', `JSON 无法解析：${path}`); } };
 const args = values => { const positionals = [], options = {}; for (let i = 0; i < values.length; i++) { const item = values[i]; if (!item.startsWith('--')) { positionals.push(item); continue; } const key = item.slice(2), value = values[++i]; if (!key || value === undefined || value.startsWith('--') || Object.hasOwn(options, key)) fail('TOOL_INVALID', `参数无效：${item}`); options[key] = value; } return { positionals, options }; };
 const emit = value => process.stdout.write(JSON.stringify(value, null, 2) + '\n');
 const readMechanicPaths = async directory => { const entries = await readdir(directory, { withFileTypes: true }); const found = []; for (const entry of entries) { const path = join(directory, entry.name); if (entry.isDirectory()) found.push(...await readMechanicPaths(path)); else if (entry.isFile() && entry.name.endsWith('.mechanic.json')) found.push(path); } return found; };
@@ -17,7 +30,7 @@ const readFolders = async (directory, prefix = '') => { const entries = await re
 const folderSegment = (value, location) => { if (typeof value !== 'string' || !value || value === '.' || value === '..' || /[\\/\u0000-\u001f<>:"|?*]/u.test(value)) fail('TOOL_INVALID', `${location} 必须是单段安全目录名`); return value; };
 const folder = (value, location = 'folder') => { if (value === undefined || value === '') return ''; if (typeof value !== 'string') fail('TOOL_INVALID', `${location} 无效`); return value.split('/').map(segment => folderSegment(segment, location)).join('/'); };
 const mechanicDirectory = value => join(workspace, 'mechanics', ...value.split('/').filter(Boolean));
-async function snapshot() { const manifest = await parse(join(workspace, 'workspace.json')), definitions = await parse(join(workspace, 'definitions.json')), rules = await parse(join(workspace, 'rules.json')); const mechanicsRoot = join(workspace, 'mechanics'); const paths = await readMechanicPaths(mechanicsRoot); const mechanics = await Promise.all(paths.map(parse)); const nodes = definitions.value.nodes ?? []; const edges = (rules.value.rules ?? []).map(edge => ({ ...edge, origin: { ruleId: edge.id } })); const revision = hash([manifest.raw, definitions.raw, rules.raw, ...mechanics.map(item => item.raw)].join('\n'));
+async function snapshot() { const manifest = await parse(join(workspace, 'workspace.json')), definitions = await parse(join(workspace, 'definitions.json')), rules = await parse(join(workspace, 'rules.json')); const mechanicsRoot = join(workspace, 'mechanics'); const paths = await readMechanicPaths(mechanicsRoot); const mechanics = await Promise.all(paths.map(parse)); const nodes = definitions.value.nodes ?? []; const edges = (rules.value.rules ?? []).map(edge => ({ ...edge, origin: { ruleId: edge.id } })); const revision = hash([manifest.revision, definitions.revision, rules.revision, ...mechanics.map(item => item.revision)].join('\n'));
   return { manifest, definitions, rules, mechanics, folders: await readFolders(mechanicsRoot), nodes, edges, revision, nodeMap: new Map(nodes.map(node => [node.id, node])) }; }
 const operator = edge => edge.relation === 'specializes' ? 'is-a>' : edge.sign === 1 ? '+>' : edge.sign === -1 ? '->' : '?>';
 const guide = () => ({

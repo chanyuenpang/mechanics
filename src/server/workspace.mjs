@@ -8,18 +8,32 @@ import { projectContext, projectRootFromWorkspace } from './project-context.mjs'
 
 const MAX_BYTES = 2 * 1024 * 1024;
 const semanticHash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
-
+// 展示字段只描述当前画布呈现：坐标、配色与连线路径都是可随时重算的派生物。
+// 布局变化不得移动语义版本，否则“打开一张图自动补算路径”就会作废其他页面与 Agent 草稿。
+// 依据：docs/文件协议.md「布局不改变语义 revision」。
+const presentationFields = new Set(['positions', 'projectionPositions', 'routeCache', 'nodeColors', 'nodeStyles']);
+export function withoutPresentation(value) {
+  if (Array.isArray(value)) return value.map(withoutPresentation);
+  if (value === null || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => !presentationFields.has(key))
+    .map(([key, item]) => [key, withoutPresentation(item)]));
+}
+// 最近打开快照属于界面状态，不是工作区语义。
+function semanticWorkspaceDocument(document) {
+  if (document?.kind !== 'workspace') return withoutPresentation(document);
+  const { lastView, ...rest } = document;
+  return withoutPresentation(rest);
+}
+// 每资源语义版本：写入服务用它做按资源的冲突判定，Agent 工具用它做 compare-and-swap 句柄。
 export function workspaceResourceRevisions(workspace) {
-  const nodes = [...workspace.definitions.nodes].sort((a, b) => a.id.localeCompare(b.id));
-  const tagDefinitions = [...(workspace.definitions.tagDefinitions ?? [])].sort((a, b) => a.id.localeCompare(b.id));
-  const mechanics = Object.fromEntries([...workspace.mechanics]
+  const byId = documents => Object.fromEntries([...documents]
     .sort((a, b) => a.id.localeCompare(b.id))
-    .map(mechanic => [mechanic.id, semanticHash({
-      focusNodeIds: [...mechanic.focusNodeIds].sort(),
-      pinnedRuleIds: [...mechanic.pinnedRuleIds].sort(),
-      ...(mechanic.ruleSelection !== undefined ? { ruleSelection: mechanic.ruleSelection } : {}),
-    })]));
-  return { definitions: semanticHash({ nodes, tagDefinitions }), rules: semanticHash({ rules: workspace.rules.rules }), mechanics };
+    .map(document => [document.id, semanticHash(withoutPresentation(document))]));
+  return { workspace: semanticHash(semanticWorkspaceDocument(workspace.manifest)),
+    definitions: semanticHash(withoutPresentation(workspace.definitions)),
+    rules: semanticHash(withoutPresentation(workspace.rules)),
+    mechanics: byId(workspace.mechanics), views: byId(workspace.views) };
 }
 export function assertRelativeFile(file, extensions = ['.json']) {
   if (typeof file !== 'string' || file.length > 512 || !extensions.some(extension => file.endsWith(extension)) || isAbsolute(file)
@@ -108,12 +122,13 @@ export async function discover(root) {
 export async function readWorkspace(workspaceRoot, { context = null, isolateResources = false } = {}) {
   if (!workspaceRoot) throw new ContractError('WORKSPACE_REQUIRED', '必须指定或定位工作区目录');
   const root = await realpath(resolve(workspaceRoot));
+  // 快照保留语义形态而非原始字节：只有语义变化才算磁盘变化。
   const snapshots = new Map(), physicalFiles = new Set();
   async function read(file) {
-    const { document, raw, actual } = await readDocument(root, file);
+    const { document, actual } = await readDocument(root, file);
     const identity = process.platform === 'win32' ? actual.toLowerCase() : actual;
     if (physicalFiles.has(identity)) throw new ContractError('DUPLICATE_FILE', '同一文件被重复引用：' + file);
-    physicalFiles.add(identity); snapshots.set(file, raw); return document;
+    physicalFiles.add(identity); snapshots.set(file, JSON.stringify(semanticWorkspaceDocument(document))); return document;
   }
   const rawManifest = await read('workspace.json');
   const rawDefinitions = await read(rawManifest.definitions);
@@ -188,7 +203,7 @@ export async function readWorkspace(workspaceRoot, { context = null, isolateReso
   const validated = validateWorkspace({ manifest: presentationManifest, definitions, rules, mechanics, views, files });
   const { workspace, diagnostics: presentationDiagnostics } = resolvePresentationReferences({ ...validated, files });
   const hash = createHash('sha256');
-  for (const [file, raw] of [...snapshots].sort(([a], [b]) => a.localeCompare(b))) hash.update(JSON.stringify([file, raw]));
+  for (const [file, snapshot] of [...snapshots].sort(([a], [b]) => a.localeCompare(b))) hash.update(JSON.stringify([file, snapshot]));
   // 空目录变化也会改变文件树版本，避免目录操作基于旧树执行。
   hash.update(JSON.stringify(directories));
   return { ...workspace, projectRoot: context.projectRoot, workspaceRoot: root, agentExportRoot: context.exportRoot,

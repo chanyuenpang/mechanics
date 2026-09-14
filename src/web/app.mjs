@@ -123,7 +123,7 @@ const restoreCamera = () => { if (cameras.has(contextKey())) { canvas.camera = c
 
 function showError(error) {
   const conflict = error.code === 'REVISION_CONFLICT';
-  $('error-text').textContent = error.message + (conflict ? '\n其他页面保存视图也会改变版本。请重新读取；有草稿时会先提示处理，不能强制覆盖。' : '');
+  $('error-text').textContent = error.message + (conflict ? '\n冲突只针对本次写入涉及的文件（见上文）。请先重新读取磁盘状态再保存；草稿会保留，不会被覆盖。' : '');
   $('reload-error').hidden = false;
   $('error').hidden = false;
 }
@@ -281,9 +281,15 @@ async function returnToSourceProject() {
 async function api(path, body) {
   let response, data;
   try {
+    // 写入体携带读取时的每资源版本：服务端据此只对本操作真正会写的资源判定冲突，
+    // 不再因为别的页面写了别的文件（或补算了布局）而拒绝一次安全的保存。
+    // 关联项目的写入不属于当前会话，不带本项目基线，服务端退回整体比较。
+    const baseline = typeof body?.revision === 'string'
+      && (body.projectSessionToken ?? workspace?.projectSessionToken) === workspace?.projectSessionToken
+        ? { resourceRevisions: body.resourceRevisions ?? workspace?.resourceRevisions } : {};
     const payload = body && workspace?.projectGeneration !== undefined
       && !['/api/directories/pick', '/api/project/open', '/api/project/preflight', '/api/projects/pin', '/api/projects/remove', '/api/preferences'].includes(path)
-        ? { ...body, projectGeneration: body.projectGeneration ?? workspace.projectGeneration, projectSessionToken: body.projectSessionToken ?? workspace.projectSessionToken } : body;
+        ? { ...body, ...baseline, projectGeneration: body.projectGeneration ?? workspace.projectGeneration, projectSessionToken: body.projectSessionToken ?? workspace.projectSessionToken } : body;
     const requestPath = !payload && workspace?.projectSessionToken && ['/api/workspace', '/api/local-ui-state', '/api/project-references', '/api/agent', '/api/concept-docs'].includes(path)
       ? `${path}?projectSessionToken=${encodeURIComponent(workspace.projectSessionToken)}` : path;
     response = await fetch(requestPath, {

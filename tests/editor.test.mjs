@@ -28,7 +28,8 @@ test('单文件保存真实落盘，读服务不持锁，写入冲突不覆盖',
   const document = structuredClone(workspace.mechanics[0]);
   document.positions.draw = { x: 123, y: 456 };
   const saved = await store.save({ revision: workspace.revision, kind: 'mechanic', id: document.id, document });
-  assert.notEqual(saved.revision, workspace.revision);
+  // 坐标属于展示数据：真实落盘，但不移动语义版本（docs/文件协议.md「布局不改变语义 revision」）。
+  assert.equal(saved.revision, workspace.revision);
   assert.deepEqual(JSON.parse(await readFile(join(directory, pathOf(document.id)), 'utf8')), document);
   assert.equal(await readFile(join(directory, pathOf(workspace.mechanics[1].id)), 'utf8'), before);
   await assert.rejects(access(join(directory, '.mechanics.lock')), { code: 'ENOENT' });

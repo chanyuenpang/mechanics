@@ -42,16 +42,46 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
     try { return await operation(); }
     finally { await release(); }
   });
-  const current = async revision => {
+  // 冲突判定的粒度必须与提交粒度一致：一次写入只落一个（或几个）资源，
+  // 因此只有这些资源的语义版本变化才构成冲突。其他页面写别的文件、以及打开图时
+  // 补算的坐标与连线路径，都不再拒绝一次本身安全的写入。
+  // 客户端提交读取时的每资源版本（resourceRevisions）；缺少基线时退回整体比较，
+  // 绝不放宽为无条件写入。
+  const resourceRevision = (revisions, key) => {
+    const [kind, id] = key.split(':');
+    return kind === 'mechanic' ? revisions?.mechanics?.[id] : kind === 'view' ? revisions?.views?.[id] : revisions?.[kind];
+  };
+  const scopeOf = (...keys) => keys.filter(key => key !== null && key !== undefined);
+  const resourcePath = (workspace, key) => {
+    const [kind, id] = key.split(':');
+    if (kind === 'mechanic' || kind === 'view') return workspace.files.find(file => file.kind === kind && file.id === id)?.path ?? key;
+    if (kind === 'definitions') return workspace.manifest.definitions;
+    if (kind === 'rules') return workspace.manifest.rules;
+    return 'workspace.json';
+  };
+  const resourceKey = (kind, id) => kind === 'mechanic' || kind === 'view' ? kind + ':' + id : kind === 'workspace' ? 'workspace' : kind;
+  const assertRevision = (body, workspace, keys = null, message = null) => {
+    if (body?.revision === workspace.revision) return;
+    const baseline = body?.resourceRevisions;
+    const scope = Array.isArray(keys) && baseline && typeof baseline === 'object' && !Array.isArray(baseline) ? keys : null;
+    const moved = scope ? scope.filter(key => resourceRevision(baseline, key) !== resourceRevision(workspace.resourceRevisions, key)) : null;
+    if (moved && !moved.length) return;
+    const changed = (moved ?? []).map(key => resourcePath(workspace, key));
+    fail('REVISION_CONFLICT', (message ?? '磁盘文件或目录已改变。草稿未覆盖文件；请导出草稿并重新读取后合并。')
+      + (changed.length ? '；本次写入涉及的文件已被其他写入者改变：' + changed.join('、') : ''));
+  };
+  const current = async (body, keys = null, message = null) => {
     const workspace = await readAvailable();
-    if (revision !== workspace.revision) fail('REVISION_CONFLICT', '磁盘文件或目录已改变。草稿未覆盖文件；请导出草稿并重新读取后合并。');
+    assertRevision(body, workspace, keys, message);
     // 兼容读模型可能含旧协议或未解释扩展；在尚未显式迁移前禁止全量序列化覆盖原文件。
     if (workspace.compatibilityMode) fail('COMPATIBILITY_READ_ONLY', '当前工作区以兼容模式打开。请先显式迁移后再保存；原始文件未被修改。');
     return workspace;
   };
-  const presentationFields = new Set(['positions', 'projectionPositions', 'routeCache', 'nodeColors', 'nodeStyles']);
-  const withoutPresentation = document => Object.fromEntries(Object.entries(document)
-    .filter(([key]) => !presentationFields.has(key)));
+  // 兼容模式只允许按字段补丁写回展示数据，因此这里只比较顶层展示字段；
+  // 语义版本另有 workspace.mjs 的深层形态（含嵌套 positions 与 lastView）。
+  const compatiblePresentationFields = new Set(['positions', 'projectionPositions', 'routeCache', 'nodeColors', 'nodeStyles']);
+  const withoutCompatiblePresentation = document => Object.fromEntries(Object.entries(document)
+    .filter(([key]) => !compatiblePresentationFields.has(key)));
   // 兼容读取的规范化对象不能整体回写旧文件；但布局属于非语义展示数据，
   // 可以在保留原始协议及未知字段的前提下，按字段补丁写回同一资源。
   const saveCompatiblePresentation = async (workspace, { kind, id, document }) => {
@@ -62,13 +92,13 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
     const canonical = documents.find(item => item.id === id);
     const file = workspace.files.find(item => item.kind === kind && item.id === id);
     if (!canonical || !file || document?.id !== id) fail('ID_CHANGED', '此类型的文件 ID 不存在或被更改');
-    if (!isDeepStrictEqual(withoutPresentation(document), withoutPresentation(canonical))) {
+    if (!isDeepStrictEqual(withoutCompatiblePresentation(document), withoutCompatiblePresentation(canonical))) {
       fail('COMPATIBILITY_STRUCTURE_READ_ONLY', '兼容模式不允许修改概念、规则或引用结构；请先显式迁移后再编辑这些内容。');
     }
     const raw = (await readDocument(root, file.path)).document;
     if (!raw || raw.id !== id) fail('RESOURCE_CHANGED', '磁盘中的资源已改变，请重新读取后再保存。');
     const patched = { ...raw };
-    for (const field of presentationFields) if (document[field] !== undefined) patched[field] = structuredClone(document[field]);
+    for (const field of compatiblePresentationFields) if (document[field] !== undefined) patched[field] = structuredClone(document[field]);
     await commitFile(root, file.path, encode(patched));
     return verified();
   };
@@ -170,7 +200,7 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
     }
   };
   const createMechanicFolder = body => write(async () => {
-    const workspace = await current(body.revision);
+    const workspace = await current(body);
     const folder = mechanicFolder(body.folder);
     if (!folder) fail('UNSAFE_PATH', '不能创建机制根目录');
     const directory = mechanicDirectory(folder);
@@ -198,7 +228,7 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
       resource: 'mechanic-folder', action: 'delete', folder: body.folder };
   };
   const moveMechanic = body => write(async () => {
-    const workspace = await current(body.revision);
+    const workspace = await current(body);
     if (typeof body.mechanicId !== 'string') fail('MECHANIC_NOT_FOUND', '必须提供机制图 ID');
     const source = workspace.files.find(file => file.kind === 'mechanic' && file.id === body.mechanicId);
     if (!source || !source.path.startsWith('mechanics/')) fail('MECHANIC_NOT_FOUND', '机制图不存在或不在 mechanisms 目录：' + body.mechanicId);
@@ -221,7 +251,7 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
     }
   });
   const moveMechanicFolder = body => write(async () => {
-    const workspace = await current(body.revision);
+    const workspace = await current(body);
     const sourceFolder = mechanicFolder(body.sourceFolder), targetFolder = mechanicFolder(body.targetFolder);
     if (!sourceFolder || !targetFolder) fail('UNSAFE_PATH', '不能移动 mechanisms 根目录');
     const source = mechanicDirectory(sourceFolder), target = mechanicDirectory(targetFolder);
@@ -239,7 +269,7 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
       { canonicalCommitted: true, workspaceId: workspace.manifest.id, source, target }); }
   });
   const deleteMechanicFolder = body => write(async () => {
-    const workspace = await current(body.revision);
+    const workspace = await current(body);
     const folder = mechanicFolder(body.folder);
     if (!folder) fail('UNSAFE_PATH', '不能删除 mechanisms 根目录');
     const directory = mechanicDirectory(folder);
@@ -251,7 +281,7 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
     return refreshCatalog();
   });
   const deleteMechanic = body => write(async () => {
-    const workspace = await current(body.revision);
+    const workspace = await current(body);
     if (typeof body.mechanicId !== 'string') fail('MECHANIC_NOT_FOUND', '必须提供机制图 ID');
     const file = workspace.files.find(item => item.kind === 'mechanic' && item.id === body.mechanicId);
     if (!file) fail('MECHANIC_NOT_FOUND', '机制图不存在：' + body.mechanicId);
@@ -270,7 +300,7 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
       { canonicalCommitted: true, workspaceId: workspace.manifest.id, id: body.mechanicId }); }
   });
   const create = (kind, body) => write(async () => {
-    const workspace = await current(body.revision), document = body.document;
+    const workspace = await current(body), document = body.document;
     assertDocument(document, kind);
     const documents = kind === 'mechanic' ? workspace.mechanics : workspace.views;
     if (documents.some(item => item.id === document.id)) fail('DUPLICATE_ID', '此文件类型中的 ID 已存在');
@@ -319,7 +349,7 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
   };
   const agentViewDelete = body => write(async () => {
     if (body?.action !== 'delete' || typeof body.view !== 'string') fail('AGENT_MUTATION_INVALID', 'Agent 删除视图必须提供 view delete 和 --view');
-    const workspace = await current(body.revision);
+    const workspace = await current(body);
     const file = workspace.files.find(item => item.kind === 'view' && item.id === body.view);
     if (!file) fail('VIEW_NOT_FOUND', `视图不存在：${body.view}`);
     if (workspace.manifest.lastView?.viewId === body.view) fail('VIEW_REFERENCED', '工作区最近视图仍引用该视图；请先切换到其他文件');
@@ -523,7 +553,7 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
       revision: plan.workspace.resourceRevisions.mechanics[plan.source.id], workspaceRevision: plan.workspace.revision });
   };
   const applyProjectSettings = async body => {
-    const workspace = await current(body.revision);
+    const workspace = await current(body, scopeOf('workspace'));
     const manifest = { ...workspace.manifest, name: body.name, agentExportPath: body.agentExportPath };
     assertDocument(manifest, 'workspace', 'workspace.json');
     let context = await projectContext(workspace.projectRoot, { manifest, allowMissingExport: true });
@@ -556,7 +586,7 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
   };
   const setProjectSettings = body => write(() => applyProjectSettings(body));
   const setDocumentExport = body => write(async () => {
-    const workspace = await current(body?.revision);
+    const workspace = await current(body, scopeOf('workspace'));
     if (!Array.isArray(body?.selections)) fail('DOCUMENT_EXPORT_INVALID', '导出设置必须提交完整 selections 数组。');
     const manifest = { ...workspace.manifest, exportSelections: structuredClone(body.selections) };
     assertDocument(manifest, 'workspace', 'workspace.json');
@@ -567,7 +597,7 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
   });
   // 显式生成只是把最新 canonical 快照排入后台；它不借机改写 manifest，也不阻塞界面。
   const generateDocumentExport = body => write(async () => {
-    const workspace = await current(body?.revision);
+    const workspace = await current(body, scopeOf('workspace'));
     if (!workspace.manifest.agentExportPath) fail('EXPORT_ROOT_UNCONFIGURED', '尚未配置 Agent 机制文档导出目录；请先在项目设置中选择目录。');
     return withExportPublication(workspace, schedulePublication(workspace));
   });
@@ -607,11 +637,11 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
   const saveAgentDraft = body => write(async () => {
     if (!body || typeof body !== 'object' || typeof body.mechanic !== 'string' || !body.mechanic
       || !body.definitions || !body.rules || !body.document) fail('AGENT_DRAFT_INVALID', '草稿保存必须提供概念、规则、机制和目标机制 ID');
-    const workspace = await readWorkspace(root);
-    if (body.workspaceRevision !== workspace.revision) fail('REVISION_CONFLICT', '工作区已改变；草稿未覆盖正式文件，请重新 open 后合并。');
-    if (body.definitionsRevision !== workspace.resourceRevisions.definitions) fail('RESOURCE_REVISION_CONFLICT', '概念定义已改变；草稿未覆盖正式文件，请重新 open 后合并。');
-    if (body.rulesRevision !== workspace.resourceRevisions.rules) fail('RESOURCE_REVISION_CONFLICT', '规则定义已改变；草稿未覆盖正式文件，请重新 open 后合并。');
-    if (body.mechanicRevision !== workspace.resourceRevisions.mechanics[body.mechanic]) fail('RESOURCE_REVISION_CONFLICT', `机制 ${body.mechanic} 已改变；草稿未覆盖正式文件，请重新 open 后合并。`);
+    // 草稿只写这三份文件，因此只有它们的语义版本变化才构成冲突：
+    // 其他资源的变化（含浏览器打开图时补算的坐标与连线路径）不再作废一份仍然有效的草稿。
+    const workspace = await current({ revision: body.workspaceRevision, resourceRevisions: {
+      definitions: body.definitionsRevision, rules: body.rulesRevision, mechanics: { [body.mechanic]: body.mechanicRevision } } },
+      scopeOf('definitions', 'rules', 'mechanic:' + body.mechanic), '工作区已改变；草稿未覆盖正式文件，请重新 open 后合并。');
     const index = workspace.mechanics.findIndex(item => item.id === body.mechanic);
     if (index < 0 || body.document.id !== body.mechanic || body.document.kind !== 'mechanic') fail('AGENT_DRAFT_SCOPE_MISMATCH', '草稿机制与 open 的目标不一致');
     if (body.definitions.kind !== 'definitions' || body.rules.kind !== 'rules' || body.definitions.workspaceId !== workspace.manifest.id || body.rules.workspaceId !== workspace.manifest.id || body.document.workspaceId !== workspace.manifest.id) {
@@ -645,7 +675,7 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
   // 规则是全局事实，而“在当前机制图中可见”是该机制的投影选择；用户从画布新建规则时，
   // 两份文件必须作为一个 canonical 提交一起校验和回读，不能留下只写入其一的中间状态。
   const saveRulesAndMechanic = body => write(async () => {
-    const workspace = await current(body?.revision);
+    const workspace = await current(body, scopeOf('rules', 'mechanic:' + body?.mechanicId));
     if (!body?.rules || !body?.mechanic || typeof body.mechanicId !== 'string') fail('RULE_PROJECTION_INVALID', '规则提交必须提供 rules、mechanic 和 mechanicId');
     assertDocument(body.rules, 'rules'); assertDocument(body.mechanic, 'mechanic');
     const index = workspace.mechanics.findIndex(item => item.id === body.mechanicId);
@@ -659,7 +689,7 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
     return refreshCatalog();
   });
   const deleteGlobalRule = body => write(async () => {
-    const workspace = await current(body?.revision);
+    const workspace = await current(body, scopeOf('rules'));
     if (typeof body?.ruleId !== 'string' || !body.ruleId) fail('RULE_DELETE_INVALID', '删除规则必须提供 ruleId');
     if (!workspace.rules.rules.some(rule => rule.id === body.ruleId)) fail('RULE_NOT_FOUND', '规则不存在：' + body.ruleId);
     workspace.rules.rules = workspace.rules.rules.filter(rule => rule.id !== body.ruleId);
@@ -676,9 +706,9 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
     return refreshCatalog();
   });
   const removeMechanicNodes = body => write(async () => {
-    const { revision, mechanicId, nodeIds } = body ?? {};
+    const { mechanicId, nodeIds } = body ?? {};
     if (!Array.isArray(nodeIds) || !nodeIds.length || new Set(nodeIds).size !== nodeIds.length || nodeIds.some(id => typeof id !== 'string')) fail('MECHANIC_NODE_REMOVE_INVALID', '必须提供不重复的概念 ID');
-    const workspace = await current(revision), index = workspace.mechanics.findIndex(item => item.id === mechanicId);
+    const workspace = await current(body, scopeOf('definitions', 'mechanic:' + mechanicId)), index = workspace.mechanics.findIndex(item => item.id === mechanicId);
     if (index < 0) fail('MECHANIC_NODE_REMOVE_INVALID', '目标机制图不存在');
     const mechanic = workspace.mechanics[index], removing = new Set(nodeIds);
     if (nodeIds.some(id => !mechanic.focusNodeIds.includes(id))) fail('MECHANIC_NODE_REMOVE_INVALID', '选中项不是当前机制图的基础概念节点');
@@ -709,10 +739,11 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
       return withExportPublication(workspace, schedulePublication(workspace));
     }),
     readForQuery: () => enqueue(() => readQuerySnapshot(root, { isolateResources: true })),
+    // 单文件保存只判定这份文件自己的语义版本：其他资源的写入不再阻塞它。
     save: body => write(async () => {
-      const { revision, kind, id, document } = body;
+      const { kind, id, document } = body;
       const readable = await readAvailable();
-      if (revision !== readable.revision) fail('REVISION_CONFLICT', '磁盘文件或目录已改变。草稿未覆盖文件；请导出草稿并重新读取后合并。');
+      assertRevision(body, readable, scopeOf(resourceKey(kind, id)));
       if (readable.compatibilityMode) return saveCompatiblePresentation(readable, { kind, id, document });
       const workspace = readable;
       assertDocument(document, kind);
@@ -759,7 +790,7 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
     setDocumentExport,
     generateDocumentExport,
     setAgentExportPath: body => write(async () => {
-      const workspace = await current(body.revision);
+      const workspace = await current(body, scopeOf('workspace'));
       return applyProjectSettings({ ...body, name: workspace.manifest.name });
     }),
     // 仅供服务关停与集成测试在直接读取或处理导出目录前等待派生发布完成。
