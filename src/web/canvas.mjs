@@ -1,6 +1,7 @@
 import { graphGeometryKey } from './route-cache.mjs';
 import { SNAP_GRID } from './layout-structure.mjs';
 import { affectedRouteIds } from './local-routing.mjs';
+import { edgeHoverDetail, nodeHoverDetail } from '../domain/hover-details.mjs';
 
 export { graphGeometryKey } from './route-cache.mjs';
 
@@ -2046,8 +2047,10 @@ export function incrementalEdgeGeometry(edge, positions, previousPositions, cach
 }
 
 export class GraphCanvas {
-  constructor(root, callbacks) {
+  constructor(root, callbacks, { readOnly = false, includeRelationInHover = false } = {}) {
     this.root = root; this.callbacks = callbacks; this.camera = { x: 50, y: 80, scale: 1 };
+    this.readOnly = readOnly;
+    this.includeRelationInHover = includeRelationInHover;
     this.graph = { nodes: [], edges: [] }; this.positions = {}; this.mode = 'select'; this.space = false;
     this.routed = new Map(); this.routeArchive = new Map(); this.nodeElements = new Map(); this.edgeElements = new Map(); this.geometryKey = null;
     this.tooltip = root.parentElement?.querySelector('#canvas-tooltip') ?? null;
@@ -2066,6 +2069,7 @@ export class GraphCanvas {
     root.addEventListener('lostpointercapture', () => { if (this.gesture) this.cancel(); });
     root.addEventListener('contextmenu', event => event.preventDefault());
     root.addEventListener('keydown', event => {
+      if (this.readOnly) return;
       if (event.key !== 'Enter') return;
       const node = event.target.closest('[data-node]');
       if (node) { event.preventDefault(); this.pick(node.dataset.node); }
@@ -2207,6 +2211,12 @@ export class GraphCanvas {
   }
   down(event) {
     if (this.gesture || ![0, 1, 2].includes(event.button)) return;
+    // 对话 widget 复用同一画布投影，但只允许平移与缩放，绝不进入选中、连线或位置写入路径。
+    if (this.readOnly) {
+      event.preventDefault();
+      this.gesture = { type: 'pan', pointerId: event.pointerId, x: event.clientX, y: event.clientY, original: { ...this.camera }, moved: false };
+      this.root.setPointerCapture(event.pointerId); this.root.classList.add('panning'); return;
+    }
     if (event.ctrlKey || event.metaKey || event.altKey) { this.lastClick = null; return; }
     const node = event.target.closest('[data-node]'), edge = event.target.closest('[data-edge]');
     if (event.button === 2 || event.button === 1 || this.space) {
@@ -2373,8 +2383,7 @@ export class GraphCanvas {
       const qualifierText = (qualifiers, side) => (qualifiers?.length ? `；${side}限定：${qualifiers.map(item => `${item.key}=${item.value.kind === 'concept' ? this.callbacks.name(item.value.conceptId) : String(item.value.value)}`).join('，')}` : '');
       const group = svg('g', { 'data-edge': edge.id, tabindex: 0, role: 'button', 'aria-label': `${this.callbacks.name(edge.source)}${qualifierText(edge.sourceQualifiers, '源')} ${relationName} ${this.callbacks.name(edge.target)}${qualifierText(edge.targetQualifiers, '目标')}` });
       const rules = edge.steps?.length ? edge.steps : [edge];
-      const ruleText = rules.map(rule => rule.ruleText).filter(text => text?.trim()).join('\n\n');
-      const tooltipText = `${ruleText}${qualifierText(edge.sourceQualifiers, '源')}${qualifierText(edge.targetQualifiers, '目标')}`.trim();
+      const tooltipText = edgeHoverDetail({ ...edge, ruleText: rules.map(rule => rule.ruleText).filter(text => text?.trim()).join('\n\n') }, this.callbacks.name, { includeRelation: Boolean(this.includeRelationInHover) });
       if (tooltipText) group.setAttribute('data-tooltip', tooltipText);
       const hit = svg('path', { d: path, class: 'edge-hit' });
       const line = svg('path', { d: path, class: `edge-line edge-${appearance} ${selected ? 'selected' : ''}`, 'marker-end': `url(#${appearance})`, 'pointer-events': 'none' });
@@ -2404,7 +2413,7 @@ export class GraphCanvas {
       const colorClass = nodeColor ? `node-color-${nodeColor.slice(1).toLowerCase()}` : '';
       const styleClass = this.nodeStyles?.[node.id] === 'transparent-dashed' ? 'node-style-transparent-dashed' : '';
       const group = svg('g', { 'data-node': node.id, transform: `translate(${point.x} ${point.y})`, class: `node ${selected ? 'selected' : ''} ${this.linkSource === node.id ? 'link-source' : ''} ${role} ${colorClass} ${styleClass}`, tabindex: 0, role: 'button', 'aria-label': node.label + roleLabel });
-      const tooltipText = [node.label, node.description].filter(Boolean).join('\n').trim();
+      const tooltipText = nodeHoverDetail(node);
       if (tooltipText) group.setAttribute('data-tooltip', tooltipText);
       const label = svg('text', { x: 16, y: 27 }); label.textContent = node.label.length > 10 ? `${node.label.slice(0, 10)}…` : node.label;
       const meta = svg('text', { x: 16, y: 45, class: 'node-meta' });

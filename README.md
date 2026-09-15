@@ -25,13 +25,15 @@ npm install -g @veewo/mechanics
 mech web
 ```
 
-`init` 在项目内创建固定 `.mechanics`，并把包内 `mechanics-search`、`mechanics-modeling` 注册到项目 `.agents/skills/`。它不覆盖已有工作区或内容不同的同名 skill；相同版本视为已注册。工作区 ID 默认取项目目录名；目录名不符合英文语义 ID 时必须显式传 `--id`。`web` 可不带项目启动，再从网页打开或初始化项目；`validate`、`catalog`、`root` 省略 `--project` 时向上寻找最近的 `.mechanics/workspace.json`。
+`init` 在项目内创建固定 `.mechanics`，并把包内 `mechanics-search`、`mechanics-modeling`、`mechanics-doc` 注册到项目 `.agents/skills/`。这些受管 skill 内容不同或包含过期附件时，会在项目打开或 `mech sync` 时以当前已安装包的完整目录替换；这不代表联网升级。工作区 ID 默认取项目目录名；目录名不符合英文语义 ID 时必须显式传 `--id`。安装与 Codex 配置见 [安装与 Codex 接入](docs/安装与Codex接入.md)。
 
 服务只在项目固定 `.mechanics` 中递归发现 `*.mechanic.json` 和 `*.view.json`，支持中文目录和空目录。统一定义只读取配置指定的唯一文件，机制按稳定 ID 接合。正式协议为 workspace v10、mechanic v6、definitions v5、view v3；旧协议、旧文件类型或旧字段严格失败，不提供运行时兼容。旧根目录只能用 `mech migrate-root --project <项目目录>` 预览后显式执行切换。详见 [CLI 与工作区](docs/CLI与工作区.md)。
 
 ## 从源码启动
 
 CLI 同时提供只读 `agent guide/scopes/search/graph/node/impact` 与受约束 `agent concept/rule` mutation。Agent 先用 guide 理解符号与模型边界，再搜索概念、按方向与距离查询相关机制；只有用户明确要求建模写入时才使用 mutation。默认语义 JSON，支持易读中文文本、整体/资源版本约束及在线服务。声明、推导与未知项明确分开。用法见 [Agent 查询与受约束写入](docs/Agent查询接口.md)。
+
+`mech mcp render` 提供面向对话的只读 MCP Apps widget：只接收已经消歧的 `conceptIds`，渲染这些概念和它们之间的声明关系，不承担搜索、路径推理或编辑。它把工作区固定在启动时的当前目录上下文，调用中不接受项目路径。详见 [Codex MCP Apps](docs/Codex%20MCP%20Apps.md)。
 
 每个项目还会在 `agentExportPath` 指定的目录（默认 `mechanics`）生成 `AGENTS.md`、`README.md`、唯一的 `concepts.md`，以及 `folders/<机制文件夹>/index.md`。文件夹页只汇总直接所属的机制图，并只链接子文件夹；概念仍是全局共享词典，不会随机制图复制成单独文件。它们是排除坐标、端口、连线路径和视图状态的只读 Agent 文档；canonical definitions/mechanics 仍是唯一可编辑真相。文档只投影概念、声明规则与已填写的规则文字，不由程序合成机制流程说明。
 
@@ -92,6 +94,7 @@ docs/                产品、架构、协议和后续实施切片
 - [开发路线](docs/开发路线.md)：已落地能力和后续验收。
 - [编辑器使用说明](docs/编辑器使用说明.md)：操作方式、保存归属和错误处理。
 - [CLI 与工作区](docs/CLI与工作区.md)：安装、新建、根定位、目录发现和显式迁移。
+- [安装与 DSH 接入](docs/安装与DSH接入.md)：在 DeepSeek Harness 里安装插件、使用 `mechanics_search` / `mechanics_graph` 与 widget、排障与卸载。
 
 正向与负向描述目标相对自身变化方向，不表示对玩家有利或不利。随机只表示方向不确定，不表示概率。路径方向不能代替数值模拟；结构疑点不能自动判定游戏不好玩。
 

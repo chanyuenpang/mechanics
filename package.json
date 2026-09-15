@@ -1,6 +1,6 @@
 {
   "name": "@veewo/mechanics",
-  "version": "0.7.5",
+  "version": "0.7.6",
   "private": false,
   "description": "Mechanics：规则、概念与关系解释工具",
   "type": "module",
@@ -31,6 +31,7 @@
     "node": ">=24"
   },
   "scripts": {
+    "build:mcp-widget": "node scripts/build-mcp-widget.mjs",
     "dev": "node src/server/cli.mjs web",
     "validate": "node src/server/cli.mjs validate",
     "test": "node --test",
@@ -39,10 +40,15 @@
     "cleanup:legacy-skills": "node scripts/cleanup-legacy-project-skills.mjs",
     "release:check": "npm run check && npm run check:package"
   },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "ajv": "^8.17.1",
     "elkjs": "^0.12.0",
     "libavoid-js": "0.5.0-beta.5",
-    "webcola": "^3.4.0"
+    "webcola": "^3.4.0",
+    "zod": "^4.6.5"
   }
 }

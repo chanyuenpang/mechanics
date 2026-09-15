@@ -43,6 +43,41 @@ function projectGraph(workspace) {
 const nodeDTO = node => ({ id: node.id, label: node.label, description: node.description, aliases: structuredClone(node.aliases ?? []), tagIds: structuredClone(node.tagIds ?? []), ...(node.customData ? { customData: node.customData } : {}) });
 const refDTO = node => ({ id: node.id, label: node.label });
 
+// 精确解析失败后的模糊候选：只提供线索，绝不自动消歧——调用方必须用候选里的稳定 ID 再查一次。
+// 同一字段同时命中前缀与包含时只记最强那一档，matchedBy 因此不重复描述同一次命中。
+const FUZZY_FIELDS = [
+  { field: 'label', mode: 'prefix', matchedBy: 'label-prefix', score: 100, texts: node => [node.label] },
+  { field: 'alias', mode: 'prefix', matchedBy: 'alias-prefix', score: 90, texts: node => node.aliases ?? [] },
+  { field: 'label', mode: 'contains', matchedBy: 'label-contains', score: 80, texts: node => [node.label] },
+  { field: 'alias', mode: 'contains', matchedBy: 'alias-contains', score: 70, texts: node => node.aliases ?? [] },
+  { field: 'id', mode: 'contains', matchedBy: 'id-contains', score: 60, texts: node => [node.id] },
+  { field: 'description', mode: 'contains', matchedBy: 'description-contains', score: 40, texts: node => [node.description] },
+];
+const FUZZY_CANDIDATE_LIMIT = 20;
+const fuzzyFieldHit = (field, needle, node) => field.texts(node).some(value => {
+  const text = value === undefined || value === null ? '' : normalizeSearchTerm(value);
+  return text ? (field.mode === 'prefix' ? text.startsWith(needle) : text.includes(needle)) : false;
+});
+
+export function fuzzyCandidates(nodes, key) {
+  const needle = normalizeSearchTerm(key);
+  if (!needle) return undefined;
+  const matches = [];
+  for (const node of nodes) {
+    const matchedBy = [], scores = [], prefixed = new Set();
+    for (const field of FUZZY_FIELDS) {
+      if (field.mode === 'contains' && prefixed.has(field.field)) continue;
+      if (!fuzzyFieldHit(field, needle, node)) continue;
+      if (field.mode === 'prefix') prefixed.add(field.field);
+      matchedBy.push(field.matchedBy); scores.push(field.score);
+    }
+    if (matchedBy.length) matches.push({ id: node.id, label: node.label, matchedBy, score: Math.max(...scores) });
+  }
+  if (!matches.length) return undefined;
+  matches.sort((left, right) => right.score - left.score || byId(left, right));
+  return { status: 'fuzzy', key, candidates: matches.slice(0, FUZZY_CANDIDATE_LIMIT), total: matches.length, truncated: matches.length > FUZZY_CANDIDATE_LIMIT };
+}
+
 function resolveConcept(nodes, key) {
   const normalized = normalizeSearchTerm(key);
   const idMatch = nodes.find(node => normalizeSearchTerm(node.id) === normalized);
@@ -134,7 +169,7 @@ export function queryWorkspace(workspace, request) {
   if (request.command === 'scopes') return { ...result, resourceRevisions: structuredClone(workspace.resourceRevisions), mechanics: workspace.mechanics.map(item => ({ id: item.id, name: item.name, scope: item.scope, nodeCount: item.focusNodeIds.length, edgeCount: workspace.rules.rules.filter(rule => item.pinnedRuleIds.includes(rule.id)).length })).sort(byId), views: workspace.views.map(item => ({ id: item.id, name: item.name })).sort(byId) };
   const graph = projectGraph(workspace), nodeMap = new Map(graph.nodes.map(node => [node.id, node]));
   if (request.command === 'search') {
-    if (request.query) { const resolution = resolveConcept(graph.nodes, request.query); return resolution.status === 'resolved' ? { ...result, query: request.query, resolution: { status: 'resolved', matchedBy: resolution.matchedBy }, concept: nodeDTO(resolution.concept) } : { ...result, query: request.query, resolution }; }
+    if (request.query) { const resolution = resolveConcept(graph.nodes, request.query); if (resolution.status === 'resolved') return { ...result, query: request.query, resolution: { status: 'resolved', matchedBy: resolution.matchedBy }, concept: nodeDTO(resolution.concept) }; if (resolution.status === 'ambiguous') return { ...result, query: request.query, resolution }; return { ...result, query: request.query, resolution: fuzzyCandidates(graph.nodes, request.query) ?? resolution }; }
     const from = resolveConcept(graph.nodes, request.from), to = resolveConcept(graph.nodes, request.to);
     if (from.status !== 'resolved' || to.status !== 'resolved') return { ...result, from: { key: request.from, ...from }, to: { key: request.to, ...to }, rules: null };
     const direct = (source, target) => graph.edges.filter(edge => edge.source === source.id && edge.target === target.id).map(edge => directRuleDTO(edge, nodeMap));

@@ -1,0 +1,54 @@
+{
+  "name": "@veewo/dsh-mechanics",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "DSH 的 Mechanics 适配插件：把项目内 .mechanics/tools/workspace-tool.mjs 的检索与对话图投影注册为 typed 工具，并携带对话流图卡数据。",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "mechanics",
+    "cordis-plugin"
+  ],
+  "license": "MIT",
+  "main": "src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./client": "./lib/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src/",
+    "lib/",
+    "scripts/",
+    "docs/",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-tool"
+      ],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "scripts": {
+    "preview": "node scripts/preview.mjs",
+    "preflight": "node scripts/preflight.mjs",
+    "verify-host": "node scripts/verify-host.mjs"
+  },
+  "dependencies": {
+    "@veewo/mechanics": "^0.7.6"
+  }
+}

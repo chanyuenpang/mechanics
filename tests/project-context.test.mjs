@@ -29,10 +29,14 @@ test('项目初始化原子创建固定工作区和默认 Agent 机制文档目�
   assert.equal(manifest.agentExportPath, 'mechanics');
   assert.match(await readFile(join(projectRoot, 'mechanics/AGENTS.md'), 'utf8'), /^# Mechanics Agent 文档使用规则/);
   assert.deepEqual((await readdir(join(projectRoot, 'mechanics'))).sort(), ['AGENTS.md', 'README.md', 'concepts.md']);
-  assert.deepEqual(result.projectSkills, ['.agents/skills/mechanics-search/SKILL.md', '.agents/skills/mechanics-modeling/SKILL.md']);
-  for (const skill of ['mechanics-search', 'mechanics-modeling']) {
+  assert.deepEqual(result.projectSkills, ['.agents/skills/mechanics-search/SKILL.md', '.agents/skills/mechanics-modeling/SKILL.md', '.agents/skills/mechanics-doc/SKILL.md']);
+  for (const skill of ['mechanics-search', 'mechanics-modeling', 'mechanics-doc']) {
     assert.equal(await readFile(join(projectRoot, '.agents/skills', skill, 'SKILL.md'), 'utf8'),
       await readFile(fileURLToPath(new URL(`../skills/${skill}/SKILL.md`, import.meta.url)), 'utf8'));
+  }
+  for (const document of ['安装与Codex接入.md', 'Codex MCP Apps.md', 'Agent查询接口.md', '文件协议.md', '架构设计.md']) {
+    assert.equal(await readFile(join(projectRoot, '.agents/skills/mechanics-doc/references', document), 'utf8'),
+      await readFile(fileURLToPath(new URL(`../docs/${document}`, import.meta.url)), 'utf8'));
   }
   assert.equal(await readFile(join(projectRoot, '.mechanics/tools/workspace-tool.mjs'), 'utf8'),
     await readFile(fileURLToPath(new URL('../workspace-tools/workspace-tool.mjs', import.meta.url)), 'utf8'));
@@ -61,14 +65,17 @@ test('网页打开既有项目时，以安装源覆盖内容不一致的建模 s
   const projectRoot = join(parent, 'sync-project'); await mkdir(projectRoot);
   await initProject(projectRoot, { name: '同步验证' });
   const target = join(projectRoot, '.agents/skills/mechanics-modeling/SKILL.md');
+  const docTarget = join(projectRoot, '.agents/skills/mechanics-doc/references/Codex MCP Apps.md');
   const tool = join(projectRoot, '.mechanics/tools/workspace-tool.mjs');
   await writeFile(target, '用户维护但未版本化的不同 skill');
+  await writeFile(docTarget, '过期接入文档快照');
   await rm(tool);
   const manager = createProjectManager();
   t.after(() => manager.close());
   await manager.open({ projectRoot, intent: 'existing' });
   const source = await readFile(fileURLToPath(new URL('../skills/mechanics-modeling/SKILL.md', import.meta.url)), 'utf8');
   assert.equal(await readFile(target, 'utf8'), source);
+  assert.equal(await readFile(docTarget, 'utf8'), await readFile(fileURLToPath(new URL('../docs/Codex MCP Apps.md', import.meta.url)), 'utf8'));
   assert.equal(await readFile(tool, 'utf8'), await readFile(fileURLToPath(new URL('../workspace-tools/workspace-tool.mjs', import.meta.url)), 'utf8'));
 });
 

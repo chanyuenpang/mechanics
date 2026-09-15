@@ -1,0 +1,11 @@
+# mechanics 的 DSH bundle：一行 host 插件，注册 mechanics_search 与 mechanics_graph。
+#
+# 安装（两条都要做，再重启 Host）：
+#   1. dsh plugin --profile <profile> add <本目录路径或已发布的 @veewo/dsh-mechanics>
+#   2. 把本文件里的 insert 行并入该 profile 的 cordis.patch.yml
+#
+# 插件只读取项目内受管工具 .mechanics/tools/workspace-tool.mjs：项目需要先 mech init 或
+# mech sync 到包含 search 模糊模式与 graph 命令的版本，否则工具调用会显式失败。
+- insert:
+    - id: mechanics
+      name: '@veewo/dsh-mechanics'

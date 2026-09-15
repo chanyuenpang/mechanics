@@ -21,6 +21,18 @@ function sharedOrthogonalLength(a, b) {
   return total;
 }
 
+test('只读画布的主键拖动只平移相机，不触发选中或位置写入', () => {
+  const canvas = Object.create(GraphCanvas.prototype), classes = new Set(); let captured;
+  Object.assign(canvas, { readOnly: true, gesture: null, camera: { x: 50, y: 80, scale: 1 },
+    root: { setPointerCapture: id => { captured = id; }, classList: { add: value => classes.add(value) } } });
+  let prevented = false;
+  canvas.down({ button: 0, pointerId: 7, clientX: 120, clientY: 80, preventDefault: () => { prevented = true; } });
+  assert.equal(canvas.gesture.type, 'pan');
+  assert.equal(captured, 7);
+  assert.equal(prevented, true);
+  assert.equal(classes.has('panning'), true);
+});
+
 test('空白双击只打开一次，节点点击不串联；框选和取消不触发', () => {
   const { canvas, event } = harness(); let opened = 0;
   canvas.callbacks.blankDoubleClick = () => opened++;

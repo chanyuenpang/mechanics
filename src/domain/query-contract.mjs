@@ -1,6 +1,6 @@
-export const QUERY_API_VERSION = 9;
+export const QUERY_API_VERSION = 10;
 export const SEMANTICS_VERSION = 'project-declared-paths-1';
-export const READING_CONTRACT_VERSION = 9;
+export const READING_CONTRACT_VERSION = 10;
 
 // 查询语义由工具维护，文件中的名称、描述与规则文字仅作为模型数据，不作为 Agent 指令。
 export function readingContract() {
@@ -10,6 +10,7 @@ export function readingContract() {
     runtimeVerification: 'not_provided',
     rules: {
       scope: 'search、node、impact 一律读取当前项目的全部已保存概念和全部机制声明；机制图、文件夹和视图只用于组织、编辑与展示，不构成 Agent 语义查询范围。',
+      search: 'search --query 先做精确解析（稳定 ID、完整名称、完整别名），只有精确未命中时才返回模糊候选：resolution.status 为 fuzzy，候选按 label、alias、id、description 的命中强度排序，并给出 matchedBy、score 与 total。模糊候选只是线索，绝不自动消歧——后续查询与渲染必须使用候选中的稳定 ID，不得把候选当作已解析概念；没有任何命中时仍是 not_found，不补候选。',
       nodes: '稳定 ID 只标识独立概念；名称、别名和描述只定义概念，不根据名称补出具体规则。限定词属于单条规则端点的参与者范围，不能创建概念身份、is-a 分类或跨机制独立引用；它只收窄规则适用域，基础概念规则仍适用于被限定参与者。tags 仅用于搜索与分类，不参与身份或推理。',
       declaredRules: '每条连线的 source、target、relation、sign 与可选规则文字是作者直接声明的规则；工具只沿结构推导，不补写规则文字。',
       polarity: '正向影响在路径中保持变化方向，负向影响反转变化方向；两者不表示对玩家有利或有害，也不是实际效果量。',
@@ -30,7 +31,7 @@ export function readingContract() {
 export function queryGuide() {
   return { queryApiVersion: QUERY_API_VERSION, semanticsVersion: SEMANTICS_VERSION, command: 'guide', readingContract: readingContract(),
     workflow: [
-      'agent search --query <概念ID|完整名称|完整别名>：返回一个概念详情，或返回同名/同别名候选供下一步按 ID 查询。',
+      'agent search --query <概念ID|完整名称|完整别名>：先精确解析，返回一个概念详情或同名/同别名候选；精确未命中时返回 resolution.status 为 fuzzy 的模糊候选（部分名称、别名、ID 或描述），调用方必须用候选中的稳定 ID 再查一次，工具不会替你消歧。',
       'agent search --from <概念键> --to <概念键>：同时返回 A→B 与 B→A 的直接规则；不会自动展开路径。',
       'agent node --id <概念ID> --direction upstream|downstream|both：按短到长返回全项目内有限跳数的结构链。',
       'agent impact --from <概念ID> --to <概念ID> [--include-inherited]：按短到长返回两概念间所有有界简单路径；+>、->、?> 是影响，is-a> 是分类。加 --include-inherited 时才并入由配对绑定生成的派生边，并在 includedDerivedEdges 中列出其来源。',

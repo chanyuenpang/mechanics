@@ -31,6 +31,27 @@ test('search 精确解析 ID、名称和别名；歧义只返回候选', () => {
   assert.deepEqual(ambiguous.resolution.candidates.map(item => item.id), ['guard', 'guard-alt']);
 });
 
+test('search 精确未命中返回模糊候选，且绝不自动消歧', () => {
+  const prefix = queryWorkspace(workspace, { command: 'search', query: '士' });
+  assert.equal(prefix.resolution.status, 'fuzzy');
+  assert.equal(prefix.concept, undefined);
+  assert.deepEqual(prefix.resolution.candidates.map(item => item.id), ['soldier']);
+  assert.deepEqual(prefix.resolution.candidates[0].matchedBy, ['label-prefix', 'alias-contains']);
+  assert.equal(prefix.resolution.candidates[0].score, 100);
+  assert.equal(prefix.resolution.total, 1);
+  assert.equal(prefix.resolution.truncated, false);
+  const alias = queryWorkspace(workspace, { command: 'search', query: '战' });
+  assert.equal(alias.resolution.status, 'fuzzy');
+  assert.equal(alias.resolution.candidates[0].id, 'soldier');
+  assert.equal(alias.resolution.candidates[0].matchedBy[0], 'alias-prefix');
+  const description = queryWorkspace(workspace, { command: 'search', query: '生命值' });
+  assert.deepEqual(description.resolution.candidates.map(item => item.id), ['health']);
+  assert.deepEqual(description.resolution.candidates[0].matchedBy, ['description-contains']);
+  const missing = queryWorkspace(workspace, { command: 'search', query: '完全不存在的概念' });
+  assert.equal(missing.resolution.status, 'not_found');
+  assert.equal(missing.resolution.candidates, undefined);
+});
+
 test('search 双概念返回双向直接规则，且不要求机制范围', () => {
   const result = queryWorkspace(workspace, { command: 'search', from: '士兵', to: '攻击' });
   assert.equal(result.rules.forward[0].operator, '+>');

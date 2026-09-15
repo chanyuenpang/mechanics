@@ -9,6 +9,8 @@ metadata:
 
 只运行 `node <项目>/.mechanics/tools/workspace-tool.mjs`。工具直接读写 canonical JSON，不依赖或调用 CLI、网页、HTTP 服务、自动排版或文档导出。
 
+DSH 插件当前只提供只读能力（检索与图 widget），**没有**写入工具；在装了插件的宿主里建模写入仍然走下面的 JSON 草稿流程，不要以为插件可以代劳。
+
 ## JSON 草稿流程
 
 1. 先运行 `guide`，以脚本返回的概念、影响规则与 is-a 规则模板为唯一草稿字段合同；不要凭记忆编造 JSON 字段。

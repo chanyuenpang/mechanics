@@ -26,9 +26,9 @@ assert.ok(!names.includes('examples/card-game/.mechanics/.mechanics.lock'), '打
 assert.ok(!names.some(path => path.includes('/.rule-text-backup-')), '打包清单不得包含规则文本备份');
 assert.ok(!names.some(path => path.includes('/.agents/')), '打包清单不得包含项目注册 skill 副本');
 assert.ok(!names.some(path => path.includes('/game-mechanics/')), '打包清单不得包含生成的 Agent 文档');
-for (const path of ['src/server/cli.mjs', 'src/server/native-directory-picker.mjs', 'src/server/windows-directory-dialog.cs', 'src/web/glossary.mjs', 'src/web/view-files.mjs', 'src/web/graph-compute.mjs',
+for (const path of ['src/server/cli.mjs', 'src/server/mcp-render.mjs', 'src/server/mcp-render-cli.mjs', 'src/mcp/concepts-widget.html', 'src/mcp/concepts-widget.bundle.js', 'src/mcp/concepts-widget-source.mjs', 'src/domain/conversation-projection.mjs', 'src/domain/hover-details.mjs', 'src/server/native-directory-picker.mjs', 'src/server/windows-directory-dialog.cs', 'src/web/glossary.mjs', 'src/web/view-files.mjs', 'src/web/graph-compute.mjs',
   'src/web/graph-compute-kernel.mjs', 'src/web/graph-compute-worker.js', 'src/web/geometry-settle.mjs', 'src/web/hierarchical-layout.mjs', 'src/web/layout-structure.mjs', 'src/web/local-routing.mjs', 'src/web/flow-refinement.mjs', 'src/web/index.html', 'schemas/protocol.schema.json']) assert.ok(names.includes(path), path);
-for (const path of ['skills/mechanics-search/SKILL.md', 'skills/mechanics-modeling/SKILL.md']) assert.ok(names.includes(path), path);
+for (const path of ['skills/mechanics-search/SKILL.md', 'skills/mechanics-modeling/SKILL.md', 'skills/mechanics-doc/SKILL.md', 'skills/mechanics-doc/agents/openai.yaml', 'docs/安装与Codex接入.md']) assert.ok(names.includes(path), path);
 await mkdir(join(root, 'dist'), { recursive: true });
 const [packed] = JSON.parse(command(process.execPath, [npm, ...packArgs, '--pack-destination', join(root, 'dist')]));
 assert.deepEqual(packed.files.map(file => file.path), names);
@@ -53,24 +53,28 @@ try {
   assert.match(command(process.execPath, [cli, '--help'], temporary), /init/);
   const workspace = join(temporary, '规则资料');
   const initialized = JSON.parse(command(process.execPath, [cli, 'init', workspace, '--id', 'package-check'], temporary));
-  assert.deepEqual(initialized.projectSkills, ['.agents/skills/mechanics-search/SKILL.md', '.agents/skills/mechanics-modeling/SKILL.md']);
-  for (const name of ['mechanics-search', 'mechanics-modeling']) {
+  assert.deepEqual(initialized.projectSkills, ['.agents/skills/mechanics-search/SKILL.md', '.agents/skills/mechanics-modeling/SKILL.md', '.agents/skills/mechanics-doc/SKILL.md']);
+  for (const name of ['mechanics-search', 'mechanics-modeling', 'mechanics-doc']) {
     assert.equal(await readFile(join(workspace, '.agents', 'skills', name, 'SKILL.md'), 'utf8'),
       await readFile(join(installed, 'skills', name, 'SKILL.md'), 'utf8'));
+  }
+  for (const document of ['安装与Codex接入.md', '安装与DSH接入.md', 'Codex MCP Apps.md', 'Agent查询接口.md', '文件协议.md', '架构设计.md']) {
+    assert.equal(await readFile(join(workspace, '.agents/skills/mechanics-doc/references', document), 'utf8'),
+      await readFile(join(installed, 'docs', document), 'utf8'));
   }
   const manifestBefore = await readFile(join(workspace, '.mechanics', 'workspace.json'), 'utf8');
   const data = JSON.parse(command(process.execPath, [cli, 'validate'], join(workspace, '.mechanics', 'mechanics')));
   assert.equal(data.workspaceId, 'package-check');
   const scopes = JSON.parse(command(process.execPath, [cli, 'agent', 'scopes'], join(workspace, '.mechanics', 'mechanics')));
   assert.equal(scopes.workspaceId, 'package-check');
-  assert.equal(scopes.queryApiVersion, 9);
+  assert.equal(scopes.queryApiVersion, 10);
   assert.match(scopes.resourceRevisions.definitions, /^[a-f0-9]{64}$/u);
   const guide = JSON.parse(command(process.execPath, [cli, 'agent', 'guide'], temporary));
-  assert.equal(guide.queryApiVersion, 9);
-  assert.equal(guide.readingContract.version, 9);
+  assert.equal(guide.queryApiVersion, 10);
+  assert.equal(guide.readingContract.version, 10);
   const search = JSON.parse(command(process.execPath, [cli, 'agent', 'search', '--query', '未建模概念'], join(workspace, '.mechanics', 'mechanics')));
-  assert.equal(search.queryApiVersion, 9);
-  assert.equal(search.readingContract.version, 9);
+  assert.equal(search.queryApiVersion, 10);
+  assert.equal(search.readingContract.version, 10);
   assert.equal(search.resolution.status, 'not_found');
   const created = JSON.parse(command(process.execPath, [cli, 'agent', 'concept', 'create', '--project', workspace,
     '--id', 'package-focus', '--label', '打包专注', '--description', '隔离安装验收使用的概念。', '--aliases', '[]',

@@ -15,12 +15,14 @@ import { projectContext, WORKSPACE_DIRECTORY } from './project-context.mjs';
 import { listProjectReferences } from './project-references.mjs';
 import { registerProjectSkills } from './project-skills.mjs';
 import { migrateLegacyProject } from './migrate-legacy-project.mjs';
+import { startRenderServer } from './mcp-render.mjs';
 
 const usage = `Mechanics ${metadata.version} · 规则、概念与关系解释工具
 
 mech init <项目目录> [--name <名称>] [--id <稳定ID>]
 mech sync [--project <项目目录>]（同步项目内受管 skill 与 JSON 工具）
 mech web [--project <项目目录>] [--port 4319]
+mech mcp render（在当前目录向上定位固定 .mechanics 后启动只读对话渲染 MCP server）
 mech validate [--project <项目目录>]
 mech migrate --from 7 --to 8 | --from 8 --to 9 | --from 9 --to 10 | --from 10 --to 12 | --from 11 --to 12 | --from 9 --to 9（悬空节点修复） --project <项目目录> [--revision <预览版本>] [--execute]（默认仅预览）
 mech migrate-project --project <旧项目目录> [--execute]（旧 .game-graph 的一键显式迁移）
@@ -77,6 +79,10 @@ try {
   const [command, target] = positionals;
   if (values.help || (!command && !Object.keys(values).length)) console.log(usage);
   else if (values.version && !command && Object.keys(values).length === 1) console.log(metadata.version);
+  else if (command === 'mcp') {
+    if (target !== 'render' || positionals.length !== 2 || Object.keys(values).length) throw new Error('mcp 仅支持 render，且不接受参数。');
+    await startRenderServer();
+  }
   else if (command === 'agent') {
     if (target === 'draft') {
       if (positionals.length !== 3) throw Object.assign(new Error('draft 需要动作子命令'), { code: 'AGENT_DRAFT_INVALID' });

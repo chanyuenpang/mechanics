@@ -4,7 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { readWorkspace } from '../src/server/workspace.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-for (const directory of ['src', 'scripts', 'tests']) {
+// packages/ 下的独立发布包同样进入语法检查：它们不在任何 bundle 里，语法错误只能靠这里拦住。
+for (const directory of ['src', 'scripts', 'tests', 'packages']) {
   for (const file of await readdir(new URL(`../${directory}/`, import.meta.url), { recursive: true })) {
     if (!file.endsWith('.mjs')) continue;
     const result = spawnSync(process.execPath, ['--check', `${directory}/${file}`], { cwd: root, stdio: 'inherit' });
