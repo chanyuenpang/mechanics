@@ -292,8 +292,14 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
     const nextManifest = Array.isArray(lastView?.graphIds) && lastView.graphIds.includes(body.mechanicId)
       ? { ...workspace.manifest, lastView: { ...lastView, graphIds: lastView.graphIds.filter(id => id !== body.mechanicId) } }
       : workspace.manifest;
+    // 删除必须与新建对称：导出清单里指向该机制图的单独选择要一起移除，
+    // 否则会留下悬空引用，让整个工作区在下次校验时失败（validate 的 requireReference）。
+    const selections = Array.isArray(workspace.manifest.exportSelections) ? workspace.manifest.exportSelections : null;
+    const remaining = selections?.filter(item => !(item.kind === 'mechanic' && item.mechanicId === body.mechanicId));
+    const manifestAfterDelete = selections !== null && remaining.length !== selections.length
+      ? { ...(nextManifest ?? workspace.manifest), exportSelections: remaining } : nextManifest;
     const changes = [{ path: file.path, delete: true }];
-    if (nextManifest !== workspace.manifest) changes.push({ path: 'workspace.json', document: nextManifest });
+    if (manifestAfterDelete !== workspace.manifest) changes.push({ path: 'workspace.json', document: manifestAfterDelete });
     await commitFiles(root, changes, { verify: () => readWorkspace(root) });
     try { return await refreshCatalog(); }
     catch (error) { fail('AGENT_EXPORT_FAILED', '机制图已删除，但 Agent 机制文档发布失败：' + error.message,

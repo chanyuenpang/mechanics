@@ -113,6 +113,13 @@ test('新建机制图默认进入单独导出；文件夹已覆盖时不重复�
     // 文件夹已覆盖其直接机制图：新建不再补单独选择，否则会触发 DOCUMENT_EXPORT_CONFLICT。
     const nested = await store.createMechanic({ revision: folder.revision, document: document('cards-second'), file: 'mechanics/cards/cards-second.mechanic.json' });
     assert.deepEqual(nested.manifest.exportSelections, [{ kind: 'folder', folder: 'cards' }]);
+    // 删除与新建对称：单独选择必须一起移除，否则留下悬空引用让整个工作区校验失败。
+    const isolated = await store.createMechanic({ revision: nested.revision, document: document('isolated-graph'), file: 'mechanics/isolated-graph.mechanic.json' });
+    assert.ok(isolated.manifest.exportSelections.some(item => item.mechanicId === 'isolated-graph'));
+    const removed = await store.deleteMechanic({ revision: isolated.revision, mechanicId: 'isolated-graph' });
+    assert.equal(removed.manifest.exportSelections.some(item => item.mechanicId === 'isolated-graph'), false);
+    assert.deepEqual(removed.manifest.exportSelections, [{ kind: 'folder', folder: 'cards' }]);
+    assert.doesNotThrow(() => validateWorkspace(removed));
   } finally { await store.close(); }
 });
 
