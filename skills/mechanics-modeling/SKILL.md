@@ -2,7 +2,7 @@
 name: mechanics-modeling
 description: 使用项目内 JSON 草稿工具修改规则、概念与关系；仅在用户明确要求写入或建模时使用，不用于网页布局、视图或文档发布。
 metadata:
-  mechanics_skill_version: "2026.09.11.2"
+  mechanics_skill_version: "2026.09.15.1"
 ---
 
 # Mechanics 建模
@@ -10,6 +10,8 @@ metadata:
 只运行 `node <项目>/.mechanics/tools/workspace-tool.mjs`。工具直接读写 canonical JSON，不依赖或调用 CLI、网页、HTTP 服务、自动排版或文档导出。
 
 DSH 插件当前只提供只读能力（检索与图 widget），**没有**写入工具；在装了插件的宿主里建模写入仍然走下面的 JSON 草稿流程，不要以为插件可以代劳。
+
+`draft save` 在**新建**机制图时会顺带维护导出清单（`workspace.json` 的 `manifest.exportSelections`），结果里回报 `exportSelection`：`added`（补了一条单独选择）、`already-selected`、`covered-by-folder`（所在直接文件夹已选中，按互斥规则不补）、`legacy-all`（工作区未启用显式清单）。视图永不自动导出。文档本身仍需显式生成——工具只维护清单。若打开草稿后 `workspace.json` 变化，保存以 `RESOURCE_REVISION_CONFLICT` 失败并保留草稿。
 
 ## JSON 草稿流程
 

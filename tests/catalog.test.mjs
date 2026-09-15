@@ -95,6 +95,27 @@ test('导出清单将文件夹聚合为一篇，单机制图保持独立且不�
   assert.throws(() => validateWorkspace(workspace), { code: 'DOCUMENT_EXPORT_CONFLICT' });
 });
 
+test('新建机制图默认进入单独导出；文件夹已覆盖时不重复，视图不进清单', async t => {
+  const { root, workspace } = await fixture(t);
+  const store = await createWorkspaceStore(root);
+  const document = id => ({ schemaVersion: 7, kind: 'mechanic', workspaceId: workspace.manifest.id, id, name: '新建机制',
+    scope: '验收新建默认导出。', focusNodeIds: [], pinnedRuleIds: [], positions: {} });
+  try {
+    const existing = workspace.mechanics[0];
+    const seeded = await store.setDocumentExport({ revision: workspace.revision, selections: [{ kind: 'mechanic', mechanicId: existing.id }] });
+    // 新建一张不在已选文件夹里的机制图：默认补一条单独选择，且不引入视图选择。
+    const created = await store.createMechanic({ revision: seeded.revision, document: document('fresh-graph'), file: 'mechanics/fresh-graph.mechanic.json' });
+    assert.ok(created.manifest.exportSelections.some(item => item.kind === 'mechanic' && item.mechanicId === 'fresh-graph'));
+    assert.equal(created.manifest.exportSelections.some(item => item.kind === 'view'), false);
+    // 先建一张落在 cards 里的机制图，再把导出范围收敛为文件夹选择。
+    const inFolder = await store.createMechanic({ revision: created.revision, document: document('cards-fresh'), file: 'mechanics/cards/cards-fresh.mechanic.json' });
+    const folder = await store.setDocumentExport({ revision: inFolder.revision, selections: [{ kind: 'folder', folder: 'cards' }] });
+    // 文件夹已覆盖其直接机制图：新建不再补单独选择，否则会触发 DOCUMENT_EXPORT_CONFLICT。
+    const nested = await store.createMechanic({ revision: folder.revision, document: document('cards-second'), file: 'mechanics/cards/cards-second.mechanic.json' });
+    assert.deepEqual(nested.manifest.exportSelections, [{ kind: 'folder', folder: 'cards' }]);
+  } finally { await store.close(); }
+});
+
 test('保存导出清单在后台生成文档，显式生成只复用当前 canonical 范围', async t => {
   const { root, exportRoot, workspace } = await fixture(t);
   const store = await createWorkspaceStore(root);

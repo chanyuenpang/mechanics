@@ -6,7 +6,7 @@ import { encode, commitFile, commitFiles, acquireWorkspaceLock } from './files.m
 import { planV7ToV8Migration, planV8ToV9Migration, planV9ToV10Migration, planV10ToV11Migration, planV11ToV12Migration, planV9DanglingNodeRepair } from './migration.mjs';
 import { assertDocument, validateWorkspace, ContractError } from '../domain/validate.mjs';
 import { composeView } from '../domain/view.mjs';
-import { documentExportStructure } from '../domain/document-export.mjs';
+import { documentExportStructure, mechanicFolderOf, selectCreatedMechanic } from '../domain/document-export.mjs';
 import { readQuerySnapshot } from './query-snapshot.mjs';
 import { assertCatalogRemovable, buildCatalog, inspectCatalogPublication, publishCatalog, removeCatalog } from './catalog.mjs';
 import { projectContext, WORKSPACE_DIRECTORY } from './project-context.mjs';
@@ -314,12 +314,18 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
       const folder = posix.dirname(file);
       if (!workspace.directories.includes(folder)) fail('FOLDER_NOT_FOUND', '目标机制文件夹不存在：' + folder.replace(/^mechanics\/?/, ''));
     }
-    documents.push(document); workspace.files.push({ kind, id: document.id, path: file }); validateWorkspace(workspace);
+    documents.push(document); workspace.files.push({ kind, id: document.id, path: file });
+    const selectionAdded = kind === 'mechanic'
+      ? selectCreatedMechanic(workspace.manifest, document.id, mechanicFolderOf(file)) : false;
+    validateWorkspace(workspace);
     if (kind === 'view') composeView(workspace, document);
     const text = encode(document), parent = posix.dirname(file);
     await ensureWorkspaceDirectory(root, parent === '.' ? '' : parent);
     try { await commitFile(root, file, text, { create: true }); }
     catch (error) { error.message += '；目标：' + file + '。父目录可能已创建，请重新读取目录。'; throw error; }
+    // 机制图文件先落盘、导出清单后落盘：清单写失败会显式抛出，不会留下"文件在、清单没更新"的静默状态；
+    // 反过来则会留下指向不存在机制图的选择，下一次读取直接校验失败。
+    if (selectionAdded) await commitFile(root, 'workspace.json', encode(workspace.manifest));
     return kind === 'mechanic' || kind === 'view' ? refreshCatalog() : verified();
   });
   const agentMechanic = async body => {

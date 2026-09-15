@@ -37,7 +37,7 @@ test('search --from/--to 仍只做精确解析，guide 已声明模糊语义', a
   assert.equal(pair.rules, null);
   assert.equal(pair.from.status, 'not_found');
   const guide = await runWorkspaceTool(projectRoot, ['guide']);
-  assert.equal(guide.contractVersion, 5);
+  assert.equal(guide.contractVersion, 6);
   assert.ok(guide.commands.includes('graph'));
   assert.ok(guide.constraints.some(item => item.includes('fuzzy')));
 });

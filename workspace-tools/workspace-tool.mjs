@@ -30,16 +30,31 @@ const readFolders = async (directory, prefix = '') => { const entries = await re
 const folderSegment = (value, location) => { if (typeof value !== 'string' || !value || value === '.' || value === '..' || /[\\/\u0000-\u001f<>:"|?*]/u.test(value)) fail('TOOL_INVALID', `${location} 必须是单段安全目录名`); return value; };
 const folder = (value, location = 'folder') => { if (value === undefined || value === '') return ''; if (typeof value !== 'string') fail('TOOL_INVALID', `${location} 无效`); return value.split('/').map(segment => folderSegment(segment, location)).join('/'); };
 const mechanicDirectory = value => join(workspace, 'mechanics', ...value.split('/').filter(Boolean));
+const mechanicsRoot = join(workspace, 'mechanics');
+const mechanicFolder = file => { const parent = relative(mechanicsRoot, dirname(file)).split(sep).join('/'); return parent === '.' ? '' : parent; };
+// 新建机制图默认进入单独导出。规则与 src/domain/document-export.mjs 的 selectCreatedMechanic 完全一致：
+// 本工具是零依赖单文件（会被拷进 <项目>/.mechanics/tools/），不能 import src/，因此保留这份内联实现，
+// 并由 tests/workspace-tool-export.test.mjs 的一致性用例钉住两边同规则。
+// 返回值即保存结果里的 exportSelection：legacy-all | already-selected | covered-by-folder | added。
+function selectCreatedMechanic(manifest, mechanicId, targetFolder) {
+  const selections = manifest?.exportSelections;
+  if (!Array.isArray(selections)) return 'legacy-all';
+  if (selections.some(item => item.kind === 'mechanic' && item.mechanicId === mechanicId)) return 'already-selected';
+  if (targetFolder && selections.some(item => item.kind === 'folder' && item.folder === targetFolder)) return 'covered-by-folder';
+  selections.push({ kind: 'mechanic', mechanicId });
+  return 'added';
+}
 async function snapshot() { const manifest = await parse(join(workspace, 'workspace.json')), definitions = await parse(join(workspace, 'definitions.json')), rules = await parse(join(workspace, 'rules.json')); const mechanicsRoot = join(workspace, 'mechanics'); const paths = await readMechanicPaths(mechanicsRoot); const mechanics = await Promise.all(paths.map(parse)); const nodes = definitions.value.nodes ?? []; const edges = (rules.value.rules ?? []).map(edge => ({ ...edge, origin: { ruleId: edge.id } })); const revision = hash([manifest.revision, definitions.revision, rules.revision, ...mechanics.map(item => item.revision)].join('\n'));
   return { manifest, definitions, rules, mechanics, folders: await readFolders(mechanicsRoot), nodes, edges, revision, nodeMap: new Map(nodes.map(node => [node.id, node])) }; }
 const operator = edge => edge.relation === 'specializes' ? 'is-a>' : edge.sign === 1 ? '+>' : edge.sign === -1 ? '->' : '?>';
 const guide = () => ({
-  contractVersion: 5,
+  contractVersion: 6,
   commands: ['scopes', 'search', 'graph', 'node', 'impact', 'draft open', 'draft validate', 'draft save'],
   workflow: ['scopes', 'draft open（目标不存在时携带名称与范围）', '编辑 definitions.json、rules.json 与 mechanic.json 三份草稿', 'draft validate', 'draft save'],
   conceptTemplate: { id: 'stable-concept-id', label: '概念名称', description: '概念定义。', tagIds: ['existing-tag-id'], agentLocked: false },
   influenceRuleTemplate: { id: 'source-concept-2-target-concept', source: 'source-concept', target: 'target-concept', relation: 'influence', sign: 1, inheritance: { mode: 'none' }, ruleText: '源概念如何影响目标概念。' },
   specializesRuleTemplate: { id: 'subtype-concept-2-supertype-concept', source: 'subtype-concept', target: 'supertype-concept', relation: 'specializes' },
+  exportMaintenance: { createdMechanic: '新建机制图默认进入单独导出：curated 模式补一条独立选择，机制图所在的直接文件夹已选中则不补，视图永不自动进入导出清单', documents: '工具只维护导出清单；文档本身仍需显式生成（网页或 CLI）', failure: 'workspace.json 基线不符报 RESOURCE_REVISION_CONFLICT，提交后回读不符报 SAVE_UNCERTAIN；两者都保留草稿、canonical 零写入或已回滚' },
   mechanicSelection: { optionalField: 'ruleSelection', allowedValue: 'explicit', whenOmitted: '按 focusNodeIds 展开一跳规则并合入 pinnedRuleIds', whenExplicit: '节点保留 focusNodeIds 与固定规则端点；只投影 pinnedRuleIds 的规则，不展开相邻规则' },
   constraints: ['概念标签只引用 definitions.tagDefinitions 中已存在的 tagIds；显示名和颜色只在标签表维护', '所有持久化 ID 使用英文小写 kebab-case', '规则只存于 rules.json，ID 固定为 source-2-target', '同一有向端点对在全工作区只能有一条规则', 'mechanic 用 focusNodeIds 与 pinnedRuleIds 选择投影；省略 ruleSelection 时展开焦点邻接规则，explicit 时只投影固定规则与焦点节点', '限定词只属于 influence 规则端点', 'node 的 upstream 只表示发现上游的遍历方向；paths 中的 nodes、steps、chain 与 effect 始终按规则声明的 source → target 方向返回', '草稿不允许 positions、projectionPositions 或 routeCache', 'save 前必须 validate；save 不执行自动排版或文档导出', 'search --query 先精确解析，只有精确未命中才返回 resolution.status 为 fuzzy 的模糊候选（label、alias、id、description），候选只是线索，必须用其中的稳定 ID 再查一次，工具不会自动消歧', 'graph --ids 只投影请求集合内部已声明的规则；集合外端点、路径推导、视图、坐标与配色都不进入结果'],
 });
@@ -238,6 +253,8 @@ async function openDraft(mechanicId, options) {
   await writeFile(rulesPath, JSON.stringify(structuralCopy(data.rules.value), null, 2) + '\n');
   await writeFile(mechanicPath, JSON.stringify(structuralCopy(document), null, 2) + '\n');
   const meta = { id, workspaceId: data.manifest.value.id, mechanicId, definitionsRevision: data.definitions.revision, rulesRevision: data.rules.revision,
+    // workspace.json 基线：新建机制图要顺带维护导出清单，缺基线就拒绝保存（不补默认值）。
+    manifestRevision: data.manifest.revision,
     mechanicRevision: mechanic?.revision ?? null, targetFile: mechanic?.path ?? join(mechanicDirectory(targetFolder), `${mechanicId}.mechanic.json`), created: !mechanic };
   await writeFile(join(draftFolder, 'draft.json'), JSON.stringify(meta, null, 2) + '\n');
   return { draftId: id, draftPath: draftFolder, definitionsPath, rulesPath, mechanicPath, revision: data.revision, target: mechanic ? 'existing' : 'new',
@@ -252,6 +269,15 @@ async function saveDraft(id, validateOnly = false) { const folder = join(drafts,
     validateRules(draftRules.value, meta.workspaceId, nodes);
     validateMechanic(draftMechanic.value, meta.workspaceId, nodes, draftRules.value);
     if (validateOnly) return { valid: true, draftId: id, revision: data.revision };
+    const targetFolder = mechanicFolder(meta.targetFile);
+    let exportSelection = 'existing-mechanic';
+    if (creating) {
+      const curated = Array.isArray(data.manifest.value.exportSelections);
+      if (curated && meta.manifestRevision === undefined) fail('DRAFT_BASELINE_MISSING', '草稿缺少 workspace.json 基线版本，无法安全维护导出清单；请重新 draft open');
+      if (curated && data.manifest.revision !== meta.manifestRevision) fail('RESOURCE_REVISION_CONFLICT', '保存前 workspace.json 已变化；草稿已保留');
+      exportSelection = selectCreatedMechanic(data.manifest.value, meta.mechanicId, targetFolder);
+    }
+    const exportManifest = exportSelection === 'added';
     const definitions = structuredClone(draftDefinitions.value), rules = structuredClone(draftRules.value), document = structuredClone(draftMechanic.value);
     definitions.positions = retainedPositions(data.definitions.value.positions, new Set(definitions.nodes.map(node => node.id)));
     const projectedNodeIds = new Set([...document.focusNodeIds, ...rules.rules.filter(rule => document.pinnedRuleIds.includes(rule.id)
@@ -260,33 +286,48 @@ async function saveDraft(id, validateOnly = false) { const folder = join(drafts,
     const targetMechanicPath = meta.targetFile;
     const temporaryDefinitions = data.definitions.path + '.' + randomUUID() + '.tmp', temporaryRules = data.rules.path + '.' + randomUUID() + '.tmp', temporaryMechanic = targetMechanicPath + '.' + randomUUID() + '.tmp';
     const backupDefinitions = data.definitions.path + '.' + randomUUID() + '.backup', backupRules = data.rules.path + '.' + randomUUID() + '.backup', backupMechanic = targetMechanicPath + '.' + randomUUID() + '.backup';
+    const temporaryManifest = data.manifest.path + '.' + randomUUID() + '.tmp', backupManifest = data.manifest.path + '.' + randomUUID() + '.backup';
     let definitionsBacked = false, rulesBacked = false, mechanicBacked = false, definitionsCommitted = false, rulesCommitted = false, mechanicCommitted = false;
+    let manifestBacked = false, manifestCommitted = false;
     try {
       await writeFile(temporaryDefinitions, JSON.stringify(definitions, null, 2) + '\n', { flag: 'wx' });
       await writeFile(temporaryRules, JSON.stringify(rules, null, 2) + '\n', { flag: 'wx' });
       await writeFile(temporaryMechanic, JSON.stringify(document, null, 2) + '\n', { flag: 'wx' });
+      // 导出清单必须先备好临时文件再进入换入序列：机制图换入严格早于清单换入，避免出现悬空选择。
+      if (exportManifest) await writeFile(temporaryManifest, JSON.stringify(data.manifest.value, null, 2) + '\n', { flag: 'wx' });
       await rename(data.definitions.path, backupDefinitions); definitionsBacked = true;
       await rename(data.rules.path, backupRules); rulesBacked = true;
       if (mechanic) { await rename(mechanic.path, backupMechanic); mechanicBacked = true; }
       await rename(temporaryDefinitions, data.definitions.path); definitionsCommitted = true;
       await rename(temporaryRules, data.rules.path); rulesCommitted = true;
       await rename(temporaryMechanic, targetMechanicPath); mechanicCommitted = true;
+      if (exportManifest) {
+        await rename(data.manifest.path, backupManifest); manifestBacked = true;
+        await rename(temporaryManifest, data.manifest.path); manifestCommitted = true;
+      }
       const verified = await snapshot();
       if (!verified.mechanics.some(item => item.value.id === meta.mechanicId)) fail('SAVE_UNCERTAIN', '提交后回读未找到目标机制');
+      if (exportManifest && !(verified.manifest.value.exportSelections ?? []).some(item => item.kind === 'mechanic' && item.mechanicId === meta.mechanicId)) {
+        fail('SAVE_UNCERTAIN', '提交后回读导出清单未包含新机制图');
+      }
       await rm(backupDefinitions, { force: true }); await rm(backupRules, { force: true }); await rm(backupMechanic, { force: true });
+      if (manifestBacked) await rm(backupManifest, { force: true });
       await rm(folder, { recursive: true, force: true });
-      return { saved: true, revision: verified.revision, note: '已校验并原子提交 JSON；保留既有节点位置，清除过期连线路径缓存；未执行网页排版或文档导出。' };
+      return { saved: true, revision: verified.revision, exportSelection,
+        note: '已校验并原子提交 JSON（含新建机制图的导出清单维护）；保留既有节点位置，清除过期连线路径缓存；文档本身仍需显式生成。' };
     } catch (error) {
       try {
         if (definitionsCommitted) await rm(data.definitions.path, { force: true });
         if (rulesCommitted) await rm(data.rules.path, { force: true });
         if (mechanicCommitted) await rm(targetMechanicPath, { force: true });
+        if (manifestCommitted) await rm(data.manifest.path, { force: true });
         if (definitionsBacked) await rename(backupDefinitions, data.definitions.path);
         if (rulesBacked) await rename(backupRules, data.rules.path);
         if (mechanicBacked) await rename(backupMechanic, targetMechanicPath);
+        if (manifestBacked) await rename(backupManifest, data.manifest.path);
       } catch (rollback) { fail('SAVE_ROLLBACK_FAILED', `草稿保存失败且回滚失败：${rollback.message}`); }
       throw error;
-    } finally { await rm(temporaryDefinitions, { force: true }); await rm(temporaryRules, { force: true }); await rm(temporaryMechanic, { force: true }); }
+    } finally { await rm(temporaryDefinitions, { force: true }); await rm(temporaryRules, { force: true }); await rm(temporaryMechanic, { force: true }); await rm(temporaryManifest, { force: true }); }
   }); }
 async function main() { const { positionals, options } = args(process.argv.slice(2)), [command, action] = positionals; if (!command) fail('TOOL_INVALID', '需要命令'); const data = ['scopes','search','graph','node','impact'].includes(command) ? await snapshot() : null;
   if (command === 'guide') return guide();
