@@ -12,7 +12,7 @@ export const PROJECT_TOOLS = ['workspace-tool.mjs'];
 const sourceRoot = fileURLToPath(new URL('../../skills/', import.meta.url));
 const packageRoot = fileURLToPath(new URL('../../', import.meta.url));
 const toolSourceRoot = fileURLToPath(new URL('../../workspace-tools/', import.meta.url));
-const docSkillReferences = ['docs/安装与Codex接入.md', 'docs/安装与DSH接入.md', 'docs/Codex MCP Apps.md', 'docs/Agent查询接口.md', 'docs/文件协议.md', 'docs/架构设计.md'];
+const docSkillReferences = ['docs/安装与Codex接入.md', 'docs/安装与DSH接入.md', 'docs/更新与升级.md', 'docs/Codex MCP Apps.md', 'docs/Agent查询接口.md', 'docs/文件协议.md', 'docs/架构设计.md'];
 
 const fail = (code, message, details = {}) => { throw Object.assign(new ContractError(code, message), details); };
 const sameContent = (left, right) => left.replace(/\r\n/g, '\n').trimEnd() === right.replace(/\r\n/g, '\n').trimEnd();

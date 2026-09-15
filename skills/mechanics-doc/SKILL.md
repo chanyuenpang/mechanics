@@ -9,6 +9,7 @@ description: 查阅 Mechanics 产品与接入文档；用于安装或升级 CLI�
 
 - 安装、升级、初始化项目、Codex MCP 配置或 widget 验证：阅读 [安装与 Codex 接入](references/安装与Codex接入.md)。
 - 在 DeepSeek Harness（DSH）里安装插件、用工具或 widget、排障与卸载：阅读 [安装与 DSH 接入](references/安装与DSH接入.md)。
+- 升级 CLI、同步项目内受管资产、协议迁移或回滚：阅读 [更新与升级](references/更新与升级.md)。
 - 工具输入输出与 Agent 查询合同：阅读 [Agent 查询接口](references/Agent查询接口.md)。
 - 文件版本、canonical 资料或迁移边界：阅读 [文件协议](references/文件协议.md)。
 - 架构职责、工作区路径和安全边界：阅读 [架构设计](references/架构设计.md)。

@@ -58,7 +58,7 @@ try {
     assert.equal(await readFile(join(workspace, '.agents', 'skills', name, 'SKILL.md'), 'utf8'),
       await readFile(join(installed, 'skills', name, 'SKILL.md'), 'utf8'));
   }
-  for (const document of ['安装与Codex接入.md', '安装与DSH接入.md', 'Codex MCP Apps.md', 'Agent查询接口.md', '文件协议.md', '架构设计.md']) {
+  for (const document of ['安装与Codex接入.md', '安装与DSH接入.md', '更新与升级.md', 'Codex MCP Apps.md', 'Agent查询接口.md', '文件协议.md', '架构设计.md']) {
     assert.equal(await readFile(join(workspace, '.agents/skills/mechanics-doc/references', document), 'utf8'),
       await readFile(join(installed, 'docs', document), 'utf8'));
   }
