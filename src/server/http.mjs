@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { createProjectManager } from './project-manager.mjs';
 import { createPreferences } from './preferences.mjs';
-import { browseDirectories, createProjectHistory, createProjectPreflight } from './local-projects.mjs';
+import { browseDirectories, createProjectHistory } from './local-projects.mjs';
 import { queryFromSearch } from './agent.mjs';
 import { queryWorkspace } from '../domain/query.mjs';
 import { createNativeDirectoryPicker } from './native-directory-picker.mjs';
@@ -52,7 +52,6 @@ export async function startServer({ projectRoot = null, workspaceRoot = null, po
   const servedAssets = new Map(await Promise.all([...assets].map(async ([path, [source, type]]) =>
     [path, { content: await readFile(source), type }])));
   const projectHistory = createProjectHistory(projectHistoryPath);
-  const projectPreflight = createProjectPreflight();
   const projects = createProjectManager({ onActivated: project => projectHistory.record(project) });
   if (projectRoot) await projects.open({ projectRoot });
   const preferences = createPreferences(preferencesPath);
@@ -79,6 +78,13 @@ export async function startServer({ projectRoot = null, workspaceRoot = null, po
       if (url.pathname.startsWith('/api/')) {
         if (request.method === 'OPTIONS') { send(204, ''); return; }
         if (request.method === 'GET' && url.pathname === '/api/project') { send(200, await projects.state()); return; }
+        // 仅 CLI 在确认端口已被本服务占用时调用：先完成响应，再关闭旧进程，
+        // 使新版 mech web 能接管同端口而不会误杀其他本机服务。
+        if (request.method === 'POST' && url.pathname === '/api/server/handoff') {
+          send(202, { service: 'mechanics', handoff: 'accepted' });
+          queueMicrotask(() => { void close(); });
+          return;
+        }
         if (request.method === 'GET' && url.pathname === '/api/projects') { send(200, await projectHistory.read()); return; }
         if (request.method === 'GET' && url.pathname === '/api/directories') {
           send(200, await browseDirectories(url.searchParams.get('path'))); return;
@@ -117,7 +123,7 @@ export async function startServer({ projectRoot = null, workspaceRoot = null, po
           send(200, await projects.readDocumentExport(url.searchParams.get('projectSessionToken') ?? undefined)); return;
         }
         if (request.method === 'GET' && url.pathname === '/api/preferences') { send(200, await preferences.read()); return; }
-        if (request.method === 'POST' && ['/api/directories/pick', '/api/project/open', '/api/project/select', '/api/project/reference-enter', '/api/project/preflight', '/api/project/settings', '/api/project/export-path', '/api/document-export/settings', '/api/document-export/generate', '/api/projects/pin',
+        if (request.method === 'POST' && ['/api/directories/pick', '/api/project/open', '/api/project/select', '/api/project/reference-enter', '/api/project/settings', '/api/project/export-path', '/api/document-export/settings', '/api/document-export/generate', '/api/projects/pin',
           '/api/projects/remove', '/api/save', '/api/rules-and-mechanic', '/api/rules/delete', '/api/mechanic-nodes/remove', '/api/local-ui-state', '/api/project-references/bind', '/api/project-references/declare', '/api/project-references/remove', '/api/mechanics', '/api/mechanic-folders', '/api/mechanic-folder-move', '/api/mechanic-folder-delete', '/api/mechanic-move', '/api/mechanic-delete', '/api/views', '/api/preferences', '/api/agent/session', '/api/agent/mutation', '/api/agent/draft'].includes(url.pathname)) {
           if (!(request.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
             send(415, { error: 'JSON_REQUIRED', message: '写入必须使用 application/json' }); return;
@@ -141,10 +147,9 @@ export async function startServer({ projectRoot = null, workspaceRoot = null, po
           if (url.pathname === '/api/project-references/remove') { send(200, await projects.removeProjectReference(body)); return; }
           if (url.pathname === '/api/project/select') { send(200, await projects.select(body.projectSessionToken)); return; }
           if (url.pathname === '/api/project/reference-enter') { send(200, await projects.enterReference(body)); return; }
-          if (url.pathname === '/api/project/preflight') { send(200, await projectPreflight.inspect(body)); return; }
           if (url.pathname === '/api/projects/pin') { send(200, await projectHistory.pin(body)); return; }
           if (url.pathname === '/api/projects/remove') { send(200, await projectHistory.remove(body)); return; }
-          if (url.pathname === '/api/project/open') { await projectPreflight.verify(body); send(200, await projects.open(body)); return; }
+          if (url.pathname === '/api/project/open') { send(200, await projects.open(body)); return; }
           if (url.pathname === '/api/project/settings') { send(200, await projects.setProjectSettings(body)); return; }
           if (url.pathname === '/api/project/export-path') { send(200, await projects.setAgentExportPath(body)); return; }
           if (url.pathname === '/api/document-export/settings') { send(200, await projects.setDocumentExport(body)); return; }

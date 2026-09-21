@@ -292,7 +292,7 @@ async function api(path, body) {
       && (body.projectSessionToken ?? workspace?.projectSessionToken) === workspace?.projectSessionToken
         ? { resourceRevisions: body.resourceRevisions ?? workspace?.resourceRevisions } : {};
     const payload = body && workspace?.projectGeneration !== undefined
-      && !['/api/directories/pick', '/api/project/open', '/api/project/preflight', '/api/projects/pin', '/api/projects/remove', '/api/preferences'].includes(path)
+      && !['/api/directories/pick', '/api/project/open', '/api/projects/pin', '/api/projects/remove', '/api/preferences'].includes(path)
         ? { ...body, ...baseline, projectGeneration: body.projectGeneration ?? workspace.projectGeneration, projectSessionToken: body.projectSessionToken ?? workspace.projectSessionToken } : body;
     const requestPath = !payload && workspace?.projectSessionToken && ['/api/workspace', '/api/local-ui-state', '/api/project-references', '/api/agent', '/api/concept-docs'].includes(path)
       ? `${path}?projectSessionToken=${encodeURIComponent(workspace.projectSessionToken)}` : path;
@@ -303,12 +303,20 @@ async function api(path, body) {
       ...(payload ? { body: json(payload) } : {}),
     });
     data = await response.json();
+    if (path === '/api/project/open') sessionStorage.removeItem('mechanics-open-reload');
   } catch (error) {
     const timedOut = controller.signal.aborted;
     if (path === '/api/directories/pick') throw new Error('无法获取文件夹选择结果：' + error.message + '。项目未切换，请重新选择。');
-    const failure = new Error(body ? '连接中断或响应无法解析，写入结果待确认。草稿已保留，请重新读取磁盘核实后再操作。'
-      : timedOut ? `本地服务在 ${API_REQUEST_TIMEOUT_MS / 1000} 秒内没有响应。请检查服务后重新打开项目。` : '无法读取本地服务：' + error.message);
-    failure.code = body ? 'SAVE_UNCERTAIN' : timedOut ? 'CONNECTION_TIMEOUT' : 'CONNECTION_FAILED'; throw failure;
+    if (path === '/api/project/open' && !sessionStorage.getItem('mechanics-open-reload')) {
+      sessionStorage.setItem('mechanics-open-reload', '1');
+      location.reload();
+      throw Object.assign(new Error('服务已重启，正在重新加载网页。'), { code: 'PROJECT_OPEN_RELOAD' });
+    }
+    const openingProject = path === '/api/project/open';
+    const failure = new Error(openingProject ? '打开项目时连接中断或响应无法解析。刷新后仍未完成，请重新选择项目。'
+      : body ? '连接中断或响应无法解析，写入结果待确认。草稿已保留，请重新读取磁盘核实后再操作。'
+        : timedOut ? `本地服务在 ${API_REQUEST_TIMEOUT_MS / 1000} 秒内没有响应。请检查服务后重新打开项目。` : '无法读取本地服务：' + error.message);
+    failure.code = openingProject ? 'PROJECT_OPEN_RESPONSE_LOST' : body ? 'SAVE_UNCERTAIN' : timedOut ? 'CONNECTION_TIMEOUT' : 'CONNECTION_FAILED'; throw failure;
   } finally { clearTimeout(timeout); }
   if (!response.ok) { const error = Object.assign(new Error(data.error + '：' + data.message), data); error.code = data.error; throw error; }
   return data;
@@ -1733,25 +1741,15 @@ async function openProject() {
   const root = el('div', undefined, 'project-dialog');
   const reportProjectError = error => { $('dialog-error').textContent = error.message; $('dialog-error').hidden = false; };
   const selectProjectPath = async projectRoot => {
-    try {
-      const inspected = await api('/api/project/preflight', { projectRoot });
-      if (inspected.status === 'invalid') throw Object.assign(new Error(inspected.message), { code: inspected.error });
-      projectId = projectName = null; preflight = inspected; await draw();
-    } catch (error) { reportProjectError(error); }
+    projectId = projectName = null; preflight = { projectRoot }; await draw();
   };
   const draw = async () => {
     const revision = ++listRevision; root.replaceChildren(); $('confirm-dialog').hidden = !preflight;
     if (preflight) {
       const back = button('‹ 重新选择', () => { preflight = null; mode = 'recent'; return draw().catch(reportProjectError); }, 'quiet project-back'); root.append(back);
       const card = el('div', undefined, 'project-preflight');
-      card.append(el('span', preflight.status === 'existing' ? '现有项目' : '新项目', 'project-status'), el('strong', preflight.workspaceName || preflight.projectRoot), el('small', preflight.projectRoot)); root.append(card);
-      if (preflight.status === 'missing') {
-        const idRequired = preflight.requiredMetadata?.includes('id');
-        projectId = field(root, `稳定英文 ID${idRequired ? '' : '（可选）'}`, preflight.workspaceId ?? '', { required: idRequired, pattern: '[a-z][a-z0-9]*(?:-[a-z0-9]+)*' });
-        projectName = field(root, '显示名称（可选）', preflight.suggestedName ?? '', {});
-        root.append(el('p', '确认后会在此目录创建 .mechanics。项目目录本身不会被移动或改名。', 'note'));
-      } else root.append(el('p', `工作区 ${preflight.workspaceId} 已通过预检。确认后切换，当前画面仅在新项目完整打开后替换。`, 'note'));
-      $('confirm-dialog').textContent = preflight.status === 'existing' ? '打开项目' : '初始化并打开'; return;
+      card.append(el('span', '已选择项目', 'project-status'), el('strong', preflight.projectRoot), el('small', '确认后直接尝试打开；服务端会返回实际读取错误。')); root.append(card);
+      $('confirm-dialog').textContent = '打开项目'; return;
     }
     const tabs = el('div', undefined, 'project-dialog-tabs');
     for (const [key, label] of [['recent', '最近项目'], ['browse', '浏览文件夹']]) {
@@ -1783,10 +1781,7 @@ async function openProject() {
     if (!preflight) return false;
     canvas.cancel(); opening = true; updateStatus();
     try {
-      const opened = await api('/api/project/open', {
-        projectRoot: preflight.projectRoot, selectionToken: preflight.selectionToken, intent: preflight.allowedIntent,
-        ...(projectId?.value.trim() ? { id: projectId.value.trim() } : {}), ...(projectName?.value.trim() ? { name: projectName.value.trim() } : {}),
-      });
+      const opened = await api('/api/project/open', { projectRoot: preflight.projectRoot });
       await activateSourceProject(opened); return true;
     } catch (error) {
       if (error.code === 'PROJECT_SWITCH_PARTIAL') {
@@ -1955,11 +1950,9 @@ async function enterReference(referenceId) {
 
 async function openProjectRoot(projectRoot) {
   if (opening || !await guard()) return false;
-  const preflight = await api('/api/project/preflight', { projectRoot });
-  if (preflight.status !== 'existing') throw new Error('目录不是可打开的既有 Mechanics 项目');
   canvas.cancel(); opening = true; updateStatus();
   try {
-    const opened = await api('/api/project/open', { projectRoot: preflight.projectRoot, selectionToken: preflight.selectionToken, intent: preflight.allowedIntent });
+    const opened = await api('/api/project/open', { projectRoot });
     await activateSourceProject(opened); return true;
   } finally { opening = false; updateStatus(); }
 }

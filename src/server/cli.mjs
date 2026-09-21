@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { parseArgs } from 'node:util';
+import { parseArgs, promisify } from 'node:util';
+import { execFile } from 'node:child_process';
 import { realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import metadata from '../../package.json' with { type: 'json' };
@@ -16,6 +17,41 @@ import { listProjectReferences } from './project-references.mjs';
 import { registerProjectSkills } from './project-skills.mjs';
 import { migrateLegacyProject } from './migrate-legacy-project.mjs';
 import { startRenderServer } from './mcp-render.mjs';
+
+const execFileAsync = promisify(execFile);
+const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+
+async function terminateLegacyWindowsMechanics(port) {
+  if (process.platform !== 'win32') return false;
+  const command = `$listener = Get-NetTCPConnection -State Listen -LocalPort ${port} -ErrorAction SilentlyContinue | Select-Object -First 1; if (-not $listener) { exit 0 }; $process = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $listener.OwningProcess); $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwner; $line = [string]$process.CommandLine; if ($owner.User -ne $env:USERNAME -or $line -notlike '*@veewo*mechanics*src*server*cli.mjs web*') { exit 0 }; if (${port} -ne 4319 -and $line -notmatch ('--port\s+[\"'']?' + ${port} + '([\"'']?)(\s|$)')) { exit 0 }; if (${port} -eq 4319 -and $line -match '--port' -and $line -notmatch ('--port\s+[\"'']?' + ${port} + '([\"'']?)(\s|$)')) { exit 0 }; Stop-Process -Id $listener.OwningProcess -Force; 'terminated'`;
+  try { return (await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command])).stdout.trim() === 'terminated'; }
+  catch { return false; }
+}
+
+async function requestMechanicsHandoff(port) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/server/handoff`, { method: 'POST', signal: AbortSignal.timeout(2000) });
+    const result = await response.json();
+    return response.status === 202 && result?.service === 'mechanics' && result.handoff === 'accepted';
+  } catch { return false; }
+}
+
+async function startWebServer(options) {
+  try { return await startServer(options); }
+  catch (error) {
+    if (error.code !== 'EADDRINUSE') throw error;
+    const handedOff = await requestMechanicsHandoff(options.port) || await terminateLegacyWindowsMechanics(options.port);
+    if (!handedOff) throw error;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      await delay(50);
+      try { return await startServer(options); }
+      catch (retry) {
+        if (retry.code !== 'EADDRINUSE') throw retry;
+      }
+    }
+    throw Object.assign(new Error(`旧 Mechanics 服务未在 1 秒内释放端口 ${options.port}`), { code: 'MECHANICS_HANDOFF_TIMEOUT' });
+  }
+}
 
 const usage = `Mechanics ${metadata.version} · 规则、概念与关系解释工具
 
@@ -152,7 +188,7 @@ try {
         else {
           const rawPort = values.port ?? '4319', port = Number(rawPort);
           if (!/^\d+$/.test(rawPort) || !Number.isInteger(port) || port > 65535) throw new Error('端口必须是 0–65535 的整数');
-          const { close, url } = await startServer({ projectRoot, port });
+          const { close, url } = await startWebServer({ projectRoot, port });
           console.log(`Mechanics · 规则、概念与关系解释工具\n${url}\n${projectRoot ? `已打开项目：${projectRoot}` : '尚未打开项目，请在网页中选择项目。'}`);
           let stopping = false;
           const shutdown = () => {

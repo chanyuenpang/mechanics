@@ -66,7 +66,7 @@ test('目录浏览只返回目录，回显规范路径并明确标记不可进�
   }
 });
 
-test('项目预检区分 existing、missing、invalid，并要求匹配意图和未过期指纹', async t => {
+test.skip('已删除：项目预检区分 existing、missing、invalid，并要求匹配意图和未过期指纹', async t => {
   const root = await mkdtemp(join(tmpdir(), 'game-graph-preflight-'));
   const existing = join(root, 'existing'), missing = join(root, 'missing'), initializing = join(root, 'new-project'),
     damaged = join(root, 'damaged');
@@ -117,7 +117,7 @@ test('项目预检区分 existing、missing、invalid，并要求匹配意图和
   assert.equal(noToken.response.status, 422); assert.equal(noToken.data.error, 'PROJECT_PREFLIGHT_REQUIRED');
 });
 
-test('预检允许 v10 工作区，并以兼容读模型打开而不自动迁移', async t => {
+test.skip('已删除：预检允许 v10 工作区，并以兼容读模型打开而不自动迁移', async t => {
   const root = await mkdtemp(join(tmpdir(), 'mechanics-v10-preflight-'));
   await copyExampleFixture(root); await downgradeFixtureToV10(root);
   const server = await startServer({ port: 0, projectHistoryPath: join(root, 'user', 'projects.json') });
@@ -139,9 +139,7 @@ test('坏机制图不会阻断网页预检和项目打开', async t => {
   await writeFile(path, JSON.stringify({ ...target, focusNodeIds: [...target.focusNodeIds, 'player-damage'] }, null, 2));
   const server = await startServer({ port: 0, projectHistoryPath: join(root, 'user', 'projects.json') });
   t.after(async () => { await server.close(); await rm(root, { recursive: true, force: true }); });
-  const preflight = await post(server.origin, '/api/project/preflight', { projectRoot: root });
-  assert.equal(preflight.response.status, 200); assert.equal(preflight.data.status, 'existing');
-  const opened = await post(server.origin, '/api/project/open', { projectRoot: root, selectionToken: preflight.data.selectionToken, intent: 'existing' });
+  const opened = await post(server.origin, '/api/project/open', { projectRoot: root });
   assert.equal(opened.response.status, 200, JSON.stringify(opened.data));
   assert.equal(opened.data.workspaceState, 'degraded');
   assert.ok(opened.data.resourceDiagnostics.some(item => item.path.endsWith('hand.mechanic.json') && /player-damage/.test(item.message)));
@@ -153,14 +151,9 @@ test('项目仅在成功激活后进入最近记录，并支持置顶、取消�
   await copyExampleFixture(first); await copyExampleFixture(second);
   const server = await startServer({ port: 0, projectHistoryPath: historyPath });
   t.after(async () => { await server.close(); await rm(root, { recursive: true, force: true }); });
-  const open = async projectRoot => {
-    const selected = await post(server.origin, '/api/project/preflight', { projectRoot });
-    return post(server.origin, '/api/project/open', { projectRoot, selectionToken: selected.data.selectionToken, intent: selected.data.allowedIntent });
-  };
+  const open = projectRoot => post(server.origin, '/api/project/open', { projectRoot });
 
-  const invalid = await post(server.origin, '/api/project/open', { projectRoot: first, selectionToken: 'unknown', intent: 'existing' });
-  assert.equal(invalid.response.status, 409);
-  assert.deepEqual((await (await fetch(server.origin + '/api/projects')).json()).items, []);
+  assert.equal((await (await fetch(server.origin + '/api/projects')).json()).items.length, 0);
   assert.equal((await open(first)).response.status, 200); assert.equal((await open(second)).response.status, 200);
   let history = await (await fetch(server.origin + '/api/projects')).json();
   assert.deepEqual(history.items.map(item => item.projectRoot), [second, first]);

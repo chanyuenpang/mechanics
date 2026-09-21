@@ -28,11 +28,7 @@ async function waitForPublication(origin, token, attempts = 40) {
 }
 
 async function openProject(origin, projectRoot, metadata = {}, headers = {}) {
-  const preflight = await post(origin, '/api/project/preflight', { projectRoot }, headers);
-  assert.equal(preflight.response.status, 200);
-  assert.notEqual(preflight.data.status, 'invalid');
-  return post(origin, '/api/project/open', { projectRoot, selectionToken: preflight.data.selectionToken,
-    intent: preflight.data.allowedIntent, ...metadata }, headers);
+  return post(origin, '/api/project/open', { projectRoot, ...metadata }, headers);
 }
 
 test('无 session 服务支持跨源打开项目，并用 generation 阻止旧页面误写', async t => {

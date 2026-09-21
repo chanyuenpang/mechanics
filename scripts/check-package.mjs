@@ -99,11 +99,7 @@ try {
   const origin = new URL(url).origin;
   assert.deepEqual(await (await fetch(origin + '/api/project')).json(), { status: 'empty', projectGeneration: 0 });
   const post = (path, body) => fetch(origin + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  const preflightResponse = await post('/api/project/preflight', { projectRoot: workspace });
-  assert.equal(preflightResponse.status, 200);
-  const preflight = await preflightResponse.json();
-  const openResponse = await post('/api/project/open', { projectRoot: workspace,
-    selectionToken: preflight.selectionToken, intent: preflight.allowedIntent });
+  const openResponse = await post('/api/project/open', { projectRoot: workspace });
   assert.equal(openResponse.status, 200);
   for (const asset of ['/', '/app.mjs', '/canvas.mjs', '/glossary.mjs', '/view-files.mjs', '/graph-compute.mjs',
     '/graph-compute-kernel.mjs', '/graph-compute-worker.js', '/geometry-settle.mjs', '/hierarchical-layout.mjs', '/layout-structure.mjs', '/local-routing.mjs', '/flow-refinement.mjs', '/style.css',

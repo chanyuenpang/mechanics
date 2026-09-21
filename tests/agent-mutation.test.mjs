@@ -402,9 +402,7 @@ test('Agent 以项目目录定位后台上下文，不切换网页当前标签',
   const server = await startServer({ projectRoot: first.projectRoot, port: 0, projectHistoryPath: join(first.projectRoot, '.test-projects.json') });
   try {
     const post = (path, body) => fetch(server.origin + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    const preflight = await post('/api/project/preflight', { projectRoot: second.projectRoot });
-    const inspected = await preflight.json(); assert.equal(preflight.status, 200);
-    const openedSecond = await post('/api/project/open', { projectRoot: second.projectRoot, intent: inspected.allowedIntent, selectionToken: inspected.selectionToken });
+    const openedSecond = await post('/api/project/open', { projectRoot: second.projectRoot });
     assert.equal(openedSecond.status, 200);
     const webActive = await (await fetch(server.origin + '/api/workspace')).json();
     assert.equal(webActive.projectRoot, second.projectRoot);
