@@ -124,7 +124,9 @@ const restoreCamera = () => { if (cameras.has(contextKey())) { canvas.camera = c
 function showError(error) {
   const conflict = error.code === 'REVISION_CONFLICT';
   $('error-text').textContent = error.message + (conflict ? '\n冲突只针对本次写入涉及的文件（见上文）。请先重新读取磁盘状态再保存；草稿会保留，不会被覆盖。' : '');
-  $('reload-error').hidden = false;
+  const recovery = $('reload-error');
+  recovery.textContent = workspace ? '重新读取' : '重新打开项目';
+  recovery.hidden = false;
   $('error').hidden = false;
 }
 function renderProjectTabs() {
@@ -278,8 +280,10 @@ async function returnToSourceProject() {
     await openProjectRoot(sourceProject.projectRoot);
   }
 }
+const API_REQUEST_TIMEOUT_MS = 15_000;
 async function api(path, body) {
   let response, data;
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), API_REQUEST_TIMEOUT_MS);
   try {
     // 写入体携带读取时的每资源版本：服务端据此只对本操作真正会写的资源判定冲突，
     // 不再因为别的页面写了别的文件（或补算了布局）而拒绝一次安全的保存。
@@ -295,14 +299,17 @@ async function api(path, body) {
     response = await fetch(requestPath, {
       method: payload ? 'POST' : 'GET',
       headers: payload ? { 'Content-Type': 'application/json' } : {},
+      signal: controller.signal,
       ...(payload ? { body: json(payload) } : {}),
     });
     data = await response.json();
   } catch (error) {
+    const timedOut = controller.signal.aborted;
     if (path === '/api/directories/pick') throw new Error('无法获取文件夹选择结果：' + error.message + '。项目未切换，请重新选择。');
-    const failure = new Error(body ? '连接中断或响应无法解析，写入结果待确认。草稿已保留，请重新读取磁盘核实后再操作。' : '无法读取本地服务：' + error.message);
-    failure.code = body ? 'SAVE_UNCERTAIN' : 'CONNECTION_FAILED'; throw failure;
-  }
+    const failure = new Error(body ? '连接中断或响应无法解析，写入结果待确认。草稿已保留，请重新读取磁盘核实后再操作。'
+      : timedOut ? `本地服务在 ${API_REQUEST_TIMEOUT_MS / 1000} 秒内没有响应。请检查服务后重新打开项目。` : '无法读取本地服务：' + error.message);
+    failure.code = body ? 'SAVE_UNCERTAIN' : timedOut ? 'CONNECTION_TIMEOUT' : 'CONNECTION_FAILED'; throw failure;
+  } finally { clearTimeout(timeout); }
   if (!response.ok) { const error = Object.assign(new Error(data.error + '：' + data.message), data); error.code = data.error; throw error; }
   return data;
 }
@@ -1468,7 +1475,7 @@ function setMode(mode) {
   if ((viewId !== null || legacy) && mode !== 'select') return;
   if (!definitionMode() || mode === 'select') {
     canvas.setMode(mode);
-    $('tool-hint').textContent = legacy ? '旧叠加只读 · 左键框选 · 右键平移' : mode === 'select' ? '左键框选 · 右键平移 · 双击节点连线 · Shift 增选'
+    $('tool-hint').textContent = legacy ? '旧叠加只读 · 左键平移 · Shift+左键框选' : mode === 'select' ? '左键平移 · Shift+左键框选 · 双击节点连线 · Shift 增选'
       : mode === 'specializes' ? '先点具体概念，再点上位概念 · 特化 / 是某种，不写影响符号'
         : mode === 'random' ? '先点影响源，再点目标 · 目标可能增加或减少，不表示概率'
           : '先点击影响源，再点击受影响节点 · 写入当前机制';
@@ -2065,7 +2072,7 @@ $('delete-mechanic').onclick = () => deleteMechanicDialog().catch(showError);
 $('add-node').onclick = () => addNode().catch(showError);
 $('empty-add').onclick = () => (activeId === null ? newGraph() : addNode()).catch(showError);
 $('reload').onclick = () => refreshProjectFromDisk().catch(showError);
-$('reload-error').onclick = $('reload').onclick;
+$('reload-error').onclick = () => (workspace ? refreshProjectFromDisk() : openProject()).catch(showError);
 $('undo').onclick = () => undo(); $('redo').onclick = () => undo(true);
 $('fit').onclick = () => canvas.fit();
 $('auto-layout').onclick = () => autoLayout({ fitView: true }).catch(showError);

@@ -98,6 +98,11 @@ const ROUTING_SEARCH = Object.freeze({
   large: Object.freeze({ candidateLimit: 12, rounds: 3, pairRounds: 1, endpointRounds: 1,
     simplicityRounds: 1, swapRounds: 1, beamWidth: 8, conflictPairBudget: 80,
     endpointEdgeBudget: 40, swapPairBudget: 40 }),
+  // 高扇出中心会把每轮端口、冲突分量搜索放大为近似全局组合；首轮已经产生
+  // 完整可审计路线，后续只由固定的局部收尾算子处理。
+  highDegree: Object.freeze({ candidateLimit: 12, rounds: 1, pairRounds: 1, endpointRounds: 1,
+    simplicityRounds: 1, swapRounds: 1, beamWidth: 8, conflictPairBudget: 80,
+    endpointEdgeBudget: 40, swapPairBudget: 40 }),
 });
 
 const finitePoint = point => point && Number.isFinite(point.x) && Number.isFinite(point.y);
@@ -1910,7 +1915,10 @@ function viableSeedRouteOption(graph, positions, edge, assignments, axes) {
 function solveRouteOptions(graph, positions, edges, assignments, axes, cola) {
   // 边数达到阈值后先用有界的大图策略产出全图可行解；硬冲突仍完整处理，
   // 只有软可读性优化受预算限制。这样规则网格不会因多轮全量精修而超时。
-  const policy = edges.length >= 60 ? ROUTING_SEARCH.large : ROUTING_SEARCH.normal;
+  const incidentCounts = new Map(graph.nodes.map(node => [node.id, 0]));
+  for (const edge of edges) { incidentCounts.set(edge.source, incidentCounts.get(edge.source) + 1); incidentCounts.set(edge.target, incidentCounts.get(edge.target) + 1); }
+  const highDegree = Math.max(...incidentCounts.values()) >= 12;
+  const policy = edges.length < 60 ? ROUTING_SEARCH.normal : highDegree ? ROUTING_SEARCH.highDegree : ROUTING_SEARCH.large;
   const candidates = new Map();
   for (const edge of edges) {
     const assignment = assignments.get(edge.id);
@@ -2227,8 +2235,14 @@ export class GraphCanvas {
     if (!node && !edge) {
       if (this.mode !== 'select') return;
       event.preventDefault();
+      // 普通空白拖动是最直接的画布平移；按住 Shift 才进入框选，避免图已显示却看似“不能拖动”。
+      if (!event.shiftKey) {
+        this.gesture = { type: 'pan', pointerId: event.pointerId, x: event.clientX, y: event.clientY, original: { ...this.camera },
+          clearSelectionOnClick: true, moved: false };
+        this.root.setPointerCapture(event.pointerId); this.root.classList.add('panning'); return;
+      }
       this.gesture = { type: 'box', point: this.point(event), end: this.point(event), x: event.clientX, y: event.clientY,
-        pointerId: event.pointerId, original: event.shiftKey ? [...this.selectedIds()] : [], additive: event.shiftKey, moved: false };
+        pointerId: event.pointerId, original: [...this.selectedIds()], additive: true, moved: false };
       this.root.setPointerCapture(event.pointerId); return;
     }
     if (node) {
@@ -2249,6 +2263,7 @@ export class GraphCanvas {
     const gesture = this.gesture; if (!gesture || gesture.pointerId !== event.pointerId) return;
     gesture.moved ||= Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) > 3;
     if (gesture.type === 'pan') {
+      if (!gesture.moved) return;
       const dx = event.clientX - gesture.x, dy = event.clientY - gesture.y;
       this.camera.x = gesture.original.x + dx; this.camera.y = gesture.original.y + dy; this.transform();
     } else if (gesture.type === 'box') {
@@ -2271,8 +2286,9 @@ export class GraphCanvas {
       this.callbacks.move(committed); positionCommitted = true;
     }
     else if (gesture.type === 'box' && gesture.moved) this.selectNodes([...new Set([...gesture.original, ...nodesInBox(this.graph.nodes, this.positions, gesture.point, gesture.end)])]);
-    else if (gesture.type === 'box' && !gesture.additive && !gesture.moved) this.callbacks.select(null);
-    if (!gesture.moved && ((gesture.type === 'nodes' && gesture.ids.length === 1) || (gesture.type === 'box' && !gesture.additive))) {
+    else if (gesture.type === 'pan' && gesture.clearSelectionOnClick && !gesture.moved) this.selectNodes([]);
+    const blankPrimaryClick = gesture.type === 'pan' && gesture.clearSelectionOnClick && !gesture.moved;
+    if (!gesture.moved && ((gesture.type === 'nodes' && gesture.ids.length === 1) || (gesture.type === 'box' && !gesture.additive) || blankPrimaryClick)) {
       const id = gesture.type === 'nodes' ? gesture.ids[0] : null, now = performance.now(), previous = this.lastClick;
       this.lastClick = { id, time: now, x: event.clientX, y: event.clientY };
       if (previous && previous.id === id && now - previous.time <= 400 && Math.hypot(event.clientX - previous.x, event.clientY - previous.y) <= 5) {

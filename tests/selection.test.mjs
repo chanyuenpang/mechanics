@@ -804,9 +804,9 @@ function harness() {
     button, pointerId: 1, shiftKey, preventDefault() {}, target: { closest: selector => node && selector === '[data-node]' ? { dataset: { node } } : null } });
   return { canvas, writes, event };
 }
-test('左键反向框选使用世界坐标；空白轻点清除，Shift 轻点保留选择', () => {
+test('Shift+左键反向框选使用世界坐标；空白轻点清除，Shift 轻点保留选择', () => {
   const { canvas, event, writes } = harness();
-  canvas.down(event(400, 100)); canvas.move(event(-10, -10)); canvas.up(event(-10, -10));
+  canvas.down(event(400, 100, { shiftKey: true })); canvas.move(event(-10, -10, { shiftKey: true })); canvas.up(event(-10, -10, { shiftKey: true }));
   assert.deepEqual(canvas.selectedIds(), ['a', 'b']); assert.deepEqual(writes, []);
   canvas.down(event(500, 100, { shiftKey: true })); canvas.up(event(501, 100));
   assert.deepEqual(canvas.selectedIds(), ['a', 'b']);

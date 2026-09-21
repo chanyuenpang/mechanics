@@ -3,8 +3,31 @@ import { routeLocalGraph, routeIntersectsBox, routePairChannels } from './local-
 import { improveFlowBySubtrees, compactHorizontalRoutes, snapLayoutToGrid } from './flow-refinement.mjs';
 import { connectedComponents, SNAP_GRID, edgeBundles } from './layout-structure.mjs';
 
-const WIDTH = 166, HEIGHT = 62;
+const WIDTH = 166, HEIGHT = 62, MAX_GRID_REROUTE_EDGES = 128;
 const snap = value => Math.round(value / SNAP_GRID) * SNAP_GRID;
+
+const layoutCancelled = () => Object.assign(new Error('自动排版已取消，未提交任何坐标或路线。'), { name: 'AbortError', code: 'COMPUTE_CANCELLED' });
+
+function phaseReporter({ timings, onPhase, signal } = {}) {
+  const checkCancelled = () => { if (signal?.aborted) throw layoutCancelled(); };
+  const run = async (phase, operation) => {
+    checkCancelled();
+    const started = performance.now();
+    onPhase?.({ phase, status: 'started', elapsedMs: 0 });
+    try {
+      const result = await operation();
+      checkCancelled();
+      const elapsedMs = performance.now() - started;
+      if (timings) timings[phase] = elapsedMs;
+      onPhase?.({ phase, status: 'completed', elapsedMs });
+      return result;
+    } catch (error) {
+      onPhase?.({ phase, status: error?.code === 'COMPUTE_CANCELLED' ? 'cancelled' : 'failed', elapsedMs: performance.now() - started, error: error?.message });
+      throw error;
+    }
+  };
+  return { checkCancelled, run };
+}
 const overlaps = (a, b, clearanceA = 0, clearanceB = 0) => a.x - clearanceA < b.x + WIDTH + clearanceB
   && a.x + WIDTH + clearanceA > b.x - clearanceB
   && a.y - clearanceA < b.y + HEIGHT + clearanceB
@@ -42,7 +65,12 @@ async function compactComponents(components, positions, baseline) {
       // 吸附只改变节点位置；旧折线不能变形时，保留同一份网格节点位置并完整重路由。
       // 这是自动整理阶段，允许重算所有本区域路径，但绝不移动已吸附的节点。
       if (!error.rerouteCandidate) throw error;
-      try {
+      // 网格吸附是视觉优化；超过局部路由容量时，不能为此退化成整图重路由。
+      // 紧缩前几何已经通过完整审计，保留它比延迟或丢弃一次完整自动排版更安全。
+      if (graph.edges.length > MAX_GRID_REROUTE_EDGES) {
+        snapped = compacted.geometry;
+        warnings.push(`已完成自动整理；${graph.edges.length} 条边的网格吸附需要全量重路由，保留已审计的非网格几何。`);
+      } else try {
         const rerouted = await routeLocalGraph({ graph, positions: error.rerouteCandidate, previousPositions: compacted.geometry.positions,
           cachedRoutes: [], edgeIds: graph.edges.map(edge => edge.id), movedIds: graph.nodes.map(node => node.id), fixedPositions: true });
         const geometry = { positions: rerouted.positions, routes: [...rerouted.routes],
@@ -81,7 +109,9 @@ async function compactComponents(components, positions, baseline) {
   return result;
 }
 
-async function layoutAll(graph, positions, ELK, timings) {
+async function layoutAll(graph, positions, ELK, timings, observer = {}) {
+  const phases = phaseReporter({ timings, ...observer });
+  phases.checkCancelled();
   if (typeof ELK !== 'function') throw new Error('ELK 排版引擎未加载，请刷新页面后重试。');
   if (!graph.nodes.length) return { positions: {}, routes: new Map() };
   // 自环沿用画布的专用环形符号，不进入节点间的正交路径缓存。
@@ -92,13 +122,9 @@ async function layoutAll(graph, positions, ELK, timings) {
   }
   const original = graph, bundles = edgeBundles(graph), bundled = bundles.some(edge => edge.bundleMembers.length > 1);
   if (bundled) graph = { ...graph, edges: bundles };
-  let phaseStart = performance.now();
-  const record = phase => { const now = performance.now(); if (timings) timings[phase] = now - phaseStart; phaseStart = now; };
-  const initial = await refineHierarchy(graph, { ...AUTO_LAYOUT_OPTIONS, ELK });
-  record('hierarchyMs');
+  const initial = await phases.run('hierarchy', () => refineHierarchy(graph, { ...AUTO_LAYOUT_OPTIONS, ELK }));
   if (qualityVector(initial.metrics)[0] !== 0) throw new Error('自动整理未得到完整且无穿节点的布局，请保留当前图并反馈此案例。');
-  const result = await improveFlowBySubtrees(graph, initial.geometry, { ELK });
-  record('flowMs');
+  const result = await phases.run('flow', () => improveFlowBySubtrees(graph, initial.geometry, { ELK }));
   const short = result.geometry.routes.filter(([, route]) => !routeMeetsMinimum(route.points));
   if (short.length) throw new Error(`自动整理仍有连线不足 ${MIN_ROUTE_SEGMENT}px，未提交：` + short.map(([id]) => id).join('、'));
   // 先整体平移保留原区域，随后按连通区域联合吸附节点和路线。
@@ -110,12 +136,10 @@ async function layoutAll(graph, positions, ELK, timings) {
     routes: new Map(result.geometry.routes.map(([id, route]) => [id, { points: route.points.map(shift) }])),
   };
   const components = connectedComponents(graph);
-  const compacted = await compactComponents(components, positions, arranged);
-  record('compactGridMs');
+  const compacted = await phases.run('compactGrid', () => compactComponents(components, positions, arranged));
   if (!bundled) return compacted;
-  const expanded = await routePairChannels({ graph: original, positions: compacted.positions, cachedRoutes: compacted.routes,
-    edgeIds: original.edges.map(edge => edge.id) });
-  record('channelsMs');
+  const expanded = await phases.run('channels', () => routePairChannels({ graph: original, positions: compacted.positions, cachedRoutes: compacted.routes,
+    edgeIds: original.edges.map(edge => edge.id) }));
   return { ...expanded, warnings: compacted.warnings };
 }
 
@@ -165,5 +189,5 @@ export async function arrangeGraphWithRoutes(options) {
     return layoutSelection(options.graph, options.positions, selected, options.ELK ?? globalThis.ELK, options.cachedRoutes);
   }
   assertPositions(options.graph, options.positions);
-  return layoutAll(options.graph, options.positions, options.ELK ?? globalThis.ELK, options.timings);
+  return layoutAll(options.graph, options.positions, options.ELK ?? globalThis.ELK, options.timings, { signal: options.signal, onPhase: options.onPhase });
 }

@@ -8,7 +8,6 @@ import { readCatalogBrowser } from './catalog-browser.mjs';
 import { createLocalUiState } from './local-ui-state.mjs';
 import { ContractError } from '../domain/validate.mjs';
 import { bindProjectReference, declareProjectReference, listProjectReferences, projectReferenceState, removeProjectReference } from './project-references.mjs';
-import { registerProjectSkills } from './project-skills.mjs';
 import { openAgentDraft, readAgentDraft, removeAgentDraft } from './agent-draft.mjs';
 
 const fail = (code, message) => { throw new ContractError(code, message); };
@@ -77,11 +76,12 @@ export function createProjectManager({ onActivated = null } = {}) {
       fail('AGENT_EDIT_SCOPE_MISMATCH', `当前编辑会话属于机制 ${record.mechanic}，不能写入机制 ${body.mechanic}`);
     }
   };
-  const openStore = async (body, { activate = true, recordHistory = activate, syncSkills = activate } = {}) => {
+  // 打开项目只建立并读取工作区会话；受管 skill 与工具资产由显式 mech sync 维护，
+  // 不能因权限、文件占用或网络盘延迟阻断用户进入已有项目。
+  const openStore = async (body, { activate = true, recordHistory = activate } = {}) => {
     if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.projectRoot !== 'string' || !isAbsolute(body.projectRoot)) fail('PROJECT_REQUIRED', '打开项目必须提供绝对 projectRoot');
     const requested = resolve(body.projectRoot), known = roots.get(rootKey(requested));
     if (known) {
-      if (syncSkills) await registerProjectSkills(known.context.projectRoot);
       if (activate) activeToken = known.token;
       return attach(await known.store.read(), known);
     }
@@ -94,7 +94,6 @@ export function createProjectManager({ onActivated = null } = {}) {
       try { await initProject(requested, { name: body.name, id: body.id, createProjectRoot: false }); }
       catch (failure) { if (failure.code === 'INVALID_ID') fail('PROJECT_METADATA_REQUIRED', failure.message); throw failure; }
     }
-    if (syncSkills) await registerProjectSkills(requested);
     const context = await projectContext(requested, { allowMissingExport: true, allowUnavailableExport: true }),
       store = await createWorkspaceStore(context.workspaceRoot, { isolateResources: true });
     let workspace;
@@ -109,7 +108,7 @@ export function createProjectManager({ onActivated = null } = {}) {
     if (typeof body?.projectRoot !== 'string' || !isAbsolute(body.projectRoot)) {
       fail('AGENT_PROJECT_REQUIRED', '在线 Agent 操作必须提供绝对 projectRoot；它不会切换网页当前项目');
     }
-    const opened = await openStore({ projectRoot: body.projectRoot, intent: 'existing' }, { activate: false, recordHistory: false, syncSkills: false });
+    const opened = await openStore({ projectRoot: body.projectRoot, intent: 'existing' }, { activate: false, recordHistory: false });
     const session = sessions.get(opened.projectSessionToken);
     if (body.projectGeneration !== undefined && body.projectGeneration !== session.generation) {
       fail('PROJECT_CHANGED', 'Agent 所用项目上下文已改变，请重新读取 scopes 后继续');
@@ -133,7 +132,7 @@ export function createProjectManager({ onActivated = null } = {}) {
       const reference = (await listProjectReferences(source.context.projectRoot)).find(item => item.id === body.referenceId);
       if (!reference) fail('REFERENCE_NOT_DECLARED', `源项目未声明关联项目：${body.referenceId}`);
       if (!['ready', 'migratable'].includes(reference.status)) fail('REFERENCE_UNAVAILABLE', `关联项目“${reference.name}”当前不可进入：${reference.status}`);
-      return openStore({ projectRoot: reference.projectRoot, intent: 'existing' }, { activate: false, recordHistory: false, syncSkills: true });
+      return openStore({ projectRoot: reference.projectRoot, intent: 'existing' }, { activate: false, recordHistory: false });
     }),
     read: token => enqueue(async () => { const session = current(token); return attach(await session.store.read(), session); }),
     readForQuery: token => enqueue(async () => { const session = current(token); return attach(await session.store.readForQuery(), session); }),

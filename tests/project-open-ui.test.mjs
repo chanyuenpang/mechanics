@@ -18,6 +18,24 @@ test('打开项目默认先展示最近项目，不隐式唤起原生目录选�
   assert.match(openProject, /else root\.append\(folderPicker\(\{ initialPath: workspace\?\.projectRoot \?\? ''/);
 });
 
+test('项目打开请求有超时，空项目错误可重新打开选择器', () => {
+  const api = app.slice(app.indexOf('const API_REQUEST_TIMEOUT_MS'), app.indexOf('// 所有页面写入串行执行'));
+  assert.ok(api.includes('const API_REQUEST_TIMEOUT_MS = 15_000;'));
+  assert.ok(api.includes('const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), API_REQUEST_TIMEOUT_MS);'));
+  assert.ok(api.includes('signal: controller.signal,'));
+  assert.ok(api.includes('finally { clearTimeout(timeout); }'));
+  assert.ok(api.includes('CONNECTION_TIMEOUT'));
+  assert.ok(app.includes("recovery.textContent = workspace ? '重新读取' : '重新打开项目';"));
+  assert.ok(app.includes("$('reload-error').onclick = () => (workspace ? refreshProjectFromDisk() : openProject()).catch(showError);"));
+});
+
+test('无参数启动无论项目状态或首个读取失败均会退出打开遮罩', () => {
+  const startup = app.slice(app.indexOf('// 首次加载也属于打开文件'), app.length);
+  assert.match(startup, /if \(project\.status === 'active'\)[\s\S]*?else \{ opening = false; updateStatus\(\); await openProject\(\); \}/);
+  assert.match(startup, /catch \(error\) \{ showError\(error\); \}\s*finally \{ opening = false; updateStatus\(\); \}/);
+  assert.match(app, /\$\('opening-overlay'\)\.hidden = !opening/);
+});
+
 test('重新读取按左侧浏览项目的会话强制刷新磁盘目录，关联项目不替换当前画布', () => {
   assert.match(app, /async function refreshProjectFromDisk\(\)[\s\S]*?const browsing = browserWorkspace \?\? workspace/);
   assert.match(app, /const sameProject = browsing\.projectSessionToken === workspace\?\.projectSessionToken/);

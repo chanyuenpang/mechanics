@@ -383,10 +383,10 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
     }
     const graph = compose(workspace, [mechanic.id]);
     if (!graph.nodes.length) fail('MECHANIC_EMPTY', `机制 ${body.mechanic} 没有投影节点，不能自动排版`);
-    const positions = graphPositions(workspace, graph, {}, mechanic.id);
+    const positions = graphPositions(workspace, graph, {}, mechanic.id), layoutTimings = {}, layoutPhases = [];
     let layout;
-    try { layout = await arrangeGraphWithRoutes({ graph, positions, ELK, cola }); }
-    catch (error) { fail('MECHANIC_LAYOUT_FAILED', `机制 ${mechanic.id} 自动排版失败：${error.message}`); }
+    try { layout = await arrangeGraphWithRoutes({ graph, positions, ELK, cola, timings: layoutTimings, onPhase: event => layoutPhases.push(event) }); }
+    catch (error) { fail('MECHANIC_LAYOUT_FAILED', `机制 ${mechanic.id} 自动排版失败：${error.message}`, { layoutTimings, layoutPhases }); }
     mechanic.positions = layout.positions; mechanic.routeCache = createRouteCache(graph, layout.positions, layout.routes);
     validateWorkspace(workspace);
     const file = workspace.files.find(item => item.kind === 'mechanic' && item.id === mechanic.id)?.path;
@@ -395,7 +395,7 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
     const committed = await refreshCatalog();
     return { canonicalCommitted: true, workspaceId: committed.manifest.id, revision: committed.revision,
       resourceRevision: committed.resourceRevisions.mechanics[mechanic.id], resource: 'mechanic', action: 'arrange', id: mechanic.id,
-      exportPublication: committed.exportPublication };
+      layoutTimings, layoutPhases, layoutWarnings: layout.warnings ?? [], exportPublication: committed.exportPublication };
   });
   // 规则归属迁移是唯一允许同时改动多个机制、删除旧机制并建立总览视图的 Agent 写入。
   // 输入仅声明“哪条既有规则归属哪个机制”；规则语义始终从来源机制的 canonical 边复制，

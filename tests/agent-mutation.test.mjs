@@ -182,6 +182,10 @@ test('Agent 自动排版仅保存网页同算法生成的整图坐标，并受�
   const saved = workspace.mechanics.find(item => item.id === 'layout-target-graph');
   assert.deepEqual(Object.keys(saved.positions).sort(), ['layout-source', 'layout-target']);
   assert.ok(Object.values(saved.positions).every(point => Number.isFinite(point.x) && Number.isFinite(point.y)));
+  assert.ok(arranged.layoutTimings.hierarchy >= 0);
+  assert.deepEqual(arranged.layoutPhases.map(event => `${event.phase}:${event.status}`), [
+    'hierarchy:started', 'hierarchy:completed', 'flow:started', 'flow:completed', 'compactGrid:started', 'compactGrid:completed',
+  ]);
   assert.equal((await failure(offline(projectRoot, ['mechanic', 'arrange', '--mechanic', 'layout-target-graph', '--positions', '{}',
     '--revision', arranged.resourceRevision]))).body.error, 'ERR_PARSE_ARGS_UNKNOWN_OPTION');
   void target;

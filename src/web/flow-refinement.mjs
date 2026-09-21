@@ -2,7 +2,7 @@ import { leafHierarchy, modularHierarchy, groupBoundary, connectedComponents, la
 import { solveLayout, measureGeometry, qualityVector, MIN_ROUTE_SEGMENT, routeMeetsMinimum } from './hierarchical-layout.mjs';
 import { routeLocalGraph } from './local-routing.mjs';
 
-const W = 166, H = 62, EPS = 1e-6;
+const W = 166, H = 62, EPS = 1e-6, MAX_FLOW_SUBTREE_MEMBERS = 16;
 const bounds = (ids, positions) => ({
   left: Math.min(...ids.map(id => positions[id].x)), top: Math.min(...ids.map(id => positions[id].y)),
   right: Math.max(...ids.map(id => positions[id].x + W)), bottom: Math.max(...ids.map(id => positions[id].y + H)),
@@ -28,7 +28,9 @@ export function flowMetrics(graph, geometry) {
 export function flowSubtrees(graph) {
   const records = new Map();
   const add = members => {
-    if (!members.length || members.length === graph.nodes.length && members.length > 16) return;
+    // 方向优化会为候选子树重新求解并把它放回全图；大分支会退化成
+    // 高扇出全图求解，既不再是局部优化，也会阻塞实际的分类树排版。
+    if (!members.length || members.length > MAX_FLOW_SUBTREE_MEMBERS) return;
     const key = [...members].sort().join('\u0000');
     if (!records.has(key)) records.set(key, groupBoundary(graph, members));
   };
@@ -48,7 +50,7 @@ export function flowSubtrees(graph) {
   while (queue.length) {
     const group = queue.pop();
     if (group.children) queue.push(...group.children);
-    if (group.members.length <= 16) add(group.members);
+    if (group.members.length <= MAX_FLOW_SUBTREE_MEMBERS) add(group.members);
   }
   return [...records.values()].filter(group => group.boundary.length <= 6);
 }

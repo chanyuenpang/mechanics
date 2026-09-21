@@ -36,6 +36,7 @@ const assets = new Map([
   ['/domain/graph.mjs', [new URL('../domain/graph.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/domain/view.mjs', [new URL('../domain/view.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/domain/endpoint-projection.mjs', [new URL('../domain/endpoint-projection.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/domain/hover-details.mjs', [new URL('../domain/hover-details.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/domain/identity.mjs', [new URL('../domain/identity.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/vendor/elk.js', [dependency.resolve('elkjs/lib/elk.bundled.js'), 'text/javascript; charset=utf-8']],
   ['/vendor/elk-worker.js', [dependency.resolve('elkjs/lib/elk-worker.min.js'), 'text/javascript; charset=utf-8']],
@@ -180,7 +181,7 @@ export async function startServer({ projectRoot = null, workspaceRoot = null, po
       const status = ['REVISION_CONFLICT', 'REFERENCE_REVISION_CONFLICT', 'FILE_EXISTS', 'DUPLICATE_ID', 'WORKSPACE_LOCKED', 'PROJECT_REQUIRED', 'PROJECT_CHANGED',
         'PROJECT_PREFLIGHT_STALE', 'PROJECT_INTENT_MISMATCH', 'DIRECTORY_PICKER_BUSY'].includes(error.code) ? 409
         : ['SAVE_UNCERTAIN', 'CREATE_PARTIAL', 'PROJECT_SWITCH_PARTIAL', 'AGENT_EXPORT_FAILED', 'REFERENCE_DECLARATION_PARTIAL', 'REFERENCE_REMOVAL_PARTIAL', 'REFERENCE_REMOVAL_UNCERTAIN'].includes(error.code) ? 500 : 422;
-      const detailKeys = ['canonicalCommitted', 'workspaceId', 'revision', 'resourceRevision', 'resource', 'action', 'id', 'references', 'referenceDeclared', 'reference', 'referenceRemoved', 'referenceId', 'referencesRevision', 'referencesPath'];
+      const detailKeys = ['canonicalCommitted', 'workspaceId', 'revision', 'resourceRevision', 'resource', 'action', 'id', 'references', 'referenceDeclared', 'reference', 'referenceRemoved', 'referenceId', 'referencesRevision', 'referencesPath', 'layoutTimings', 'layoutPhases'];
       const details = Object.fromEntries(detailKeys.filter(key => Object.hasOwn(error, key)).map(key => [key, error[key]]));
       send(status, { error: error.code ?? 'REQUEST_FAILED', message: error.message, ...details });
     }

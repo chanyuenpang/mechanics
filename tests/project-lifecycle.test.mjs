@@ -68,6 +68,17 @@ test('无 session 服务支持跨源打开项目，并用 generation 阻止旧�
   assert.notEqual((await (await fetch(server.origin + '/api/workspace')).json()).manifest.name, '不应写入第二项目');
 });
 
+test('打开已有项目不注册受管 assets，目录权限不会阻断项目会话', async t => {
+  const temp = await mkdtemp(join(tmpdir(), 'game-graph-open-readonly-')), project = join(temp, 'project');
+  await copyExampleFixture(project);
+  const server = await startServer({ port: 0, projectHistoryPath: join(temp, 'user', 'projects.json') });
+  t.after(async () => { await server.close(); await rm(temp, { recursive: true, force: true }); });
+
+  const opened = await openProject(server.origin, project);
+  assert.equal(opened.response.status, 200);
+  await assert.rejects(access(join(project, '.agents')), { code: 'ENOENT' });
+});
+
 test('带项目会话令牌的写入始终命中其所属项目，不受当前项目切换影响', async t => {
   const temp = await mkdtemp(join(tmpdir(), 'game-graph-project-sessions-'));
   const first = join(temp, 'first-project'), second = join(temp, 'second-project');

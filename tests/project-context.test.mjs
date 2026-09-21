@@ -11,6 +11,7 @@ import { projectContext } from '../src/server/project-context.mjs';
 import { readWorkspace } from '../src/server/workspace.mjs';
 import { publishCatalog } from '../src/server/catalog.mjs';
 import { createProjectManager } from '../src/server/project-manager.mjs';
+import { registerProjectSkills } from '../src/server/project-skills.mjs';
 import { createProjectPreflight } from '../src/server/local-projects.mjs';
 import { copyExampleFixture } from './example-fixture.mjs';
 
@@ -59,7 +60,7 @@ test('项目已有不同 Game-Graph skill 时初始化以安装源整体覆盖',
   await access(join(projectRoot, '.mechanics'));
 });
 
-test('网页打开既有项目时，以安装源覆盖内容不一致的建模 skill', async t => {
+test('网页打开既有项目只读建立会话，不改写受管 skill 与工具', async t => {
   const parent = await mkdtemp(join(tmpdir(), 'game-graph-skill-sync-'));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const projectRoot = join(parent, 'sync-project'); await mkdir(projectRoot);
@@ -73,13 +74,12 @@ test('网页打开既有项目时，以安装源覆盖内容不一致的建模 s
   const manager = createProjectManager();
   t.after(() => manager.close());
   await manager.open({ projectRoot, intent: 'existing' });
-  const source = await readFile(fileURLToPath(new URL('../skills/mechanics-modeling/SKILL.md', import.meta.url)), 'utf8');
-  assert.equal(await readFile(target, 'utf8'), source);
-  assert.equal(await readFile(docTarget, 'utf8'), await readFile(fileURLToPath(new URL('../docs/Codex MCP Apps.md', import.meta.url)), 'utf8'));
-  assert.equal(await readFile(tool, 'utf8'), await readFile(fileURLToPath(new URL('../workspace-tools/workspace-tool.mjs', import.meta.url)), 'utf8'));
+  assert.equal(await readFile(target, 'utf8'), '用户维护但未版本化的不同 skill');
+  assert.equal(await readFile(docTarget, 'utf8'), '过期接入文档快照');
+  await assert.rejects(readFile(tool, 'utf8'), { code: 'ENOENT' });
 });
 
-test('进入关联项目也会在建立会话前补齐受管 skill 与工具', async t => {
+test('进入关联项目只建立会话，不补齐受管 skill 与工具', async t => {
   const parent = await mkdtemp(join(tmpdir(), 'game-graph-reference-sync-'));
   t.after(() => rm(parent, { recursive: true, force: true }));
   const sourceRoot = join(parent, 'source'), targetRoot = join(parent, 'target'); await mkdir(sourceRoot); await mkdir(targetRoot);
@@ -89,7 +89,7 @@ test('进入关联项目也会在建立会话前补齐受管 skill 与工具', a
   const source = await manager.open({ projectRoot: sourceRoot, intent: 'existing' });
   const declared = await manager.declareProjectReference({ projectSessionToken: source.projectSessionToken, projectGeneration: source.projectGeneration, projectRoot: targetRoot });
   await manager.enterReference({ projectSessionToken: source.projectSessionToken, projectGeneration: source.projectGeneration, referenceId: declared.references[0].id });
-  assert.equal(await readFile(targetTool, 'utf8'), await readFile(fileURLToPath(new URL('../workspace-tools/workspace-tool.mjs', import.meta.url)), 'utf8'));
+  await assert.rejects(readFile(targetTool, 'utf8'), { code: 'ENOENT' });
 });
 
 test('注入的离线工具可在空工作区创建机制并完成草稿保存，不依赖 CLI 或网页', async t => {
@@ -116,6 +116,7 @@ test('注入的离线工具将上游查询按规则声明方向序列化', async
   const manager = createProjectManager();
   t.after(() => manager.close());
   await manager.open({ projectRoot, intent: 'existing' });
+  await registerProjectSkills(projectRoot);
   const result = await runWorkspaceTool(projectRoot, ['node', '--id', 'health', '--direction', 'upstream', '--hops', '2']);
   const [direct, indirect] = result.paths.upstream;
   assert.equal(direct.chain, 'damage -> health');
