@@ -1,4 +1,4 @@
-# 抽象游戏规则模型
+﻿# 抽象游戏规则模型
 
 <!-- state: current -->
 ## 当前行为
@@ -6,7 +6,7 @@
 - 工具分析抽象规则，不模拟实时战局。敌人促进近战、后撤步抑制近战，即可通过共享概念识别机制反制；不以前置实例绑定、某局体力或行动可用性判断作为查询条件。
 - 一个工作区只有一份 canonical 概念定义图。持久化概念、机制、视图和规则使用英文语义 ID，拒绝 UUID 与随机十六进制片段。概念可保存自然语言 aliases；别名不遮蔽 canonical ID，歧义别名返回全部候选。同名不同 ID 不合并，改名不改引用。
 - `sign: 1` 表示源增加时目标增加，`sign: -1` 表示源增加时目标减少；正负不表示对玩家有利与否。消耗是行动对资源的负向作用，资源支持行动是另一条关系。
-- `specializes` 没有 sign，只沿 source → target 单向表达具体概念指向上位概念的 DAG 分类声明；不反向、不跨兄弟、不建模禁止、数值或具体效果。分类路径不输出正负号，不落盘派生规则。
+- `specializes` 没有 sign，只沿 source → target 单向表达具体概念指向上位概念的分类声明；不反向、不跨兄弟、不建模禁止、数值或具体效果。每个概念至多一个父概念：同一 source 的第二条出边以 `SPECIALIZES_MULTIPLE_PARENTS` 显式失败，自连与成环仍分别以 `SPECIALIZES_SELF_LINK`、`SPECIALIZES_CYCLE` 失败（`src/domain/graph.mjs` 的 `assertSpecializes`）。is-a 的节点标签、虚线与展开集合都只从已保存关系派生，不能创建、替代或反推关系。分类路径不输出正负号，不落盘派生规则。
 - 每条 `influence` 规则保存关系、符号、继承策略及可选 `ruleText`；适用条件直接写入规则文字，不设独立 condition 字段，也不自动求值。整个工作区同一有向端点对只允许一条规则。规则 ID 固定为 `<source>-2-<target>`；关系类型、正负、规则文字或继承策略变化均编辑该规则，不以新 ID 建第二条边。
 - `node` 查询给出**分类透传上下文**（结果字段 `taxonomy`，`interpretation` 为 `classificationContextOnly`）：从子概念沿 `specializes` 上溯，列出每个上位概念及其自身的声明边与 is-a 路径。它是发现与阅读线索，不使子概念取得这些影响，也不参与正负号结论；含 is-a 步骤的路径本身仍不带符号。
 - 规则库可选 `retentionBindings`（`mechanismConceptId`／`resourceConceptId`／`capConceptId`）把配对升级为一等事实：同一资源或同一上限在全工作区只能绑定一次，资源与上限不能相同。**配对不能靠两端各自的 is-a 特化派生**——独立展开会得到交叉配对；只有显式 `--include-inherited` 的 `impact`／`node` 查询才由绑定生成带 `derived` 与 `origin` 的派生边，不落盘、不级联，并与作者声明的同端点规则不并存。分类透传与派生都由 `src/domain/query-paths.mjs` 计算，`src/domain/graph.mjs` 只处理作者声明的边。
@@ -15,7 +15,7 @@
 - 有限简单路径保留方向、符号、条件与来源，并报告截断。符号相乘仅解释单路径变化方向，不推断影响强度、净收益、胜率或动态闭环结果。
 - 不接触从属关系的纯影响单入单出且不在可遍历环中的节点可以折叠；摘要保留全部原始路径，展开可恢复。路径查询和下游筛选使用未折叠原图，所有关系只按保存方向经过。从属自连接与全工作区从属闭环均拒绝；简单路径去重和数量、深度上限防止无限查询。
 - 孤立、只有输入、相似结构都是设计疑点，不自动判坏、合并或删除；终点、消耗出口、未覆盖范围可能合理。未被选图引用的全局定义不属于当前图的孤立节点。
-- Schema 的唯一来源是 `schemas/protocol.schema.json`；跨文件校验归 `src/domain/validate.mjs`。当前正式协议版本为 workspace v12、definitions v7、mechanic v7、view v4；未知版本、无效引用或必需字段缺失不以默认值修复。
+- Schema 的唯一来源是 `schemas/protocol.schema.json`；跨文件校验归 `src/domain/validate.mjs`。当前正式协议版本为 workspace v13、definitions v7、rules v1、mechanic v8、view v5；mechanism 与 view 必填 `taxonomyPresentation`（`{ mode: "label", expandedNodeIds }`），缺失字段不以运行时默认值修复。单父不变量由 `src/domain/graph.mjs` 承载，is-a 展示投影由 `src/domain/taxonomy-presentation.mjs` 承载。
 
 ## 验证边界
 
@@ -25,6 +25,11 @@
 
 <!-- state: history -->
 ## 演进历史
+
+<!-- dated: 2026-09-22 -->
+### is-a 收紧为单父并显式保存展示状态
+
+`specializes` 从“多父分类 DAG”收紧为每个概念至多一个父概念：同一 source 的第二条出边显式失败，自连与成环继续拒绝。机制图与视图新增必填 `taxonomyPresentation`（`label` + 展开集合），标签只投影已保存关系。协议随之升级为 workspace v13、mechanic v8、view v5（definitions v7、rules v1 不变），旧资料必须迁移后才能完整编辑。**未采用**保留多父、仅做展示兼容并让缺少字段等效打开的初版方案：它拒绝不了歧义数据，也让 label 事实上承担关系事实。
 
 <!-- dated: 2026-09-14 -->
 ### 分类透传上下文与配对绑定派生

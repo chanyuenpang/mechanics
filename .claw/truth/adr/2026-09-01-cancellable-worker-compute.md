@@ -1,4 +1,4 @@
-# ADR: 图路由与排版使用可取消 Worker 任务
+﻿# ADR: 图路由与排版使用可取消 Worker 任务
 
 ## Context
 

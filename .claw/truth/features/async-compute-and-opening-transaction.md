@@ -1,4 +1,4 @@
-# 可取消后台计算与打开事务
+﻿# 可取消后台计算与打开事务
 
 <!-- state: current -->
 
@@ -6,6 +6,7 @@
 
 - `GraphComputeCoordinator` 是图计算生命周期的唯一 owner；同一时刻只保留一个 Worker。新的 route 或 layout 请求会先 `terminate` 旧 Worker，并以单调递增的 `requestId` 标识新任务。
 - Worker 返回结果只有在 `requestId`、`geometryKey` 与当前几何仍同时匹配时才可提交；失配、Worker 加载/运行错误或响应反序列化失败都会显式失败，不会用旧结果覆盖当前画布。
+- 画布、自动排版、路由缓存与几何签名消费同一份显示投影 `src/domain/taxonomy-presentation.mjs` 的 `projectDisplayGraph`（is-a 标签、展开时的虚线边与隐藏的孤立父概念都在这里决定）；`graphGeometryKey`、Worker 载荷与终态几何提交都基于该投影，隐藏节点不参与布局也不产生路线。服务端 Agent `mechanic arrange` 与草稿自动排版按同一规则投影后再排版。
 - 画布正式连线重绘与自动排版都在 Worker 中执行。拖动期间保留轻量关联边预览，松手后提交后台正式重绘；后台计算显示非模态状态，不锁定拖动、缩放和普通编辑。
 - 文件打开的 loading overlay 由真实读取事务驱动，并持续到非空图的首帧路线提交；读取或计算失败后停止动画并保留原错误。
 - 自动排版完成端点交换后只做节点、端点和拐点的同步坐标变换，水平与竖直通道统一保持 `48px` 最小间距，不重复触发全图布线。

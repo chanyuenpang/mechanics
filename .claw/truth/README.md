@@ -1,4 +1,4 @@
-# 规则分析工具知识入口
+﻿# 规则分析工具知识入口
 
 <!-- state: current -->
 ## 当前知识归属
@@ -14,5 +14,6 @@
 - [独立视图文件决策](adr/2026-08-31-view-file-autosave.md)：自动写回、最近引用、失败草稿保护与显式 v3 迁移。
 - [可取消 Worker 计算决策](adr/2026-09-01-cancellable-worker-compute.md)：计算生命周期、竞态门禁与打开事务。
 - [语义 ID 与 Agent catalog 决策](adr/2026-09-02-semantic-ids-and-agent-catalog.md)：稳定身份、aliases、端点规则唯一与生成读模型。
+- [is-a 单父与展示状态决策](adr/2026-09-22-is-a-single-parent-and-presentation-state.md)：单父分类不变量、显式展开状态与唯一的显示投影。
 
 操作说明和完整字段说明位于 `docs/`；Truth 记录当前事实，ADR 记录重要取舍。任务报告与成功提示本身不证明知识文档已经更新。

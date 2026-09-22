@@ -1,4 +1,4 @@
-# ADR：语义 ID、别名与逐概念 Agent 读模型
+﻿# ADR：语义 ID、别名与逐概念 Agent 读模型
 
 <!-- state: accepted -->
 ## 决策
