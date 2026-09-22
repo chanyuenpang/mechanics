@@ -36,9 +36,18 @@ export function compose(workspace, selectedIds) {
 // specializes 沿“具体概念 → 上位概念”单向保持极性；分类关系必须无环。
 export function assertSpecializes(edges) {
   const specializes = edges.filter(edge => edge.relation === 'specializes');
-  for (const edge of specializes) if (edge.source === edge.target) {
-    const error = new Error(`specializes 关系不能连接自身：[${edge.id}]`);
-    error.code = 'SPECIALIZES_SELF_LINK'; throw error;
+  const parentByChild = new Map();
+  for (const edge of specializes) {
+    if (edge.source === edge.target) {
+      const error = new Error(`specializes 关系不能连接自身：[${edge.id}]`);
+      error.code = 'SPECIALIZES_SELF_LINK'; throw error;
+    }
+    const previous = parentByChild.get(edge.source);
+    if (previous) {
+      const error = new Error(`概念 ${edge.source} 的 is-a 父概念必须唯一；规则 ${previous.id} 指向 ${previous.target}，规则 ${edge.id} 指向 ${edge.target}`);
+      error.code = 'SPECIALIZES_MULTIPLE_PARENTS'; throw error;
+    }
+    parentByChild.set(edge.source, edge);
   }
   const adjacent = new Map();
   for (const edge of specializes) {

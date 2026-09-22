@@ -7,6 +7,7 @@ import { projectContext, WORKSPACE_DIRECTORY } from './project-context.mjs';
 import { readWorkspace } from './workspace.mjs';
 import { ContractError } from '../domain/validate.mjs';
 import { semanticIdProblem } from '../domain/identity.mjs';
+import { MIGRATABLE_WORKSPACE_VERSIONS } from './migration.mjs';
 
 const HISTORY_VERSION = 1;
 const RECENT_LIMIT = 12;
@@ -194,8 +195,11 @@ async function inspectProject(body) {
     // 预检只判断 canonical 是否可打开；生成文档目录的问题由打开后的导出状态处理。
     const context = await projectContext(projectRoot, { allowMissingExport: true, allowUnavailableExport: true });
     const workspace = await readWorkspace(context.workspaceRoot, { context, isolateResources: true });
+    // 可迁移的旧协议即使能被兼容读取，打开项目时也会被自动升级；预检如实标记。
+    const willUpgrade = MIGRATABLE_WORKSPACE_VERSIONS.includes(workspace.manifest.schemaVersion);
     return { result: { projectRoot: context.projectRoot, status: 'existing', workspaceRoot: context.workspaceRoot,
-      workspaceName: workspace.manifest.name, workspaceId: workspace.manifest.id, requiredMetadata: [], willInitialize: false },
+      workspaceName: workspace.manifest.name, workspaceId: workspace.manifest.id, requiredMetadata: [], willInitialize: false,
+      ...(willUpgrade ? { willUpgrade: true } : {}) },
       // 既有工作区的内容可由另一个合法写入者持续变化。预检只确认“仍是同一个可打开的工作区”，
       // 不把规则 revision 当作打开凭据；真正读取由 open/store 在切换时完成。
       fingerprint: `existing:${workspace.manifest.id}` };
@@ -205,7 +209,8 @@ async function inspectProject(body) {
     if (error?.code === 'WORKSPACE_VERSION_UNSUPPORTED') {
       try {
         const manifest = JSON.parse(await readFile(resolve(workspaceRoot, 'workspace.json'), 'utf8'));
-        if (manifest?.kind === 'workspace' && [10, 11].includes(manifest.schemaVersion)
+        // 没有只读兼容模型、但有迁移路径的版本，打开项目时会被自动升级。
+        if (manifest?.kind === 'workspace' && MIGRATABLE_WORKSPACE_VERSIONS.includes(manifest.schemaVersion)
           && typeof manifest.id === 'string' && typeof manifest.name === 'string') {
           return { result: { projectRoot, status: 'existing', workspaceRoot, workspaceName: manifest.name,
             workspaceId: manifest.id, requiredMetadata: [], willInitialize: false, willUpgrade: true },

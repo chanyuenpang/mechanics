@@ -10,7 +10,7 @@ import { publishCatalog } from '../src/server/catalog.mjs';
 import { ViewAutosave, readOpening, prepareOpening, createAndRememberView, viewSaveRequest, graphPositions, changeViewVisibility, moveViewMechanic, registerViewMechanic, removeViewMechanic } from '../src/web/view-files.mjs';
 import { copyExampleFixture } from './example-fixture.mjs';
 
-const view = { schemaVersion: 4, kind: 'view', workspaceId: 'sample-card-game', id: 'test-view', name: '测试视图', mechanicRegistrations: [{ mechanicId: 'hand', visible: true }], focusNodeIds: [], pinnedRuleIds: [], collapsedNodeIds: [], positions: {}, structuralPresentation: 'line' };
+const view = { schemaVersion: 5, kind: 'view', workspaceId: 'sample-card-game', id: 'test-view', name: '测试视图', mechanicRegistrations: [{ mechanicId: 'hand', visible: true }], focusNodeIds: [], pinnedRuleIds: [], collapsedNodeIds: [], positions: {}, structuralPresentation: 'line', taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } };
 async function fixture(t) {
   const projectRoot = await mkdtemp(join(tmpdir(), 'rule-view-opening-'));
   const root = join(projectRoot, '.mechanics');
@@ -45,6 +45,27 @@ test('重新打开同一个视图也读取最新规则；失败不会返回部�
   assert.throws(() => prepareOpening(first.workspace, 'absent'), /视图文件不存在/);
 });
 
+
+test('视图展开状态随视图保存并在重开后一致，成员显隐不重置它', async t => {
+  const { root, store, api } = await fixture(t);
+  const initial = await api('/api/workspace');
+  await createAndRememberView(api, initial.revision, view, 'test.view.json');
+  await store.flushPublication();
+  const opened = await readOpening(api, { kind: 'view', id: view.id });
+  assert.deepEqual(opened.snapshot.taxonomyPresentation, { mode: 'label', expandedNodeIds: [] });
+  const expanded = { ...opened.snapshot, taxonomyPresentation: { mode: 'label', expandedNodeIds: ['evade'] } };
+  // 显隐、成员顺序与物化路径都不能顺手丢掉展开集合。
+  assert.deepEqual(changeViewVisibility(opened.workspace, expanded, 'hand', false).taxonomyPresentation, { mode: 'label', expandedNodeIds: ['evade'] });
+  assert.deepEqual(moveViewMechanic(opened.workspace, expanded, 'hand', 0).taxonomyPresentation, { mode: 'label', expandedNodeIds: ['evade'] });
+  const saved = await api('/api/save', { revision: opened.workspace.revision, ...viewSaveRequest(opened.workspace, view.id, expanded) });
+  assert.deepEqual(JSON.parse(await readFile(join(root, 'test.view.json'), 'utf8')).taxonomyPresentation, { mode: 'label', expandedNodeIds: ['evade'] });
+  const reopened = await readOpening(api, { kind: 'view', id: view.id }, saved);
+  assert.deepEqual(reopened.snapshot.taxonomyPresentation, { mode: 'label', expandedNodeIds: ['evade'] });
+  // 收起后重开必须回到显式保存的空集合，而不是靠运行时补默认值。
+  const collapsed = await api('/api/save', { revision: saved.revision, ...viewSaveRequest(saved, view.id, { ...expanded, taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } }) });
+  assert.deepEqual(JSON.parse(await readFile(join(root, 'test.view.json'), 'utf8')).taxonomyPresentation, { mode: 'label', expandedNodeIds: [] });
+  assert.deepEqual((await readOpening(api, { kind: 'view', id: view.id }, collapsed)).snapshot.taxonomyPresentation, { mode: 'label', expandedNodeIds: [] });
+});
 test('对象形式的视图打开请求使用其 ID，而不是把对象转为文件名', async t => {
   const { api } = await fixture(t);
   const initial = await api('/api/workspace');
@@ -64,16 +85,22 @@ test('同一项目内切换机制复用已验证快照，不读取或写入工�
   assert.equal(await readFile(join(root, 'workspace.json'), 'utf8'), before);
 });
 
-test('外部写入让旧快照误判机制为空时，打开机制会回读一次最新工作区', async t => {
+test('外部写入让旧快照误判机制为空时，只读取目标机制而不全量回读', async t => {
   const { api } = await fixture(t);
   const latest = await api('/api/workspace');
   const stale = structuredClone(latest);
   const hand = stale.mechanics.find(item => item.id === 'hand');
   hand.focusNodeIds = [];
   hand.pinnedRuleIds = [];
-  let requests = 0;
-  const opened = await readOpening(async (...args) => { requests++; return api(...args); }, { kind: 'mechanic', id: 'hand' }, stale);
-  assert.equal(requests, 1);
+  let workspaceRequests = 0, mechanicRequests = 0;
+  const opened = await readOpening(async (...args) => { workspaceRequests++; return api(...args); }, { kind: 'mechanic', id: 'hand' }, stale,
+    async ({ id, file }) => {
+      mechanicRequests++;
+      assert.equal(id, 'hand'); assert.equal(file, latest.files.find(item => item.kind === 'mechanic' && item.id === id).path);
+      return { mechanic: latest.mechanics.find(item => item.id === id), resourceRevision: latest.resourceRevisions.mechanics[id] };
+    });
+  assert.equal(workspaceRequests, 0);
+  assert.equal(mechanicRequests, 1);
   assert.ok(opened.graph.nodes.length > 0);
   assert.equal(opened.activeId, 'hand');
 });

@@ -24,6 +24,7 @@ const assets = new Map([
   ['/flow-refinement.mjs', [new URL('../web/flow-refinement.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/graph-compute.mjs', [new URL('../web/graph-compute.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/graph-compute-kernel.mjs', [new URL('../web/graph-compute-kernel.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/auto-layout.mjs', [new URL('../web/auto-layout.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/geometry-settle.mjs', [new URL('../web/geometry-settle.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/graph-compute-worker.js', [new URL('../web/graph-compute-worker.js', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/glossary.mjs', [new URL('../web/glossary.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
@@ -38,6 +39,7 @@ const assets = new Map([
   ['/domain/endpoint-projection.mjs', [new URL('../domain/endpoint-projection.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/domain/hover-details.mjs', [new URL('../domain/hover-details.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/domain/identity.mjs', [new URL('../domain/identity.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/domain/taxonomy-presentation.mjs', [new URL('../domain/taxonomy-presentation.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/vendor/elk.js', [dependency.resolve('elkjs/lib/elk.bundled.js'), 'text/javascript; charset=utf-8']],
   ['/vendor/elk-worker.js', [dependency.resolve('elkjs/lib/elk-worker.min.js'), 'text/javascript; charset=utf-8']],
   ['/vendor/libavoid/index.js', [new URL('index.js', pathToFileURL(dependency.resolve('libavoid-js'))), 'text/javascript; charset=utf-8']],
@@ -45,14 +47,14 @@ const assets = new Map([
   ['/vendor/webcola.js', [dependency.resolve('webcola/WebCola/cola.min.js'), 'text/javascript; charset=utf-8']],
 ]);
 
-export async function startServer({ projectRoot = null, workspaceRoot = null, port = 4319, preferencesPath, projectHistoryPath, directoryPicker = createNativeDirectoryPicker() }) {
+export async function startServer({ projectRoot = null, workspaceRoot = null, port = 4319, preferencesPath, projectHistoryPath, syncProjectAssets, directoryPicker = createNativeDirectoryPicker() }) {
   if (workspaceRoot) throw new Error('startServer 只接受 projectRoot；工作区固定为项目内 .mechanics');
   // Schema 在进程启动时由 AJV 固定。网页资源也必须在同一时刻固定，避免包文件被更新后，
   // 旧校验器向浏览器发送新版页面，从而出现“可编辑但不能保存”的协议撕裂。
   const servedAssets = new Map(await Promise.all([...assets].map(async ([path, [source, type]]) =>
     [path, { content: await readFile(source), type }])));
   const projectHistory = createProjectHistory(projectHistoryPath);
-  const projects = createProjectManager({ onActivated: project => projectHistory.record(project) });
+  const projects = createProjectManager({ onActivated: project => projectHistory.record(project), syncProjectAssets });
   if (projectRoot) await projects.open({ projectRoot });
   const preferences = createPreferences(preferencesPath);
   let origin;
@@ -78,6 +80,9 @@ export async function startServer({ projectRoot = null, workspaceRoot = null, po
       if (url.pathname.startsWith('/api/')) {
         if (request.method === 'OPTIONS') { send(204, ''); return; }
         if (request.method === 'GET' && url.pathname === '/api/project') { send(200, await projects.state()); return; }
+        if (request.method === 'GET' && url.pathname === '/api/project/assets') {
+          send(200, projects.readAssetSync(url.searchParams.get('projectSessionToken') ?? undefined)); return;
+        }
         // 仅 CLI 在确认端口已被本服务占用时调用：先完成响应，再关闭旧进程，
         // 使新版 mech web 能接管同端口而不会误杀其他本机服务。
         if (request.method === 'POST' && url.pathname === '/api/server/handoff') {
@@ -112,6 +117,10 @@ export async function startServer({ projectRoot = null, workspaceRoot = null, po
         if (request.method === 'GET' && url.pathname === '/api/agent/mechanic') {
           send(200, await projects.openAgentMechanic({ projectRoot: url.searchParams.get('projectRoot'),
             projectGeneration: Number(url.searchParams.get('projectGeneration')), mechanic: url.searchParams.get('mechanic') })); return;
+        }
+        if (request.method === 'GET' && url.pathname === '/api/mechanic') {
+          send(200, await projects.readMechanic({ projectSessionToken: url.searchParams.get('projectSessionToken'),
+            projectGeneration: Number(url.searchParams.get('projectGeneration')), id: url.searchParams.get('id'), file: url.searchParams.get('file') })); return;
         }
         if (request.method === 'GET' && url.pathname === '/api/concept-docs') {
           const conceptId = url.searchParams.get('conceptId');

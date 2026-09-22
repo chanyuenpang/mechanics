@@ -8,6 +8,7 @@ import { commitFile } from './files.mjs';
 import { resolve } from 'node:path';
 import { lstat, readFile, readdir, rm } from 'node:fs/promises';
 import { ContractError } from '../domain/validate.mjs';
+import { CURRENT_WORKSPACE_VERSION, MIGRATABLE_WORKSPACE_VERSIONS, workspaceMigrationPlan } from './migration.mjs';
 
 const fail = (code, message, details = {}) => { throw Object.assign(new ContractError(code, message), details); };
 
@@ -15,7 +16,7 @@ async function legacyVersion(projectRoot) {
   const legacyRoot = resolve(projectRoot, LEGACY_WORKSPACE_DIRECTORY);
   const { document } = await readDocument(legacyRoot, 'workspace.json');
   const version = document?.schemaVersion;
-  if (![7, 8, 9, 10, 11, 12].includes(version)) fail('MIGRATION_VERSION_UNSUPPORTED', `旧工作区版本不受支持：v${String(version)}`);
+  if (![...MIGRATABLE_WORKSPACE_VERSIONS, CURRENT_WORKSPACE_VERSION].includes(version)) fail('MIGRATION_VERSION_UNSUPPORTED', `旧工作区版本不受支持：v${String(version)}`);
   return { legacyRoot, version, manifest: document };
 }
 
@@ -64,10 +65,8 @@ export async function migrateLegacyProject(project, { execute = false } = {}) {
   const { legacyRoot, version, manifest: legacyManifest } = await legacyVersion(projectRoot);
   const removableLegacySkills = await legacySkillCleanupPlan(projectRoot);
   const removableLegacyCatalog = await legacyCatalogCleanupPlan(projectRoot, legacyManifest);
-  const steps = [];
-  for (let from = version; from < 10; from++) steps.push({ from, to: from + 1 });
-  if (version <= 10) steps.push({ from: 10, to: 12 });
-  else if (version === 11) steps.push({ from: 11, to: 12 });
+  // 只消费 migration.mjs 的单一迁移链：显式命令、自动升级与这里不会漂移。
+  const steps = workspaceMigrationPlan(version);
   if (!execute) return { ok: true, execute: false, projectRoot, legacyRoot, version, steps, removableLegacySkills, removableLegacyCatalog,
     next: '使用 --execute 执行协议升级、根目录切换、skill/tool 注入与文档重建。' };
 

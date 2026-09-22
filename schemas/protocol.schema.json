@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "urn:mechanics-tools:protocol:12",
-  "title": "Mechanics 工作区 v12、机制 v7、定义 v7、规则库 v1、视图 v4",
+  "$id": "urn:mechanics-tools:protocol:13",
+  "title": "Mechanics 工作区 v13、机制 v8、定义 v7、规则库 v1、视图 v5",
   "oneOf": [
     {
       "$ref": "#/definitions/workspace"
@@ -241,7 +241,7 @@
       "properties": {
         "schemaVersion": {
           "enum": [
-            12
+            13
           ]
         },
         "kind": {
@@ -317,6 +317,15 @@
         }
       ]
     },
+    "taxonomyPresentation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "expandedNodeIds"],
+      "properties": {
+        "mode": { "const": "label" },
+        "expandedNodeIds": { "$ref": "#/definitions/ids" }
+      }
+    },
     "view": {
       "type": "object",
       "additionalProperties": false,
@@ -331,11 +340,12 @@
         "pinnedRuleIds",
         "collapsedNodeIds",
         "positions",
-        "structuralPresentation"
+        "structuralPresentation",
+        "taxonomyPresentation"
       ],
       "properties": {
         "schemaVersion": {
-          "const": 4
+          "const": 5
         },
         "kind": {
           "const": "view"
@@ -391,6 +401,9 @@
             "line",
             "badge"
           ]
+        },
+        "taxonomyPresentation": {
+          "$ref": "#/definitions/taxonomyPresentation"
         },
         "projectionPositions": {
           "$ref": "#/definitions/projectionPositions"
@@ -844,12 +857,13 @@
         "scope",
         "focusNodeIds",
         "pinnedRuleIds",
-        "positions"
+        "positions",
+        "taxonomyPresentation"
       ],
       "properties": {
         "schemaVersion": {
           "enum": [
-            7
+            8
           ]
         },
         "kind": {
@@ -890,6 +904,9 @@
         },
         "routeCache": {
           "$ref": "#/definitions/routeCache"
+        },
+        "taxonomyPresentation": {
+          "$ref": "#/definitions/taxonomyPresentation"
         }
       }
     }

@@ -98,8 +98,9 @@ test('导出清单将文件夹聚合为一篇，单机制图保持独立且不�
 test('新建机制图默认进入单独导出；文件夹已覆盖时不重复，视图不进清单', async t => {
   const { root, workspace } = await fixture(t);
   const store = await createWorkspaceStore(root);
-  const document = id => ({ schemaVersion: 7, kind: 'mechanic', workspaceId: workspace.manifest.id, id, name: '新建机制',
-    scope: '验收新建默认导出。', focusNodeIds: [], pinnedRuleIds: [], positions: {} });
+  const document = id => ({ schemaVersion: 8, kind: 'mechanic', workspaceId: workspace.manifest.id, id, name: '新建机制',
+    scope: '验收新建默认导出。', focusNodeIds: [], pinnedRuleIds: [], positions: {},
+    taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } });
   try {
     const existing = workspace.mechanics[0];
     const seeded = await store.setDocumentExport({ revision: workspace.revision, selections: [{ kind: 'mechanic', mechanicId: existing.id }] });
@@ -163,6 +164,12 @@ test('文档版本涵盖名称、scope 与路径，语义版本忽略分类，�
   assert.notEqual(buildCatalog(moved).semanticRevision, before.semanticRevision);
 });
 
+test('目录型旧 AGENTS 指南拒绝普通发布', async t => {
+  const { exportRoot, workspace } = await fixture(t);
+  await mkdir(join(exportRoot, 'AGENTS.md'));
+  await assert.rejects(publishCatalog(exportRoot, workspace), { code: 'EXPORT_ROOT_NOT_OWNED' });
+});
+
 test('未标记的旧文档拒绝普通发布；当前词典随 canonical 保存刷新', async t => {
   const { root, exportRoot, workspace } = await fixture(t);
   await rm(exportRoot, { recursive: true, force: true }); await mkdir(join(exportRoot, 'concepts'), { recursive: true });
@@ -188,8 +195,12 @@ test('未标记的旧文档拒绝普通发布；当前词典随 canonical 保存
     assert.match(await readFile(join(exportRoot, 'concepts.md'), 'utf8'), /生命值/);
   } finally { await store.close(); }
   const current = await readWorkspace(root);
+  // 不扫描导出根；仅当本次请求的安全路径确实存在但未受管时，明确暴露目录已失真。
+  await writeFile(join(exportRoot, 'legacy.md'), '遗留文档');
+  await assert.rejects(readCatalogBrowser(context, current, { file: 'legacy.md' }), { code: 'CATALOG_STALE' });
+  await rm(join(exportRoot, 'legacy.md'));
   await writeFile(join(exportRoot, 'concepts.md'), '手工篡改');
-  await assert.rejects(readCatalogBrowser(context, current), { code: 'CATALOG_STALE' });
+  await assert.rejects(readCatalogBrowser(context, current, 'health'), { code: 'CATALOG_STALE' });
   await publishCatalog(exportRoot, current);
   await readCatalogBrowser(context, current);
   await assert.rejects(readCatalogBrowser(context, current, { file: '../outside.md' }), { code: 'DOCUMENT_NOT_FOUND' });
@@ -221,6 +232,9 @@ test('未知根文件、文件夹内容或其他工作区所有权在写入清�
   await rm(join(exportRoot, 'manual.md'));
   await mkdir(join(exportRoot, 'mechanics/用户资料')); await writeFile(join(exportRoot, 'mechanics/用户资料/index.md'), '用户自己的页面');
   await assert.rejects(publishCatalog(exportRoot, workspace), { code: 'EXPORT_ROOT_NOT_EMPTY' });
+  // 无关文件仍会阻止下一次发布，但单篇已验证文档不为它扫描整个目录或阻塞。
+  await readCatalogBrowser({ exportRoot }, workspace);
+  await writeFile(join(exportRoot, 'README.md'), '手工篡改索引');
   await assert.rejects(readCatalogBrowser({ exportRoot }, workspace), { code: 'CATALOG_STALE' });
   await rm(join(exportRoot, 'mechanics/用户资料'), { recursive: true });
   await assert.rejects(removeCatalog(exportRoot, 'other-workspace'), { code: 'EXPORT_ROOT_NOT_OWNED' });
@@ -234,6 +248,7 @@ test('生成目录中的链接不能借发布、浏览或删除访问外部文�
   catch (error) { if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) { t.skip('当前平台不允许创建链接'); return; } throw error; }
   await assert.rejects(publishCatalog(exportRoot, workspace), { code: 'UNSAFE_PATH' });
   await assert.rejects(removeCatalog(exportRoot, workspace.manifest.id), { code: 'UNSAFE_PATH' });
-  await assert.rejects(readCatalogBrowser({ exportRoot }, workspace), { code: 'CATALOG_STALE' });
+  // 浏览 README 只核验受管指南和请求目标，不扫描未请求的 mechanics 子树。
+  await readCatalogBrowser({ exportRoot }, workspace);
   assert.equal(await readFile(join(outside, 'index.md'), 'utf8'), '外部资料');
 });

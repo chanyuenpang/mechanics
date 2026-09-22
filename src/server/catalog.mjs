@@ -277,7 +277,10 @@ async function commitGenerated(root, file, text) {
 
 async function hasGeneratedGuide(root, workspaceId) {
   try {
-    const raw = await readFile(await workspacePath(root, AGENT_DOCS_GUIDE, { extensions: ['.md'] }), 'utf8');
+    const path = await workspacePath(root, AGENT_DOCS_GUIDE, { extensions: ['.md'] });
+    // 旧导出可能把同名指南作为目录留下；这不是可用的所有权标记。
+    if (!(await lstat(path)).isFile()) return false;
+    const raw = await readFile(path, 'utf8');
     const firstLine = raw.split(/\r?\n/, 1)[0];
     const marker = raw.match(/<!-- mechanics-agent-docs:v8 workspace-id:([^\r\n]+) -->/);
     if (marker) {

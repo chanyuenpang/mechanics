@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createWorkspaceStore } from '../src/server/store.mjs';
 import { readWorkspace } from '../src/server/workspace.mjs';
+import { repairPresentationMemberReferences } from '../src/domain/presentation.mjs';
 import { startServer } from '../src/server/http.mjs';
 import { copyExampleFixture } from './example-fixture.mjs';
 
@@ -18,6 +19,17 @@ async function fixture(t) {
 }
 const mechanicAt = (workspace, index = 0) => workspace.mechanics[index];
 const pathOf = (workspace, kind, id) => workspace.files.find(file => file.kind === kind && file.id === id).path;
+
+test('展示/导出成员修复只移除失效机制 ID，不伪造概念或规则', async t => {
+  const { workspace } = await fixture(t);
+  const candidate = structuredClone(workspace);
+  candidate.manifest.exportSelections = [{ kind: 'mechanic', mechanicId: 'weapon-category-01' }];
+  const repaired = repairPresentationMemberReferences(candidate);
+  assert.deepEqual(repaired.workspace.manifest.exportSelections, []);
+  assert.deepEqual(repaired.workspace.definitions, candidate.definitions);
+  assert.deepEqual(repaired.workspace.rules, candidate.rules);
+  assert.deepEqual(repaired.diagnostics.map(item => item.field), ['exportSelections']);
+});
 
 test('冲突判定只看本次写入的资源：别的页面写别的文件不再拒绝本次保存', async t => {
   const { store, workspace } = await fixture(t);
@@ -73,9 +85,9 @@ test('同一资源的语义变化仍然拒绝，并指出具体文件', async t 
 
 test('视图写入同样按自身资源判定，其他资源变化不再阻塞', async t => {
   const { store, workspace } = await fixture(t);
-  const view = { schemaVersion: 4, kind: 'view', workspaceId: workspace.manifest.id, id: 'scope-view', name: '范围视图',
+  const view = { schemaVersion: 5, kind: 'view', workspaceId: workspace.manifest.id, id: 'scope-view', name: '范围视图',
     mechanicRegistrations: [{ mechanicId: mechanicAt(workspace).id, visible: true }], focusNodeIds: [], pinnedRuleIds: [],
-    collapsedNodeIds: [], positions: {}, structuralPresentation: 'line' };
+    collapsedNodeIds: [], positions: {}, structuralPresentation: 'line', taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } };
   const created = await store.createView({ revision: workspace.revision, document: view, file: 'scope-view.view.json' });
   const baseline = created.resourceRevisions, document = structuredClone(view);
   // 别的页面改写规则库。
@@ -120,7 +132,7 @@ test('结构写入仍然要求整体版本：新建、移动与删除不做按�
   const baseline = workspace.resourceRevisions;
   const other = structuredClone(workspace.definitions); other.nodes[0].label = '别的页面改过';
   await store.save({ revision: workspace.revision, resourceRevisions: baseline, kind: 'definitions', document: other });
-  const document = { schemaVersion: 7, kind: 'mechanic', workspaceId: workspace.manifest.id, id: 'scope-structure', name: '结构写入', scope: '抽象规则', focusNodeIds: [], pinnedRuleIds: [], positions: {} };
+  const document = { schemaVersion: 8, kind: 'mechanic', workspaceId: workspace.manifest.id, id: 'scope-structure', name: '结构写入', scope: '抽象规则', focusNodeIds: [], pinnedRuleIds: [], positions: {}, taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } };
   await assert.rejects(store.createMechanic({ revision: workspace.revision, resourceRevisions: baseline, document, file: 'mechanics/scope-structure.mechanic.json' }),
     { code: 'REVISION_CONFLICT' });
 });
@@ -146,4 +158,38 @@ test('HTTP 写入带每资源基线时不再因其他文件变化被拒绝，缺
   assert.equal(rejected.status, 409);
   assert.equal((await rejected.json()).error, 'REVISION_CONFLICT');
   assert.equal((await readWorkspace(directory)).mechanics.find(item => item.id === mechanic.id).name, '页面 B 重命名');
+});
+
+test('普通单机制保存只读取、校验并回读目标机制与核心合同，坏机制和无关组合不会阻塞', async t => {
+  const { directory, store, workspace } = await fixture(t);
+  const target = structuredClone(mechanicAt(workspace));
+  const file = pathOf(workspace, 'mechanic', target.id);
+  // 此文件不在前端读取快照中；全工作区读取会在保存前或提交后失败。
+  await writeFile(join(directory, 'mechanics/broken.mechanic.json'), '{坏 JSON', 'utf8');
+  // 无关展示/导出成员损坏不得阻断目标机制；保存时应明确修复，而不是伪造机制图。
+  const manifest = structuredClone(workspace.manifest);
+  manifest.compositions.push({ id: 'broken-composition', name: '失效组合', graphIds: ['weapon-category-01'], collapsedNodeIds: [], positions: {} });
+  manifest.exportSelections = [{ kind: 'mechanic', mechanicId: 'weapon-category-01' }];
+  await writeFile(join(directory, 'workspace.json'), JSON.stringify(manifest), 'utf8');
+  target.name = '目标机制仍可保存';
+  const saved = await store.save({ revision: workspace.revision, resourceRevisions: workspace.resourceRevisions,
+    kind: 'mechanic', id: target.id, file, document: target });
+  assert.equal(saved.singleMechanicSave, true);
+  assert.equal(saved.mechanics[0].name, '目标机制仍可保存');
+  assert.equal(JSON.parse(await readFile(join(directory, file), 'utf8')).name, '目标机制仍可保存');
+  const repairedManifest = JSON.parse(await readFile(join(directory, 'workspace.json'), 'utf8'));
+  assert.deepEqual(repairedManifest.compositions.at(-1).graphIds, []);
+  assert.deepEqual(repairedManifest.exportSelections, []);
+  assert.deepEqual(saved.presentationDiagnostics, [
+    { code: 'PRESENTATION_MEMBER_REFERENCE_REMOVED', file: 'workspace.json', field: 'graphIds', missingIds: ['weapon-category-01'] },
+    { code: 'PRESENTATION_MEMBER_REFERENCE_REMOVED', file: 'workspace.json', field: 'exportSelections', missingIds: ['weapon-category-01'] },
+  ]);
+  // 目标机制仍必须与 definitions/rules 共同接受引用合同校验。
+  const invalid = structuredClone(target); invalid.focusNodeIds.push('missing-concept');
+  await assert.rejects(store.save({ revision: workspace.revision, resourceRevisions: saved.resourceRevisions,
+    kind: 'mechanic', id: target.id, file, document: invalid }), { code: 'MISSING_REFERENCE' });
+  // 同一目标的过期基线仍必须显式拒绝，不能因隔离读取而放宽冲突保护。
+  const stale = structuredClone(target); stale.scope = '过期目标草稿';
+  await assert.rejects(store.save({ revision: workspace.revision, resourceRevisions: workspace.resourceRevisions,
+    kind: 'mechanic', id: target.id, file, document: stale }), { code: 'REVISION_CONFLICT' });
 });

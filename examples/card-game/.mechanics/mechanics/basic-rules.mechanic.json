@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 7,
+  "schemaVersion": 8,
   "kind": "mechanic",
   "workspaceId": "sample-card-game",
   "id": "basic-rules",
@@ -21,5 +21,9 @@
     "damage-2-health",
     "health-2-failure"
   ],
-  "positions": {}
+  "positions": {},
+  "taxonomyPresentation": {
+    "mode": "label",
+    "expandedNodeIds": []
+  }
 }

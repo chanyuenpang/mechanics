@@ -12,6 +12,10 @@ const semanticHash = value => createHash('sha256').update(JSON.stringify(value))
 // 布局变化不得移动语义版本，否则“打开一张图自动补算路径”就会作废其他页面与 Agent 草稿。
 // 依据：docs/文件协议.md「布局不改变语义 revision」。
 const presentationFields = new Set(['positions', 'projectionPositions', 'routeCache', 'nodeColors', 'nodeStyles']);
+// 受管项目工具目录（src/server/project-skills.mjs 的 PROJECT_TOOL_DIRECTORY）在工作区内的
+// 相对路径。它由工具自己在后台安装与修复，不是用户编辑的工作区语义：把它的出现/消失算进
+// 文件树版本，会让一次后台同步把所有人正在编辑的草稿变成 revision 冲突。
+const managedToolDirectory = 'tools';
 export function withoutPresentation(value) {
   if (Array.isArray(value)) return value.map(withoutPresentation);
   if (value === null || typeof value !== 'object') return value;
@@ -204,8 +208,8 @@ export async function readWorkspace(workspaceRoot, { context = null, isolateReso
   const { workspace, diagnostics: presentationDiagnostics } = resolvePresentationReferences({ ...validated, files });
   const hash = createHash('sha256');
   for (const [file, snapshot] of [...snapshots].sort(([a], [b]) => a.localeCompare(b))) hash.update(JSON.stringify([file, snapshot]));
-  // 空目录变化也会改变文件树版本，避免目录操作基于旧树执行。
-  hash.update(JSON.stringify(directories));
+  // 空目录变化也会改变文件树版本，避免目录操作基于旧树执行；受管工具目录除外。
+  hash.update(JSON.stringify(directories.filter(directory => directory !== managedToolDirectory)));
   return { ...workspace, projectRoot: context.projectRoot, workspaceRoot: root, agentExportRoot: context.exportRoot,
     agentExportPath: context.agentExportPath, agentExportStatus: context.exportStatus, agentExportError: context.exportError,
     files, directories, presentationDiagnostics: [...compatible.compatibilityDiagnostics, ...presentationDiagnostics], resourceDiagnostics, compatibilityMode: compatible.compatibilityMode,

@@ -93,6 +93,14 @@ const noDraftGeometry = (document, location) => {
   if (Object.keys(document.positions).length) fail('DRAFT_GEOMETRY_FORBIDDEN', `${location}.positions 必须保持为空；布局由网页管理`);
   if ('projectionPositions' in document || 'routeCache' in document) fail('DRAFT_GEOMETRY_FORBIDDEN', `${location} 不允许提交投影坐标或连线路径缓存`);
 };
+// is-a 展示状态是 mechanism/view 的必填事实：标签模式与展开集合都必须显式保存。
+const taxonomyPresentation = (value, location) => {
+  only(value, ['mode', 'expandedNodeIds'], ['mode', 'expandedNodeIds'], location);
+  if (value.mode !== 'label') fail('DRAFT_VALIDATION_FAILED', `${location}.mode 目前只接受 label`);
+  array(value.expandedNodeIds, `${location}.expandedNodeIds`);
+  if (new Set(value.expandedNodeIds).size !== value.expandedNodeIds.length) fail('DRAFT_VALIDATION_FAILED', `${location}.expandedNodeIds 不能重复`);
+  for (const id of value.expandedNodeIds) draftId(id, `${location}.expandedNodeIds`);
+};
 const qualifier = (item, nodes, location) => {
   only(item, ['key', 'value'], ['key', 'value'], location); draftId(item.key, `${location}.key`);
   object(item.value, `${location}.value`);
@@ -186,15 +194,21 @@ function validateRules(document, workspaceId, nodes) {
       seen.set(id, binding.id);
     }
   });
-  const outgoing = new Map(), visiting = new Set(), visited = new Set();
-  for (const edge of specializes) (outgoing.get(edge.source) ?? outgoing.set(edge.source, []).get(edge.source)).push(edge.target);
-  const visit = id => { if (visiting.has(id)) fail('DRAFT_VALIDATION_FAILED', 'is-a 关系形成分类环'); if (visited.has(id)) return; visiting.add(id); for (const target of outgoing.get(id) ?? []) visit(target); visiting.delete(id); visited.add(id); };
-  for (const id of outgoing.keys()) visit(id);
+  // is-a 是单父关系：同一概念出现第二条出边就是数据错误，不能静默保留多父。
+  const parent = new Map(), visiting = new Set(), visited = new Set();
+  for (const edge of specializes) {
+    const previous = parent.get(edge.source);
+    if (previous !== undefined) fail('DRAFT_VALIDATION_FAILED', `概念 ${edge.source} 的 is-a 父概念必须唯一：${previous} 与 ${edge.target}`);
+    parent.set(edge.source, edge.target);
+  }
+  const visit = id => { if (visiting.has(id)) fail('DRAFT_VALIDATION_FAILED', 'is-a 关系形成分类环'); if (visited.has(id)) return; visiting.add(id); const target = parent.get(id); if (target !== undefined) visit(target); visiting.delete(id); visited.add(id); };
+  for (const id of parent.keys()) visit(id);
 }
 function validateMechanic(document, workspaceId, nodes, rules) {
-  only(document, ['schemaVersion', 'kind', 'workspaceId', 'id', 'name', 'scope', 'focusNodeIds', 'pinnedRuleIds', 'positions'], ['schemaVersion', 'kind', 'workspaceId', 'id', 'name', 'scope', 'focusNodeIds', 'pinnedRuleIds', 'positions', 'ruleSelection'], 'mechanic');
+  only(document, ['schemaVersion', 'kind', 'workspaceId', 'id', 'name', 'scope', 'focusNodeIds', 'pinnedRuleIds', 'positions', 'taxonomyPresentation'], ['schemaVersion', 'kind', 'workspaceId', 'id', 'name', 'scope', 'focusNodeIds', 'pinnedRuleIds', 'positions', 'taxonomyPresentation', 'ruleSelection'], 'mechanic');
   if (document.ruleSelection !== undefined && document.ruleSelection !== 'explicit') fail('DRAFT_VALIDATION_FAILED', 'mechanic.ruleSelection 只允许 explicit，省略时按焦点邻接展开');
-  if (document.schemaVersion !== 7 || document.kind !== 'mechanic' || document.workspaceId !== workspaceId) fail('DRAFT_VALIDATION_FAILED', 'mechanic 的版本、类型或 workspaceId 无效');
+  if (document.schemaVersion !== 8 || document.kind !== 'mechanic' || document.workspaceId !== workspaceId) fail('DRAFT_VALIDATION_FAILED', 'mechanic 的版本、类型或 workspaceId 无效');
+  taxonomyPresentation(document.taxonomyPresentation, 'mechanic.taxonomyPresentation');
   draftId(document.id, 'mechanic.id'); draftText(document.name, 'mechanic.name'); draftText(document.scope, 'mechanic.scope'); noDraftGeometry(document, 'mechanic');
   const focused = uniqueIds(array(document.focusNodeIds, 'mechanic.focusNodeIds'), 'mechanic.focusNodeIds');
   for (const id of focused) if (!nodes.has(id)) fail('DRAFT_VALIDATION_FAILED', `mechanic.focusNodeIds 引用不存在的概念：${id}`);
@@ -245,8 +259,9 @@ async function openDraft(mechanicId, options) {
   if (mechanic && (options.name !== undefined || options.scope !== undefined || options.folder !== undefined)) fail('DRAFT_TARGET_EXISTS', `机制已存在：${mechanicId}；重新打开时不要提供 --name、--scope 或 --folder`);
   if (!mechanic && (!semanticId(mechanicId) || options.name === undefined || options.scope === undefined)) fail('DRAFT_CREATE_METADATA_REQUIRED', '新机制 draft open 必须同时提供 --mechanic、--name 与 --scope');
   if (!mechanic && targetFolder && !data.folders.includes(targetFolder)) fail('FOLDER_NOT_FOUND', `机制目录不存在：${targetFolder}`);
-  const document = mechanic?.value ?? { schemaVersion: 7, kind: 'mechanic', workspaceId: data.manifest.value.id, id: mechanicId,
-    name: text(options.name, '机制名称'), scope: text(options.scope, '机制范围'), focusNodeIds: [], pinnedRuleIds: [], positions: {} };
+  const document = mechanic?.value ?? { schemaVersion: 8, kind: 'mechanic', workspaceId: data.manifest.value.id, id: mechanicId,
+    name: text(options.name, '机制名称'), scope: text(options.scope, '机制范围'), focusNodeIds: [], pinnedRuleIds: [], positions: {},
+    taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } };
   await mkdir(drafts, { recursive: true }); const id = randomUUID(), draftFolder = join(drafts, id); await mkdir(draftFolder);
   const definitionsPath = join(draftFolder, 'definitions.json'), rulesPath = join(draftFolder, 'rules.json'), mechanicPath = join(draftFolder, 'mechanic.json');
   await writeFile(definitionsPath, JSON.stringify(structuralCopy(data.definitions.value), null, 2) + '\n');

@@ -1,13 +1,16 @@
 import { realpath, rename, readdir, rmdir, lstat, unlink, readFile } from 'node:fs/promises';
 import { resolve, relative, posix, dirname } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { readWorkspace, readDocument, discover, assertRelativeFile, ensureWorkspaceDirectory, workspacePath } from './workspace.mjs';
+import { readWorkspace, readDocument, discover, assertRelativeFile, ensureWorkspaceDirectory, workspacePath, workspaceResourceRevisions } from './workspace.mjs';
 import { encode, commitFile, commitFiles, acquireWorkspaceLock } from './files.mjs';
-import { planV7ToV8Migration, planV8ToV9Migration, planV9ToV10Migration, planV10ToV11Migration, planV11ToV12Migration, planV9DanglingNodeRepair } from './migration.mjs';
+import { planV7ToV8Migration, planV8ToV9Migration, planV9ToV10Migration, planV10ToV11Migration, planV11ToV12Migration, planV12ToV13Migration, planV9DanglingNodeRepair } from './migration.mjs';
 import { assertDocument, validateWorkspace, ContractError } from '../domain/validate.mjs';
 import { composeView } from '../domain/view.mjs';
+import { repairPresentationMemberReferences } from '../domain/presentation.mjs';
+import { projectDisplayGraph } from '../domain/taxonomy-presentation.mjs';
 import { documentExportStructure, mechanicFolderOf, selectCreatedMechanic } from '../domain/document-export.mjs';
 import { readQuerySnapshot } from './query-snapshot.mjs';
+import { readCatalogBrowser } from './catalog-browser.mjs';
 import { assertCatalogRemovable, buildCatalog, inspectCatalogPublication, publishCatalog, removeCatalog } from './catalog.mjs';
 import { projectContext, WORKSPACE_DIRECTORY } from './project-context.mjs';
 import { applyAgentMutation } from './agent-mutation.mjs';
@@ -15,6 +18,7 @@ import { semanticRuleId } from '../domain/identity.mjs';
 import { compose } from '../domain/graph.mjs';
 import { graphPositions } from '../web/view-files.mjs';
 import { arrangeGraphWithRoutes } from '../web/layout.mjs';
+import { autoLayoutGraph } from '../web/auto-layout.mjs';
 import { createRouteCache } from '../web/route-cache.mjs';
 import ELK from 'elkjs/lib/elk.bundled.js';
 import cola from 'webcola';
@@ -27,7 +31,21 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
   const readAvailable = () => readWorkspace(root, { isolateResources });
   // 文档是 canonical 的派生物：最多只保留一份正在发布的工作和最新一份待发布快照。
   // 它不进入写入队列，绝不能让磁盘导出拖慢图编辑、项目打开或 Agent mutation。
-  let publicationWorker = null, pendingPublication = null, publication = null;
+  let publicationWorker = null, pendingPublication = null, publication = null, workspaceSnapshot = null, exportSettingsSnapshot = null, catalogSnapshot = null;
+  // 会话快照是打开后唯一的完整读取结果；只读页面不得为自身重新扫描 canonical。
+  const refreshSnapshot = async () => {
+    const workspace = await readAvailable();
+    workspaceSnapshot = workspace;
+    exportSettingsSnapshot = { ...documentExportStructure(workspace), revision: workspace.revision };
+    catalogSnapshot = workspace.workspaceState === 'degraded' ? null : buildCatalog(workspace);
+    return workspace;
+  };
+  const rememberCatalog = workspace => {
+    workspaceSnapshot = workspace;
+    exportSettingsSnapshot = { ...documentExportStructure(workspace), revision: workspace.revision };
+    catalogSnapshot = workspace.workspaceState === 'degraded' ? null : buildCatalog(workspace);
+    return catalogSnapshot;
+  };
   const enqueue = operation => {
     if (closed) return Promise.reject(new ContractError('STORE_CLOSED', '工作区已关闭'));
     const result = queue.then(operation);
@@ -36,7 +54,7 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
     return result;
   };
   // 打开和只读浏览不占用工作区。锁只覆盖一次完整写入事务，避免服务异常退出留下生命周期锁。
-  await readAvailable();
+  await refreshSnapshot();
   const write = operation => enqueue(async () => {
     const release = await acquireWorkspaceLock(root);
     try { return await operation(); }
@@ -71,11 +89,45 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
       + (changed.length ? '；本次写入涉及的文件已被其他写入者改变：' + changed.join('、') : ''));
   };
   const current = async (body, keys = null, message = null) => {
-    const workspace = await readAvailable();
+    // 写入和显式生成前仍完整读取，不能把会话快照伪称为磁盘最新状态。
+    const workspace = await refreshSnapshot();
     assertRevision(body, workspace, keys, message);
     // 兼容读模型可能含旧协议或未解释扩展；在尚未显式迁移前禁止全量序列化覆盖原文件。
     if (workspace.compatibilityMode) fail('COMPATIBILITY_READ_ONLY', '当前工作区以兼容模式打开。请先显式迁移后再保存；原始文件未被修改。');
     return workspace;
+  };
+  // 普通单机制保存只依赖核心合同与目标文件。文件路径来自此前完整读取的前端快照，
+  // 仍由 readDocument 逐段限制在工作区内；不读取或校验无关机制，避免其损坏阻塞目标保存。
+  const readSingleMechanicSaveWorkspace = async ({ id, file }) => {
+    if (typeof id !== 'string' || !id || typeof file !== 'string' || !file.endsWith('.mechanic.json')) {
+      fail('MECHANIC_SAVE_INVALID', '保存机制必须提供有效 ID 与机制文件路径');
+    }
+    const { document: manifest } = await readDocument(root, 'workspace.json');
+    assertDocument(manifest, 'workspace', 'workspace.json');
+    const [{ document: definitions }, { document: rules }, { document: mechanic }] = await Promise.all([
+      readDocument(root, manifest.definitions), readDocument(root, manifest.rules), readDocument(root, file),
+    ]);
+    assertDocument(definitions, 'definitions', manifest.definitions);
+    assertDocument(rules, 'rules', manifest.rules);
+    assertDocument(mechanic, 'mechanic', file);
+    if (mechanic.id !== id) fail('MECHANIC_SAVE_MISMATCH', '机制文件与请求 ID 不一致：' + file);
+    // 当前机制的引用只需与 definitions/rules 合同共同验证；其他机制是独立故障域。
+    const resourceManifest = { ...manifest, compositions: [] };
+    delete resourceManifest.exportSelections;
+    delete resourceManifest.lastView;
+    const files = [{ kind: 'workspace', id: manifest.id, path: 'workspace.json' },
+      { kind: 'definitions', path: manifest.definitions }, { kind: 'rules', path: manifest.rules },
+      { kind: 'mechanic', id, path: file }];
+    validateWorkspace({ manifest: resourceManifest, definitions, rules, mechanics: [mechanic], views: [], files });
+    // 只将可独立解析并通过 shape 合同的机制视为已确认成员；坏文件保持未知，不能被当作不存在而删除引用。
+    const { mechanicPaths } = await discover(root);
+    const presentationMechanicIds = new Set([id]);
+    await Promise.all(mechanicPaths.map(async path => {
+      try { const candidate = (await readDocument(root, path)).document; assertDocument(candidate, 'mechanic', path); presentationMechanicIds.add(candidate.id); }
+      catch { /* 局部坏机制属于独立故障域，不能阻断或触发删除。 */ }
+    }));
+    return { manifest, definitions, rules, mechanics: [mechanic], views: [], files, presentationMechanicIds,
+      resourceRevisions: workspaceResourceRevisions({ manifest, definitions, rules, mechanics: [mechanic], views: [] }) };
   };
   // 兼容模式只允许按字段补丁写回展示数据，因此这里只比较顶层展示字段；
   // 语义版本另有 workspace.mjs 的深层形态（含嵌套 positions 与 lastView）。
@@ -103,7 +155,7 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
     return verified();
   };
   const verified = async () => {
-    try { return await readAvailable(); }
+    try { return await refreshSnapshot(); }
     catch (error) { fail('SAVE_UNCERTAIN', '提交后工作区回读失败：' + error.message + '。请核实磁盘内容。'); }
   };
   // catalog 是 canonical 的派生读模型。保存后无论发布是否可用，都要把两项事实并列返回；
@@ -131,7 +183,11 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
       actions: ['republish', 'choose-path'] };
   };
   // 路由快照、坐标等不进入导出语义；它们保存后不能触发无意义的文档重写。
-  const publicationKey = workspace => `${workspace.manifest.id}\u0000${workspace.manifest.agentExportPath ?? ''}\u0000${buildCatalog(workspace).documentRevision}`;
+  const publicationKey = workspace => {
+    const catalog = catalogSnapshot ?? rememberCatalog(workspace);
+    // 降级工作区不构建 catalog；它不参与文档发布，键里用显式标记代替文档版本。
+    return `${workspace.manifest.id}\u0000${workspace.manifest.agentExportPath ?? ''}\u0000${catalog?.documentRevision ?? 'degraded'}`;
+  };
   const publicationPending = workspace => ({ state: 'pending', code: 'CATALOG_PENDING', path: workspace.agentExportRoot,
     message: '正在后台生成 Agent 机制文档。', actions: ['republish', 'choose-path'] });
   const schedulePublication = workspace => {
@@ -152,7 +208,8 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
             const context = await projectContext(target.workspace.projectRoot, { manifest: target.workspace.manifest, createExportRoot: true });
             const candidate = { ...target.workspace, agentExportRoot: context.exportRoot, agentExportStatus: 'available' };
             await publishCatalog(context.exportRoot, candidate);
-            const latest = await readWorkspace(root);
+            // 发布后的确认属于后台检查；它可以完整读取，但不阻塞项目打开。
+            const latest = await refreshSnapshot();
             if (publicationKey(latest) === target.key) publication = { key: target.key, state: 'current' };
             else pendingPublication ??= { key: publicationKey(latest), workspace: latest };
           } catch (error) {
@@ -180,6 +237,7 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
   };
   const refreshCatalog = async () => {
     const canonical = await verified();
+    // verified 已原子替换 workspace/catalog/settings 三份会话投影。
     return withExportPublication(canonical, schedulePublication(canonical));
   };
   const mechanicFolder = value => {
@@ -341,8 +399,9 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
     }
     const folder = body.folder === undefined ? '' : mechanicFolder(body.folder);
     const before = await readWorkspace(root);
-    const document = { schemaVersion: 7, kind: 'mechanic', workspaceId: before.manifest.id, id: body.id,
-      name: body.name.trim(), scope: body.scope.trim(), focusNodeIds: [], pinnedRuleIds: [], positions: {} };
+    const document = { schemaVersion: 8, kind: 'mechanic', workspaceId: before.manifest.id, id: body.id,
+      name: body.name.trim(), scope: body.scope.trim(), focusNodeIds: [], pinnedRuleIds: [], positions: {},
+      taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } };
     const file = `${mechanicDirectory(folder)}/${body.id}.mechanic.json`;
     const committed = await create('mechanic', { revision: body.revision, document, file, requireExistingFolder: true });
     return { canonicalCommitted: true, workspaceId: committed.manifest.id, revision: committed.revision,
@@ -382,12 +441,14 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
       fail('RESOURCE_REVISION_CONFLICT', `机制 ${mechanic.id} 已改变，请重新查询后再自动排版`);
     }
     const graph = compose(workspace, [mechanic.id]);
-    if (!graph.nodes.length) fail('MECHANIC_EMPTY', `机制 ${body.mechanic} 没有投影节点，不能自动排版`);
-    const positions = graphPositions(workspace, graph, {}, mechanic.id), layoutTimings = {}, layoutPhases = [];
+    // 与网页“自动排版全部节点”消费同一显示投影：默认隐藏的 is-a 父概念不占坐标、不生成路线。
+    const displayGraph = projectDisplayGraph(graph, { taxonomyPresentation: mechanic.taxonomyPresentation, retainedNodeIds: mechanic.focusNodeIds });
+    if (!displayGraph.nodes.length) fail('MECHANIC_EMPTY', `机制 ${body.mechanic} 没有投影节点，不能自动排版`);
+    const positions = graphPositions(workspace, displayGraph, {}, mechanic.id), layoutTimings = {}, layoutPhases = [];
     let layout;
-    try { layout = await arrangeGraphWithRoutes({ graph, positions, ELK, cola, timings: layoutTimings, onPhase: event => layoutPhases.push(event) }); }
+    try { layout = await arrangeGraphWithRoutes({ graph: displayGraph, positions, ELK, cola, timings: layoutTimings, onPhase: event => layoutPhases.push(event) }); }
     catch (error) { fail('MECHANIC_LAYOUT_FAILED', `机制 ${mechanic.id} 自动排版失败：${error.message}`, { layoutTimings, layoutPhases }); }
-    mechanic.positions = layout.positions; mechanic.routeCache = createRouteCache(graph, layout.positions, layout.routes);
+    mechanic.positions = layout.positions; mechanic.routeCache = createRouteCache(displayGraph, layout.positions, layout.routes);
     validateWorkspace(workspace);
     const file = workspace.files.find(item => item.kind === 'mechanic' && item.id === mechanic.id)?.path;
     if (!file) fail('AGENT_MUTATION_INVALID', 'Agent 自动排版的机制文件不存在');
@@ -666,12 +727,15 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
     workspace.mechanics[index] = { ...body.document, positions: {}, routeCache: undefined };
     validateWorkspace(workspace);
     const mechanic = workspace.mechanics[index], graph = compose(workspace, [mechanic.id]);
-    if (graph.nodes.length) {
+    // 与网页同一显示投影：默认隐藏只由 is-a 引入的父概念，它不参与排版也不产生路线。
+    const displayGraph = projectDisplayGraph(graph, { taxonomyPresentation: mechanic.taxonomyPresentation, retainedNodeIds: mechanic.focusNodeIds });
+    if (displayGraph.nodes.length) {
       let layout;
-      try { layout = await arrangeGraphWithRoutes({ graph, positions: graphPositions(workspace, graph, {}, mechanic.id), ELK, cola }); }
+      try { layout = await autoLayoutGraph({ graph: displayGraph, positions: graphPositions(workspace, displayGraph, {}, mechanic.id),
+        selectedIds: [], cachedRoutes: [], ELK }); }
       catch (error) { fail('MECHANIC_LAYOUT_FAILED', `机制 ${mechanic.id} 自动排版失败：${error.message}`); }
       mechanic.positions = layout.positions;
-      mechanic.routeCache = createRouteCache(graph, layout.positions, layout.routes);
+      mechanic.routeCache = layout.routeCache;
     }
     validateWorkspace(workspace);
     const mechanicPath = workspace.files.find(file => file.kind === 'mechanic' && file.id === mechanic.id)?.path;
@@ -736,28 +800,51 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
     return { ...(await refreshCatalog()), removedFromGraphIds: nodeIds, retainedConceptIds, prunedConceptIds };
   });
   return {
+    // 已打开项目内的单机制切换只读取目标文件。文件路径来自已验证的前端快照，
+    // 仍逐项执行安全路径、文档形状和稳定 ID 检查；坏目标只让本次打开失败。
+    readMechanic: ({ id, file }) => enqueue(async () => {
+      if (typeof id !== 'string' || !id || typeof file !== 'string' || !file.endsWith('.mechanic.json')) fail('MECHANIC_READ_INVALID', '读取机制必须提供有效 ID 与机制文件路径');
+      const { document } = await readDocument(root, file);
+      assertDocument(document, 'mechanic', file);
+      if (document.id !== id) fail('MECHANIC_READ_MISMATCH', '机制文件与请求 ID 不一致：' + file);
+      const resourceRevision = workspaceResourceRevisions({ manifest: {}, definitions: {}, rules: {}, mechanics: [document], views: [] }).mechanics[id];
+      return { mechanic: document, resourceRevision };
+    }),
+    // 读取入口必须回读 canonical：外部编辑、损坏文件与并发写入都要在这里显式暴露。
+    // 会话快照只服务不需要重读的投影（导出设置、文档目录与后台发布）。
     read: () => enqueue(async () => {
-      const workspace = await readAvailable();
+      const workspace = await refreshSnapshot();
       return withExportPublication(workspace, await publicationForRead(workspace));
     }),
     // 只有真实项目会话在打开时才调度派生文档；底层 store 的纯读取必须无副作用，
     // 以便查询、校验和临时测试目录不会意外启动后台写入。
     ensurePublication: () => enqueue(async () => {
-      const workspace = await readAvailable();
+      // createWorkspaceStore 已建立快照；打开项目不能再次读取或重复构建 catalog。
+      const workspace = workspaceSnapshot ?? await refreshSnapshot();
       if (workspace.workspaceState === 'degraded') return withExportPublication(workspace, {
         state: 'blocked', code: 'WORKSPACE_DEGRADED',
         message: '部分机制文件无效，未生成可能不完整的 Agent 文档。请先修复诊断中的文件。'
       });
       return withExportPublication(workspace, schedulePublication(workspace));
     }),
+    // 文档读取只消费最近的完整快照并验证指南和目标文件；不得进入工作区队列或触发 canonical 重读。
+    readCatalogBrowser: (context, selection) => {
+      if (closed) return Promise.reject(new ContractError('STORE_CLOSED', '工作区已关闭'));
+      if (!catalogSnapshot) return Promise.reject(new ContractError('CATALOG_SNAPSHOT_UNAVAILABLE', '文档目录快照尚未建立，请重新打开项目。'));
+      return readCatalogBrowser(context, catalogSnapshot, selection);
+    },
     readForQuery: () => enqueue(() => readQuerySnapshot(root, { isolateResources: true })),
     // 单文件保存只判定这份文件自己的语义版本：其他资源的写入不再阻塞它。
     save: body => write(async () => {
       const { kind, id, document } = body;
-      const readable = await readAvailable();
+      // 网页保存携带资源基线和打开时的目标路径时，不能让无关机制的读取、校验或回读进入事务。
+      // 旧调用仍走完整路径，保留其整体 revision 兼容合同。
+      const singleMechanic = kind === 'mechanic' && typeof body?.file === 'string'
+        && body.resourceRevisions && typeof body.resourceRevisions === 'object' && !Array.isArray(body.resourceRevisions);
+      const readable = singleMechanic ? await readSingleMechanicSaveWorkspace({ id, file: body.file }) : await readAvailable();
       assertRevision(body, readable, scopeOf(resourceKey(kind, id)));
       if (readable.compatibilityMode) return saveCompatiblePresentation(readable, { kind, id, document });
-      const workspace = readable;
+      let workspace = readable;
       assertDocument(document, kind);
       let file;
       if (kind === 'definitions') {
@@ -776,10 +863,32 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
         if (!isDeepStrictEqual(oldFixed, fixed)) fail('MANIFEST_PROTECTED', '页面仅允许修改工作区名称与视图，不改变根目录、身份或统一定义入口。');
         file = 'workspace.json'; workspace.manifest = document;
       }
-      validateWorkspace(workspace);
-      if (kind === 'view') composeView(workspace, document);
-      await commitFile(root, file, encode(document));
-      return kind === 'definitions' || kind === 'rules' || kind === 'mechanic' || kind === 'view' ? refreshCatalog() : verified();
+      // 自动修复只触及展示/导出成员；不会添加概念、规则或核心引用。
+      const repaired = repairPresentationMemberReferences(workspace);
+      workspace = repaired.workspace;
+      const validationWorkspace = singleMechanic ? { ...workspace, manifest: { ...workspace.manifest, compositions: [] } } : workspace;
+      if (singleMechanic) {
+        delete validationWorkspace.manifest.exportSelections;
+        delete validationWorkspace.manifest.lastView;
+      }
+      validateWorkspace(validationWorkspace);
+      if (kind === 'view') composeView(workspace, workspace.views.find(view => view.id === id));
+      const documentsByPath = new Map([
+        ['workspace.json', workspace.manifest], [workspace.manifest.definitions, workspace.definitions], [workspace.manifest.rules, workspace.rules],
+        ...workspace.mechanics.map(mechanic => [workspace.files.find(item => item.kind === 'mechanic' && item.id === mechanic.id)?.path, mechanic]),
+        ...workspace.views.map(view => [workspace.files.find(item => item.kind === 'view' && item.id === view.id)?.path, view]),
+      ]);
+      const changedPaths = new Set([file, ...repaired.diagnostics.map(diagnostic => diagnostic.file)]);
+      const changes = [...changedPaths].map(path => ({ path, document: documentsByPath.get(path) }));
+      if (changes.some(change => !change.path || !change.document)) fail('PRESENTATION_REPAIR_INVALID', '展示成员修复无法定位持久化文件');
+      if (changes.length === 1) await commitFile(root, file, encode(changes[0].document));
+      else await commitFiles(root, changes, { verify: () => singleMechanic
+        ? readSingleMechanicSaveWorkspace({ id, file: body.file }) : readWorkspace(root) });
+      // 提交成功后按同一故障域回读目标机制与核心合同；提交失败仍由 commitFile 显式抛出。
+      if (singleMechanic) return { ...await readSingleMechanicSaveWorkspace({ id, file: body.file }), singleMechanicSave: true,
+        presentationDiagnostics: repaired.diagnostics };
+      const committed = kind === 'definitions' || kind === 'rules' || kind === 'mechanic' || kind === 'view' ? await refreshCatalog() : await verified();
+      return { ...committed, presentationDiagnostics: repaired.diagnostics };
     }),
     saveRulesAndMechanic,
     deleteGlobalRule,
@@ -795,10 +904,13 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
     saveAgentDraft,
     recipeMigration,
     setProjectSettings,
-    documentExportStructure: () => enqueue(async () => {
-      const workspace = await readWorkspace(root);
-      return { ...documentExportStructure(workspace), revision: workspace.revision };
-    }),
+    // 设置页只展示会话已读取快照，不进项目队列也不重新扫描工作区。
+    documentExportStructure: () => {
+      if (closed) return Promise.reject(new ContractError('STORE_CLOSED', '工作区已关闭'));
+      if (!exportSettingsSnapshot) return Promise.reject(new ContractError('EXPORT_SETTINGS_SNAPSHOT_UNAVAILABLE', '导出设置快照尚未建立，请重新打开项目。'));
+      if (workspaceSnapshot?.workspaceState === 'degraded') return Promise.reject(new ContractError('WORKSPACE_DEGRADED', '部分机制文件无效，导出设置已阻止；请先修复诊断中的文件。'));
+      return Promise.resolve(structuredClone(exportSettingsSnapshot));
+    },
     setDocumentExport,
     generateDocumentExport,
     setAgentExportPath: body => write(async () => {
@@ -904,13 +1016,14 @@ export async function migrateWorkspace(workspaceRoot, options = {}) {
   if (from === undefined) {
     const { document } = await readDocument(root, 'workspace.json');
     from = document?.schemaVersion;
-    if (to === undefined) to = from === 7 ? 8 : from === 8 ? 9 : from === 9 ? 10 : from === 10 ? 12 : from === 11 ? 12 : undefined;
+    if (to === undefined) to = from === 7 ? 8 : from === 8 ? 9 : from === 9 ? 10 : from === 10 ? 12 : from === 11 ? 12 : from === 12 ? 13 : undefined;
   }
   const planMigration = () => from === 7 && to === 8 ? planV7ToV8Migration(root)
     : from === 8 && to === 9 ? planV8ToV9Migration(root)
     : from === 9 && to === 10 ? planV9ToV10Migration(root)
     : from === 10 && to === 12 ? planV10ToV11Migration(root)
     : from === 11 && to === 12 ? planV11ToV12Migration(root)
+    : from === 12 && to === 13 ? planV12ToV13Migration(root)
     : from === 9 && to === 9 ? planV9DanglingNodeRepair(root)
       : Promise.reject(new ContractError('MIGRATION_VERSION_UNSUPPORTED', `不支持 v${from} → v${to} 迁移`));
   if (!execute) {
@@ -923,9 +1036,9 @@ export async function migrateWorkspace(workspaceRoot, options = {}) {
     if (typeof revision !== 'string' || !revision) fail('MIGRATION_REVISION_CONFLICT', '实际迁移必须提供 dry-run 返回的 revision');
     if (revision !== plan.revision) fail('MIGRATION_REVISION_CONFLICT', '工作区自预览后已改变；未写入任何文件。');
     // 只有迁移到完整、可由当前读取器理解的协议后才做 canonical 回读。
-    await commitFiles(root, plan.documents, { verify: to === 12 ? () => readWorkspace(root) : null });
+    await commitFiles(root, plan.documents, { verify: to === 13 ? () => readWorkspace(root) : null });
     let migrated;
-    try { migrated = to === 12 ? await readWorkspace(root) : { revision: plan.revision }; }
+    try { migrated = to === 13 ? await readWorkspace(root) : { revision: plan.revision }; }
     catch (error) { fail('MIGRATION_READBACK_FAILED', `迁移提交后 v${to} 工作区回读失败：` + error.message); }
     return { ...plan.summary, from: plan.from, to: plan.to, revision: migrated.revision, preview: false, migrated: true };
   } finally { await release(); }

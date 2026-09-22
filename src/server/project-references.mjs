@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { ContractError } from '../domain/validate.mjs';
 import { projectContext, WORKSPACE_DIRECTORY } from './project-context.mjs';
 import { readQuerySnapshot } from './query-snapshot.mjs';
+import { MIGRATABLE_WORKSPACE_VERSIONS } from './migration.mjs';
 
 // 关联声明是 Mechanics 工作区元数据，不能污染宿主项目根目录。
 const CONFIG_FILE = 'references.json';
@@ -76,13 +77,14 @@ export async function listProjectReferences(sourceRoot, { bindingsFile, declarat
       const context = await projectContext(projectRoot, { createExportRoot: false, allowMissingExport: true, allowUnavailableExport: true });
       const workspace = await readQuerySnapshot(context.workspaceRoot);
       if (workspace.manifest.id !== item.workspaceId) return { ...item, projectRoot: context.projectRoot, status: 'workspace-mismatch', actualWorkspaceId: workspace.manifest.id };
-      return { ...item, projectRoot: context.projectRoot, status: 'ready', actualName: workspace.manifest.name };
+      return { ...item, projectRoot: context.projectRoot, status: 'ready', actualName: workspace.manifest.name,
+        ...(MIGRATABLE_WORKSPACE_VERSIONS.includes(workspace.manifest.schemaVersion) ? { willUpgrade: true } : {}) };
     } catch (error) {
-      // 关联项目必须先经过统一 openStore 的安全迁移；这里不能提前用 v12 门禁把 v10/v11 永久判死。
+      // 关联项目必须先经过统一 openStore 的安全迁移；有迁移路径但没有只读兼容模型的版本标为 migratable。
       if (error?.code === 'WORKSPACE_VERSION_UNSUPPORTED') {
         try {
           const manifest = JSON.parse(await readFile(resolve(projectRoot, WORKSPACE_DIRECTORY, 'workspace.json'), 'utf8'));
-          if (manifest?.kind === 'workspace' && [10, 11].includes(manifest.schemaVersion) && manifest.id === item.workspaceId) {
+          if (manifest?.kind === 'workspace' && MIGRATABLE_WORKSPACE_VERSIONS.includes(manifest.schemaVersion) && manifest.id === item.workspaceId) {
             return { ...item, projectRoot, status: 'migratable', actualName: manifest.name, schemaVersion: manifest.schemaVersion };
           }
         } catch { /* 保留原始不可用错误 */ }

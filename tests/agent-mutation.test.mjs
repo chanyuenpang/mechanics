@@ -98,8 +98,9 @@ test('Agent 只能在既有目录中创建受约束的机制容器，并返回�
     '--workspace-revision', workspace.revision]));
   assert.equal(mechanic.canonicalCommitted, true); assert.match(mechanic.resourceRevision, /^[a-f0-9]{64}$/u);
   workspace = await readWorkspace(root);
-  assert.deepEqual(workspace.mechanics.find(item => item.id === 'core-loop'), { schemaVersion: 7, kind: 'mechanic', workspaceId: workspace.manifest.id,
-    id: 'core-loop', name: '核心循环', scope: '基础玩法', focusNodeIds: [], pinnedRuleIds: [], positions: {} });
+  assert.deepEqual(workspace.mechanics.find(item => item.id === 'core-loop'), { schemaVersion: 8, kind: 'mechanic', workspaceId: workspace.manifest.id,
+    id: 'core-loop', name: '核心循环', scope: '基础玩法', focusNodeIds: [], pinnedRuleIds: [], positions: {},
+    taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } });
   assert.ok(workspace.files.some(item => item.id === 'core-loop' && item.path === 'mechanics/参考/core-loop.mechanic.json'));
   const missing = await failure(offline(projectRoot, ['mechanic', 'create', '--id', 'missing-folder', '--name', '错误', '--scope', '测试', '--folder', '不存在', '--workspace-revision', workspace.revision]));
   assert.equal(missing.body.error, 'FOLDER_NOT_FOUND');
@@ -122,8 +123,8 @@ test('Agent 只能以当前版本删除未被视图引用的机制和非当前�
   workspace = await readWorkspace(root);
   assert.equal(workspace.mechanics.some(item => item.id === 'to-delete'), false);
 
-  const view = { schemaVersion: 4, kind: 'view', workspaceId: workspace.manifest.id, id: 'to-delete-view', name: '待删除视图',
-    mechanicRegistrations: [{ mechanicId: 'basic-rules', visible: true }], focusNodeIds: [], pinnedRuleIds: [], collapsedNodeIds: [], positions: {}, structuralPresentation: 'line' };
+  const view = { schemaVersion: 5, kind: 'view', workspaceId: workspace.manifest.id, id: 'to-delete-view', name: '待删除视图',
+    mechanicRegistrations: [{ mechanicId: 'basic-rules', visible: true }], focusNodeIds: [], pinnedRuleIds: [], collapsedNodeIds: [], positions: {}, structuralPresentation: 'line', taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } };
   await writeFile(join(root, 'to-delete-view.view.json'), `${JSON.stringify(view, null, 2)}\n`);
   workspace = await readWorkspace(root);
   const deletedView = json(await offline(projectRoot, ['view', 'delete', '--view', 'to-delete-view', '--workspace-revision', workspace.revision]));
@@ -281,6 +282,40 @@ test('rule add 必须指定机制、拒绝端点 upsert、自动补节点；upda
     '--revision', rulesRevision(workspace)]))).body.error, 'RULE_NOT_FOUND');
 });
 
+
+test('Agent 自动排版消费显示投影：默认隐藏的 is-a 父概念不占坐标也不生成路线', async t => {
+  const { projectRoot, root } = await fixture(t);
+  let workspace = await readWorkspace(root);
+  for (const [id, label] of [['taxo-child', '子概念'], ['taxo-parent', '父概念'], ['taxo-effect', '效果']]) {
+    workspace = await readWorkspace(root);
+    await offline(projectRoot, ['concept', 'create', '--id', id, '--label', label, '--description', 'is-a 显示投影测试概念。',
+      '--revision', definitionsRevision(workspace)]);
+  }
+  workspace = await readWorkspace(root);
+  await offline(projectRoot, ['mechanic', 'create', '--id', 'taxonomy-arrange', '--name', '分类排版', '--scope', '测试 is-a 显示投影',
+    '--workspace-revision', workspace.revision]);
+  workspace = await readWorkspace(root);
+  await offline(projectRoot, ['rule', 'add', '--mechanic', 'taxonomy-arrange', '--source', 'taxo-child', '--target', 'taxo-parent',
+    '--relation', 'specializes', '--revision', rulesRevision(workspace)]);
+  workspace = await readWorkspace(root);
+  await offline(projectRoot, ['rule', 'add', '--mechanic', 'taxonomy-arrange', '--source', 'taxo-child', '--target', 'taxo-effect',
+    '--relation', 'influence', '--sign', 'positive', '--revision', rulesRevision(workspace)]);
+  workspace = await readWorkspace(root);
+  // 父概念只由 is-a 引入：把它移出焦点后，它没有任何保留理由，必须退出显示投影。
+  const path = join(root, workspace.files.find(file => file.kind === 'mechanic' && file.id === 'taxonomy-arrange').path);
+  const document = JSON.parse(await readFile(path, 'utf8'));
+  document.focusNodeIds = ['taxo-child'];
+  await writeFile(path, JSON.stringify(document, null, 2) + '\n');
+  workspace = await readWorkspace(root);
+  const arranged = json(await offline(projectRoot, ['mechanic', 'arrange', '--mechanic', 'taxonomy-arrange',
+    '--revision', mechanicRevision(workspace, 'taxonomy-arrange')]));
+  workspace = await readWorkspace(root);
+  const saved = workspace.mechanics.find(item => item.id === 'taxonomy-arrange');
+  assert.deepEqual(Object.keys(saved.positions).sort(), ['taxo-child', 'taxo-effect']);
+  assert.equal(saved.routeCache.paths['taxo-child-2-taxo-parent'], undefined);
+  assert.ok(Object.keys(saved.routeCache.paths).every(id => id === 'taxo-child-2-taxo-effect'));
+  assert.match(arranged.resourceRevision, /^[a-f0-9]{64}$/u);
+});
 test('更新不含 ruleText 的既有规则时可以填写或清空规则', async t => {
   const { projectRoot, root } = await fixture(t), before = await readWorkspace(root);
   const mechanic = before.mechanics[0], edge = structuredClone(before.rules.rules.find(rule => mechanic.pinnedRuleIds.includes(rule.id)));
@@ -312,8 +347,8 @@ test('concept delete 允许同时删除自身与纯布局坐标，但拒绝机�
   });
   await t.test('视图位置引用会随概念删除清理', async t => {
     const { projectRoot, root } = await fixture(t), workspace = await readWorkspace(root);
-    const view = { schemaVersion: 4, kind: 'view', workspaceId: workspace.manifest.id, id: 'armor-view', name: '护甲视图',
-      mechanicRegistrations: [], focusNodeIds: [], pinnedRuleIds: [], collapsedNodeIds: [], positions: { armor: { x: 10, y: 20 } }, structuralPresentation: 'line' };
+    const view = { schemaVersion: 5, kind: 'view', workspaceId: workspace.manifest.id, id: 'armor-view', name: '护甲视图',
+      mechanicRegistrations: [], focusNodeIds: [], pinnedRuleIds: [], collapsedNodeIds: [], positions: { armor: { x: 10, y: 20 } }, structuralPresentation: 'line', taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } };
     await writeFile(join(root, 'armor.view.json'), JSON.stringify(view));
     const fresh = await readWorkspace(root);
     const deleted = json(await offline(projectRoot, ['concept', 'delete', '--concept', 'armor', '--revision', definitionsRevision(fresh)]));
@@ -338,6 +373,13 @@ test('在线 mutation 同时要求 resource revision 与 projectGeneration，并
   const server = await startServer({ projectRoot, port: 0, projectHistoryPath: join(projectRoot, '.test-projects.json') });
   try {
     const current = await (await fetch(server.origin + '/api/workspace')).json();
+    const target = current.files.find(item => item.kind === 'mechanic' && item.id === 'basic-rules');
+    const targetResponse = await fetch(server.origin + '/api/mechanic?projectSessionToken=' + encodeURIComponent(current.projectSessionToken)
+      + '&projectGeneration=' + encodeURIComponent(current.projectGeneration) + '&id=basic-rules&file=' + encodeURIComponent(target.path));
+    assert.equal(targetResponse.status, 200);
+    const targetDocument = await targetResponse.json();
+    assert.equal(targetDocument.mechanic.id, 'basic-rules');
+    assert.equal(targetDocument.resourceRevision, current.resourceRevisions.mechanics['basic-rules']);
     const body = { projectRoot, projectGeneration: current.projectGeneration, revision: definitionsRevision(current), resource: 'concept', action: 'create',
       id: 'focus', label: '专注', description: '可投入行动的专注。', aliases: [], tagIds: [] };
     const post = value => fetch(server.origin + '/api/agent/mutation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
@@ -370,13 +412,8 @@ test('在线 mutation 同时要求 resource revision 与 projectGeneration，并
     assert.ok((await readWorkspace(root)).mechanics.some(item => item.id === 'reference-core'));
     const closing = json(await call(['session', 'close', '--mechanic', 'basic-rules', '--session', opened.session,
       '--project', projectRoot, '--project-generation', String(current.projectGeneration), '--connect', server.origin]));
-    assert.equal(closing.asynchronous, true); assert.equal(closing.status, 'closing');
-    let status = closing;
-    for (let attempt = 0; attempt < 20 && status.status === 'closing'; attempt += 1) {
-      await new Promise(resolve => setTimeout(resolve, 20));
-      status = json(await call(['session', 'status', '--project', projectRoot, '--session', opened.session, '--project-generation', String(current.projectGeneration), '--connect', server.origin]));
-    }
-    assert.equal(status.status, 'closed'); assert.equal(status.result.arranged, true);
+    assert.equal(closing.asynchronous, false);
+    assert.equal(closing.status, 'closed'); assert.equal(closing.result.arranged, false);
   } finally { await server.close(); }
 });
 

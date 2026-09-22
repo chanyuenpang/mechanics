@@ -1,15 +1,41 @@
 const text = (tag, value, className) => { const node = document.createElement(tag); node.textContent = value; if (className) node.className = className; return node; };
 
+// 导出接口成功时以服务端回读的 workspace 为准，避免页面其余写入继续使用旧 revision。
+export function mergeDocumentExportResult(data, result, onWorkspace) {
+  data.revision = result.revision;
+  if (Array.isArray(result.manifest?.exportSelections)) data.selections = structuredClone(result.manifest.exportSelections);
+  onWorkspace?.(result);
+  return result.revision;
+}
+
 // 只把受限 Markdown 投影为 DOM；不接受导出文件中的 HTML、图片或任意文件 URL。
 export class ConceptDocsPage {
-  constructor(root, api, report) { this.root = root; this.api = api; this.report = report; this.data = null; this.request = 0; }
+  constructor(root, api, report, onWorkspace = null) { this.root = root; this.api = api; this.report = report; this.onWorkspace = onWorkspace; this.data = null; this.request = 0; }
+  renderLoading(title, detail) {
+    this.root.replaceChildren(); this.root.setAttribute('aria-busy', 'true');
+    const article = document.createElement('article'); article.className = 'concept-doc-article';
+    article.append(text('h1', title), text('p', detail, 'note')); this.root.append(article);
+  }
+  renderFailure(title, detail) {
+    this.root.replaceChildren(); this.root.removeAttribute('aria-busy');
+    const article = document.createElement('article'); article.className = 'concept-doc-article';
+    article.append(text('h1', title), text('p', detail, 'note'));
+    if (this.data) { const back = text('button', '返回已读取的文档', 'primary'); back.type = 'button'; back.onclick = () => this.render(); article.append(back); }
+    this.root.append(article);
+  }
   async open(selection = null) {
     const request = ++this.request;
     const query = typeof selection === 'string' ? '?conceptId=' + encodeURIComponent(selection)
       : selection?.file ? '?file=' + encodeURIComponent(selection.file) : '';
-    const data = await this.api('/api/concept-docs' + query);
-    if (request !== this.request) return;
-    this.data = data; this.render();
+    this.renderLoading('正在读取已导出文档', '仅验证已发布的文档，不会扫描工作区。');
+    try {
+      const data = await this.api('/api/concept-docs' + query);
+      if (request !== this.request) return;
+      this.data = data; this.root.removeAttribute('aria-busy'); this.render();
+    } catch (error) {
+      if (request === this.request) this.renderFailure('文档读取失败', error.message);
+      throw error;
+    }
   }
   render() {
     const { document: currentDocument, concepts, documents } = this.data; this.root.replaceChildren();
@@ -67,8 +93,14 @@ export class ConceptDocsPage {
   async openSettings(projectSessionToken = null) {
     const token = projectSessionToken ?? this.data?.projectSessionToken;
     if (!token) throw new Error('无法定位当前项目会话，不能读取导出设置。');
-    const data = await this.api('/api/document-export/settings?projectSessionToken=' + encodeURIComponent(token));
-    this.renderSettings(data, data.selections);
+    this.renderLoading('正在读取已保存的导出设置', '此页面只使用本会话已读取的快照，不会扫描工作区。');
+    try {
+      const data = await this.api('/api/document-export/settings?projectSessionToken=' + encodeURIComponent(token));
+      this.root.removeAttribute('aria-busy'); this.renderSettings(data, data.selections);
+    } catch (error) {
+      this.renderFailure('导出设置读取失败', error.message);
+      throw error;
+    }
   }
   renderStale(projectSessionToken) {
     this.root.replaceChildren();
@@ -153,7 +185,7 @@ export class ConceptDocsPage {
       save.disabled = true;
       try {
         const saved = await this.api('/api/document-export/settings', { revision: data.revision, selections: draft, projectSessionToken: data.projectSessionToken, projectGeneration: data.projectGeneration });
-        data.revision = saved.revision; data.selections = structuredClone(draft); this.renderSettings(data, structuredClone(draft));
+        mergeDocumentExportResult(data, saved, this.onWorkspace); this.renderSettings(data, structuredClone(data.selections));
       } catch (error) { save.disabled = false; this.report(error); }
     };
     const generate = text('button', '生成文档', 'primary'); generate.type = 'button'; generate.onclick = async () => {
@@ -163,9 +195,10 @@ export class ConceptDocsPage {
         if (dirty) {
           if (!confirm('生成文档前将先保存当前导出设置。是否继续？')) return;
           const saved = await this.api('/api/document-export/settings', { revision: data.revision, selections: draft, projectSessionToken: data.projectSessionToken, projectGeneration: data.projectGeneration });
-          revision = saved.revision; data.revision = saved.revision; data.selections = structuredClone(draft);
+          revision = mergeDocumentExportResult(data, saved, this.onWorkspace);
         }
         const generated = await this.api('/api/document-export/generate', { revision, projectSessionToken: data.projectSessionToken, projectGeneration: data.projectGeneration });
+        mergeDocumentExportResult(data, generated, this.onWorkspace);
         if (generated.exportPublication?.state === 'pending') {
           const retry = async () => {
             const workspace = await this.api('/api/workspace');

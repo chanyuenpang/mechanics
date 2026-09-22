@@ -6,6 +6,7 @@ const app = await readFile(new URL('../src/web/app.mjs', import.meta.url), 'utf8
 const html = await readFile(new URL('../src/web/index.html', import.meta.url), 'utf8');
 const icons = await readFile(new URL('../src/web/icons.mjs', import.meta.url), 'utf8');
 const style = await readFile(new URL('../src/web/style.css', import.meta.url), 'utf8');
+const canvasSource = await readFile(new URL('../src/web/canvas.mjs', import.meta.url), 'utf8');
 const openProject = app.slice(app.indexOf('async function openProject()'), app.indexOf('async function configureProject()'));
 const manageReferences = app.slice(app.indexOf('async function manageReferences()'), app.indexOf("$('new-graph').onclick"));
 
@@ -18,6 +19,17 @@ test('打开项目默认先展示最近项目，不隐式唤起原生目录选�
   assert.match(openProject, /else root\.append\(folderPicker\(\{ initialPath: workspace\?\.projectRoot \?\? ''/);
 });
 
+
+test('概念详情的 is-a 开关同时作用于机制图与视图，并只改各自文件的展开集合', () => {
+  assert.match(app, /if \(isARule && \(draft \|\| viewMode\(\)\)\) \{/);
+  assert.match(app, /viewMode\(\) \? editView\(toggle, \{ keepSelection: true \}\) : edit\(toggle, \{ topology: false \}\)/);
+  assert.match(app, /const currentTaxonomyPresentation = \(\) => \(viewMode\(\) \? viewTaxonomyPresentation : draft\?\.taxonomyPresentation\)/);
+  assert.match(app, /taxonomyPresentation: clone\(viewTaxonomyPresentation\)/);
+  assert.match(app, /if \(!selectionInDisplay\(displayGraph, selection\)\) selection = null;/);
+  // 展开后画布画的是同一条 is-a 边的虚线，而不是另画一遍分类线。
+  assert.match(canvasSource, /edge\.relation === 'specializes' \? \{ 'stroke-dasharray': '6 4' \} : \{\}/);
+  assert.match(canvasSource, /const projection = this\.graph;/);
+});
 test('项目打开请求有超时，空项目错误可重新打开选择器', () => {
   const api = app.slice(app.indexOf('const API_REQUEST_TIMEOUT_MS'), app.indexOf('// 所有页面写入串行执行'));
   assert.ok(api.includes('const API_REQUEST_TIMEOUT_MS = 15_000;'));

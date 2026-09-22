@@ -1,4 +1,4 @@
-import { arrangeGraphWithRoutes } from './layout.mjs';
+import { autoLayoutGraph } from './auto-layout.mjs';
 import { routeLocalGraph } from './local-routing.mjs';
 
 const mapEntries = value => value instanceof Map ? [...value] : Array.isArray(value) ? value : [];
@@ -9,9 +9,9 @@ export async function computeGraphTask(request, { ELK = globalThis.ELK } = {}) {
   }
   const { graph, positions } = request.payload;
   if (request.kind === 'layout') {
-    const result = await arrangeGraphWithRoutes({ graph, positions,
+    const result = await autoLayoutGraph({ graph, positions,
       selectedIds: request.payload.selectedIds ?? [], cachedRoutes: mapEntries(request.payload.cachedRoutes), ELK });
-    return { positions: result.positions, routes: [...result.routes], warnings: result.warnings ?? [] };
+    return { positions: result.positions, routes: [...result.routes], routeCache: result.routeCache, warnings: result.warnings ?? [] };
   }
   const movedIds = request.payload.movedIds ?? [];
   const result = await routeLocalGraph({ ...request.payload, cachedRoutes: mapEntries(request.payload.cachedRoutes) });

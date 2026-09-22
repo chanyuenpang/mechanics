@@ -19,7 +19,7 @@ async function fixture(t) {
   const root = join(projectRoot, '.mechanics');
   return root;
 }
-const view = (id = 'hand', structuralPresentation = 'line') => ({ schemaVersion: 4, kind: 'view', workspaceId: 'sample-card-game', id, name: '规则叠加', mechanicRegistrations: [{ mechanicId: 'basic-rules', visible: true }, { mechanicId: 'hand', visible: true }], focusNodeIds: [], pinnedRuleIds: [], collapsedNodeIds: [], positions: {}, structuralPresentation });
+const view = (id = 'hand', structuralPresentation = 'line') => ({ schemaVersion: 5, kind: 'view', workspaceId: 'sample-card-game', id, name: '规则叠加', mechanicRegistrations: [{ mechanicId: 'basic-rules', visible: true }, { mechanicId: 'hand', visible: true }], focusNodeIds: [], pinnedRuleIds: [], collapsedNodeIds: [], positions: {}, structuralPresentation, taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } });
 const json = async (root, path) => JSON.parse(await readFile(join(root, path), 'utf8'));
 
 test('真实视图混排发现、按类型区分同 ID，保存只改视图且最近记录仅存引用', async t => {

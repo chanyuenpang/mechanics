@@ -2,6 +2,7 @@ import { graphGeometryKey } from './route-cache.mjs';
 import { SNAP_GRID } from './layout-structure.mjs';
 import { affectedRouteIds } from './local-routing.mjs';
 import { edgeHoverDetail, nodeHoverDetail } from '../domain/hover-details.mjs';
+import { projectDisplayGraph } from '../domain/taxonomy-presentation.mjs';
 
 export { graphGeometryKey } from './route-cache.mjs';
 
@@ -35,31 +36,6 @@ export function badgeDisplayModel(badges, mode = 'line') {
   return { badges: [isABadge, ...(summary ? [withAccessibility(summary)] : [])], fullText };
 }
 
-export function structuralProjection(graph, mode = 'line') {
-  const nodesById = new Map(graph.nodes.map(node => [node.id, node]));
-  const name = id => nodesById.get(id)?.label ?? id;
-  const badgesFor = node => {
-    const badges = [];
-    // 端点限定投影不是限定概念；它只在节点内展示规则声明的参与者范围。
-    if (node.baseConceptId && !node.scopeProjection) badges.push({ text: '基础：' + name(node.baseConceptId), kind: 'base', sourceId: node.id, targetId: node.baseConceptId });
-    for (const qualifier of node.qualifiers ?? []) {
-      const concept = qualifier.value.kind === 'concept';
-      const targetId = concept ? qualifier.value.conceptId : undefined;
-      const value = concept ? name(targetId) : String(qualifier.value.value);
-      badges.push({ text: qualifier.key + '：' + value, kind: 'qualifier', sourceId: node.id, ...(targetId ? { targetId } : {}) });
-    }
-    if (mode === 'badge') for (const edge of graph.edges) {
-      if (edge.relation === 'specializes' && edge.source === node.id) {
-        badges.push({ text: 'is-a：' + name(edge.target), kind: 'is-a', sourceId: edge.source, targetId: edge.target });
-      }
-    }
-    return badges;
-  };
-  return {
-    nodes: graph.nodes.map(node => ({ ...node, badges: badgesFor(node) })),
-    edges: mode === 'badge' ? graph.edges.filter(edge => edge.relation !== 'specializes') : [...graph.edges],
-  };
-}
 const WIDTH = 166, HEIGHT = 62;
 const ROUTE_PADDING = 24;
 const ROUTE_NUDGE = 8;
@@ -2059,7 +2035,7 @@ export class GraphCanvas {
     this.root = root; this.callbacks = callbacks; this.camera = { x: 50, y: 80, scale: 1 };
     this.readOnly = readOnly;
     this.includeRelationInHover = includeRelationInHover;
-    this.graph = { nodes: [], edges: [] }; this.positions = {}; this.mode = 'select'; this.space = false;
+    this.graph = { nodes: [], edges: [] }; this.displayGraph = this.graph; this.positions = {}; this.mode = 'select'; this.space = false;
     this.routed = new Map(); this.routeArchive = new Map(); this.nodeElements = new Map(); this.edgeElements = new Map(); this.geometryKey = null;
     this.tooltip = root.parentElement?.querySelector('#canvas-tooltip') ?? null;
     this.tooltipsEnabled = true;
@@ -2125,25 +2101,31 @@ export class GraphCanvas {
     const top = Math.min(Math.max(margin, event.clientY - rect.top + margin), Math.max(margin, this.root.clientHeight - this.tooltip.offsetHeight - margin));
     this.tooltip.style.left = `${left}px`; this.tooltip.style.top = `${top}px`;
   }
-  update(graph, positions, activeId, selection, definitionMode, { preserveRoutes = false, deferRouting = false, structuralPresentation = 'line', tagDefinitions = [], nodeColors = {}, nodeStyles = {} } = {}) {
+  update(graph, positions, activeId, selection, definitionMode, { preserveRoutes = false, deferRouting = false, structuralPresentation = 'line', taxonomyPresentation = null, retainedNodeIds = [], tagDefinitions = [], nodeColors = {}, nodeStyles = {} } = {}) {
     this.tagDefinitions = tagDefinitions;
     this.nodeColors = nodeColors;
     this.nodeStyles = nodeStyles;
     const pendingMove = this.pendingMove, previousGraph = this.graph, previousPositions = this.positions;
-    const nextKey = graphGeometryKey(graph, positions), geometryChanged = nextKey !== this.geometryKey;
+    // 显示投影必须先于几何签名：隐藏节点是否参与决定了几何是否真的改变。
+    const displayGraph = projectDisplayGraph(graph, { taxonomyPresentation, structuralPresentation, retainedNodeIds });
+    const nextKey = graphGeometryKey(displayGraph, positions), geometryChanged = nextKey !== this.geometryKey;
     this.pendingMove = null;
     this.routed ??= new Map();
     this.routeArchive ??= new Map();
     if (preserveRoutes) for (const [id, route] of this.routed) this.routeArchive.set(id, route);
     else this.routeArchive.clear();
-    this.graph = graph; this.positions = positions; this.activeId = activeId; this.selection = selection; this.definitionMode = definitionMode; this.structuralPresentation = structuralPresentation;
+    this.structuralPresentation = structuralPresentation; this.taxonomyPresentation = taxonomyPresentation; this.retainedNodeIds = retainedNodeIds;
+    // 渲染、交互、几何签名与路由使用同一份显示投影：隐藏的 is-a 父概念不能继续参与命中、
+    // 端口计算或 Worker 路由，否则画布与连线会各自引用不同的图。
+    this.displayGraph = displayGraph;
+    this.graph = displayGraph; this.positions = positions; this.activeId = activeId; this.selection = selection; this.definitionMode = definitionMode;
     const primed = this.primedRoutes?.key === nextKey ? this.primedRoutes.routes : null;
     if (primed) this.routed = primed;
     this.primedRoutes = null;
     if (deferRouting && !primed) this.hideUnroutedEdges = true;
     else if (primed || !deferRouting) this.hideUnroutedEdges = false;
     if (preserveRoutes && !primed) {
-      const preserved = new Map(graph.edges.flatMap(edge => {
+      const preserved = new Map(displayGraph.edges.flatMap(edge => {
         const route = this.routeArchive.get(edge.id);
         return route ? [[edge.id, route]] : [];
       }));
@@ -2151,10 +2133,10 @@ export class GraphCanvas {
     }
     if (primed) { this.unsettledRouteIds = new Set(); this.routingErrorMessage = null; }
     else if (geometryChanged && !preserveRoutes) {
-      this.unsettledRouteIds = new Set(affectedRouteIds(graph, positions, this.routed, pendingMove?.ids ?? []));
+      this.unsettledRouteIds = new Set(affectedRouteIds(displayGraph, positions, this.routed, pendingMove?.ids ?? []));
     }
     this.geometryKey = nextKey; this.draw({ reroute: false });
-    if (!graph.edges.length) { this.routed = new Map(); return Promise.resolve(true); }
+    if (!displayGraph.edges.length) { this.routed = new Map(); return Promise.resolve(true); }
     // settled commit 正在旧 routingPromise 的 then 中消费预置帧；这里必须立即结束，
     // 不能把旧 Promise 返回给它自身，否则会形成等待环并让页面永久处于计算中。
     if (primed) return Promise.resolve(true);
@@ -2370,7 +2352,8 @@ export class GraphCanvas {
     if (this.gesture?.type === 'nodes' && this.gesture.next) Object.assign(positions, this.gesture.next);
     const routed = this.routed;
     this.nodeElements = new Map(); this.edgeElements = new Map();
-    const projection = structuralProjection(this.graph, this.structuralPresentation);
+    // update 已经把唯一的显示投影交给 this.graph：draw 只渲染，不再自行解释关系。
+    const projection = this.graph;
     const parallel = new Map();
     for (const edge of projection.edges) {
       const key = [edge.source, edge.target].sort().join('/');
@@ -2402,7 +2385,7 @@ export class GraphCanvas {
       const tooltipText = edgeHoverDetail({ ...edge, ruleText: rules.map(rule => rule.ruleText).filter(text => text?.trim()).join('\n\n') }, this.callbacks.name, { includeRelation: Boolean(this.includeRelationInHover) });
       if (tooltipText) group.setAttribute('data-tooltip', tooltipText);
       const hit = svg('path', { d: path, class: 'edge-hit' });
-      const line = svg('path', { d: path, class: `edge-line edge-${appearance} ${selected ? 'selected' : ''}`, 'marker-end': `url(#${appearance})`, 'pointer-events': 'none' });
+      const line = svg('path', { d: path, class: `edge-line edge-${appearance} ${selected ? 'selected' : ''}`, 'marker-end': `url(#${appearance})`, ...(edge.relation === 'specializes' ? { 'stroke-dasharray': '6 4' } : {}), 'pointer-events': 'none' });
       group.append(hit, line);
       const label = svg('text', { x: labelX, y: labelY, class: `edge-label ${appearance}` });
       // 连线类型符号统一为字符体系（与工具栏、图例、检查器一致）：＋ 正向、− 负向、？ 随机、is-a 特化 / 是某种

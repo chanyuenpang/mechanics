@@ -20,6 +20,19 @@ export function mergeRuleCondition(edge) {
 }
 
 const fail = (code, message, cause) => { throw Object.assign(new ContractError(code, message), cause ? { cause } : {}); };
+
+// 唯一的迁移链定义：显式 migrate、migrate-project 与打开项目时的自动升级都消费这张表，
+// 避免多处各写一份而漂移。只有存在一跳的版本才可以被自动升级改写。
+export const WORKSPACE_MIGRATION_STEPS = Object.freeze({ 7: 8, 8: 9, 9: 10, 10: 12, 11: 12, 12: 13 });
+export const MIGRATABLE_WORKSPACE_VERSIONS = Object.freeze(Object.keys(WORKSPACE_MIGRATION_STEPS).map(Number));
+export const CURRENT_WORKSPACE_VERSION = 13;
+export function workspaceMigrationPlan(from) {
+  const steps = [];
+  for (let version = from; WORKSPACE_MIGRATION_STEPS[version] !== undefined; version = WORKSPACE_MIGRATION_STEPS[version]) {
+    steps.push({ from: version, to: WORKSPACE_MIGRATION_STEPS[version] });
+  }
+  return steps;
+}
 // 历史协议的迁移候选不能交给 v11 schema 校验；它们尚未拥有 rules.json。
 // 这里仅验证跨文件不变量，最终 v10 → v11 仍必须通过完整当前合同回读。
 function validateLegacyCandidate({ manifest, definitions, mechanics, views = [] }) {
@@ -255,7 +268,7 @@ export async function planV10ToV11Migration(workspaceRoot) {
     ...mechanics.map((item, index) => ({ kind: 'mechanic', id: item.id, path: discovered.mechanicPaths[index] })),
     ...views.map((item, index) => ({ kind: 'view', id: item.id, path: discovered.viewPaths[index] }))];
   const candidate = { manifest: nextManifest, definitions: nextDefinitions, rules: nextRules, mechanics: nextMechanics, views: nextViews, files };
-  try { validateWorkspace(candidate); } catch (error) { fail('MIGRATION_VALIDATION_FAILED', 'v10 → v11 候选未通过全量校验：' + error.message, error); }
+  try { validateLegacyCandidate(candidate); } catch (error) { fail('MIGRATION_VALIDATION_FAILED', 'v10 → v11 候选未通过跨文件校验：' + error.message, error); }
   return { root, from: 10, to: 12, revision: revisionOf(snapshots, discovered.directories), documents: [
     { path: 'workspace.json', document: nextManifest }, { path: 'definitions.json', document: nextDefinitions, create: true },
     { path: 'rules.json', document: nextRules, create: true }, { path: manifest.definitions, delete: true },
@@ -294,10 +307,37 @@ export async function planV11ToV12Migration(workspaceRoot) {
   const files = [{ kind: 'workspace', id: manifest.id, path: 'workspace.json' }, { kind: 'definitions', path: manifest.definitions }, { kind: 'rules', path: manifest.rules },
     ...mechanics.map((item, index) => ({ kind: 'mechanic', id: item.id, path: discovered.mechanicPaths[index] })), ...views.map((item, index) => ({ kind: 'view', id: item.id, path: discovered.viewPaths[index] }))];
   const candidate = { manifest: nextManifest, definitions: nextDefinitions, rules, mechanics, views, files };
-  try { validateWorkspace(candidate); } catch (error) { fail('MIGRATION_VALIDATION_FAILED', 'v11 → v12 候选未通过全量校验：' + error.message, error); }
+  try { validateLegacyCandidate(candidate); } catch (error) { fail('MIGRATION_VALIDATION_FAILED', 'v11 → v12 候选未通过跨文件校验：' + error.message, error); }
   return { root, from: 11, to: 12, revision: revisionOf(snapshots, discovered.directories), documents: [
     { path: 'workspace.json', document: nextManifest }, { path: manifest.definitions, document: nextDefinitions }
   ], summary: { workspace: 1, definitions: 1, tags: tags.size } };
+}
+
+export async function planV12ToV13Migration(workspaceRoot) {
+  const root = await realpath(resolve(workspaceRoot));
+  const snapshots = new Map();
+  const read = async file => { const result = await readDocument(root, file); snapshots.set(file, result.raw); return result.document; };
+  const manifest = await read('workspace.json');
+  if (manifest?.kind !== 'workspace' || manifest.schemaVersion !== 12) fail('MIGRATION_VERSION_UNSUPPORTED', '迁移只支持 workspace v12 → v13；当前工作区版本为 v' + String(manifest?.schemaVersion));
+  const definitions = await read(manifest.definitions), rules = await read(manifest.rules), discovered = await discover(root), mechanics = [], views = [];
+  for (const path of discovered.mechanicPaths) mechanics.push(await read(path));
+  for (const path of discovered.viewPaths) views.push(await read(path));
+  if (definitions?.schemaVersion !== 7 || rules?.schemaVersion !== 1 || mechanics.some(item => item?.schemaVersion !== 7) || views.some(item => item?.schemaVersion !== 4)) {
+    fail('MIGRATION_VERSION_UNSUPPORTED', '迁移只接受 definitions v7、rules v1、mechanic v7 与 view v4 的完整 v12 工作区');
+  }
+  const taxonomyPresentation = { mode: 'label', expandedNodeIds: [] };
+  const nextManifest = { ...structuredClone(manifest), schemaVersion: 13 };
+  const nextMechanics = mechanics.map(item => ({ ...structuredClone(item), schemaVersion: 8, taxonomyPresentation: structuredClone(taxonomyPresentation) }));
+  const nextViews = views.map(item => ({ ...structuredClone(item), schemaVersion: 5, taxonomyPresentation: structuredClone(taxonomyPresentation) }));
+  const files = [{ kind: 'workspace', id: manifest.id, path: 'workspace.json' }, { kind: 'definitions', path: manifest.definitions }, { kind: 'rules', path: manifest.rules },
+    ...mechanics.map((item, index) => ({ kind: 'mechanic', id: item.id, path: discovered.mechanicPaths[index] })), ...views.map((item, index) => ({ kind: 'view', id: item.id, path: discovered.viewPaths[index] }))];
+  const candidate = { manifest: nextManifest, definitions, rules, mechanics: nextMechanics, views: nextViews, files };
+  try { validateWorkspace(candidate); } catch (error) { fail('MIGRATION_VALIDATION_FAILED', 'v12 → v13 候选未通过全量校验：' + error.message, error); }
+  return { root, from: 12, to: 13, revision: revisionOf(snapshots, discovered.directories), documents: [
+    { path: 'workspace.json', document: nextManifest },
+    ...nextMechanics.map(document => ({ path: files.find(item => item.kind === 'mechanic' && item.id === document.id)?.path, document })),
+    ...nextViews.map(document => ({ path: files.find(item => item.kind === 'view' && item.id === document.id)?.path, document })),
+  ], summary: { workspace: 1, mechanics: nextMechanics.length, views: nextViews.length } };
 }
 
 // 只修复一次已确认的跨文件半提交：definitions 已删除、机制仍保留无规则节点引用。

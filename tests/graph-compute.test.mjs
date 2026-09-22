@@ -6,7 +6,7 @@ import cola from 'webcola';
 import ELK from 'elkjs/lib/elk.bundled.js';
 import { refineHierarchy, AUTO_LAYOUT_OPTIONS, measureGeometry, qualityVector } from '../src/web/hierarchical-layout.mjs';
 import { improveFlowBySubtrees, compactHorizontalRoutes, snapLayoutToGrid } from '../src/web/flow-refinement.mjs';
-import { createRouteCache, restoreRouteCache } from '../src/web/route-cache.mjs';
+import { createRouteCache, graphGeometryKey, restoreRouteCache } from '../src/web/route-cache.mjs';
 
 test('正式整理返回共享算法与方向迭代的完整几何，复用并释放每阶段引擎', async () => {
   const graph = { nodes: ['a', 'b', 'c', 'd'].map(id => ({ id })),
@@ -25,7 +25,7 @@ test('正式整理返回共享算法与方向迭代的完整几何，复用并�
   assert.deepEqual(result.positions, Object.fromEntries(Object.entries(expected.positions).map(([id, p]) => [id, shift(p)])));
   assert.deepEqual(result.routes, expected.routes.map(([id, route]) => [id, { points: route.points.map(shift) }]));
   assert.ok(created >= 1 && created <= 2); assert.equal(disposed, created);
-  assert.deepEqual(restoreRouteCache(graph, result.positions, createRouteCache(graph, result.positions, result.routes)), new Map(result.routes));
+  assert.deepEqual(restoreRouteCache(graph, result.positions, result.routeCache), new Map(result.routes));
 });
 
 test('联合排版引擎失败仍释放资源，并把原始错误传出', async () => {
@@ -39,11 +39,17 @@ test('联合排版引擎失败仍释放资源，并把原始错误传出', async
 });
 
 test('空图与带自环的独立节点保留画布专用自环合同', async () => {
-  const empty = await computeGraphTask({ kind: 'layout', payload: { graph: { nodes: [], edges: [] }, positions: {} } }, { ELK });
-  assert.deepEqual(empty, { positions: {}, routes: [], warnings: [] });
+  const emptyGraph = { nodes: [], edges: [] };
+  const empty = await computeGraphTask({ kind: 'layout', payload: { graph: emptyGraph, positions: {} } }, { ELK });
+  assert.deepEqual(empty.positions, {});
+  assert.deepEqual(empty.routes, []);
+  assert.deepEqual(empty.routeCache, { geometryKey: graphGeometryKey(emptyGraph, {}), paths: {} });
+  assert.deepEqual(empty.warnings, []);
   const graph = { nodes: [{ id: 'a' }], edges: [{ id: 'loop', source: 'a', target: 'a' }] };
-  const result = await computeGraphTask({ kind: 'layout', payload: { graph, positions: { a: { x: 20, y: 40 } } } }, { ELK });
-  assert.deepEqual(result.positions, { a: { x: 20, y: 40 } });
+  const positions = { a: { x: 20, y: 40 } };
+  const result = await computeGraphTask({ kind: 'layout', payload: { graph, positions } }, { ELK });
+  assert.deepEqual(result.positions, positions);
+  assert.deepEqual(result.routeCache, { geometryKey: graphGeometryKey(graph, positions), paths: {} });
   assert.ok(createRouteCache(graph, result.positions, result.routes));
 });
 

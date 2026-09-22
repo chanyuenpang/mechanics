@@ -20,8 +20,8 @@ test('全局规则按机制或视图显式引用做一跳投影，不复制规�
   const encounter = workspace.mechanics.find(item => item.id === 'encounter');
   assert.equal(graph.edges.length, workspace.rules.rules.filter(rule => encounter.pinnedRuleIds.includes(rule.id)
     || encounter.focusNodeIds.includes(rule.source) || encounter.focusNodeIds.includes(rule.target)).length);
-  const view = { schemaVersion: 4, kind: 'view', workspaceId: workspace.manifest.id, id: 'damage-view', name: '伤害视图',
-    mechanicRegistrations: [], focusNodeIds: ['damage'], pinnedRuleIds: [], collapsedNodeIds: [], positions: {}, structuralPresentation: 'line' };
+  const view = { schemaVersion: 5, kind: 'view', workspaceId: workspace.manifest.id, id: 'damage-view', name: '伤害视图',
+    mechanicRegistrations: [], focusNodeIds: ['damage'], pinnedRuleIds: [], collapsedNodeIds: [], positions: {}, structuralPresentation: 'line', taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } };
   const direct = composeView(workspace, view);
   assert.deepEqual(direct.nodes.map(node => node.id).sort(), ['damage', 'health', 'melee']);
   assert.deepEqual(direct.edges.map(edge => edge.id).sort(), ['damage-2-health', 'melee-2-damage']);
@@ -30,8 +30,8 @@ test('全局规则按机制或视图显式引用做一跳投影，不复制规�
 test('仅固定规则的机制图会投影规则及其端点，不需要虚构焦点节点', async () => {
   const workspace = await readWorkspace(sampleRoot);
   const ruleId = workspace.rules.rules[0].id;
-  workspace.mechanics.push({ schemaVersion: 7, kind: 'mechanic', workspaceId: workspace.manifest.id, id: 'pinned-only', name: '固定规则总览',
-    scope: '测试', focusNodeIds: [], pinnedRuleIds: [ruleId], positions: {} });
+  workspace.mechanics.push({ schemaVersion: 8, kind: 'mechanic', workspaceId: workspace.manifest.id, id: 'pinned-only', name: '固定规则总览',
+    scope: '测试', focusNodeIds: [], pinnedRuleIds: [ruleId], positions: {}, taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } });
   const graph = composeProjection(workspace, { graphIds: ['pinned-only'] });
   const rule = workspace.rules.rules.find(item => item.id === ruleId);
   assert.deepEqual(graph.edges.map(edge => edge.id), [ruleId]);
@@ -41,8 +41,8 @@ test('仅固定规则的机制图会投影规则及其端点，不需要虚构�
 test('视图只能引用已有概念和已有规则', async () => {
   const workspace = await readWorkspace(sampleRoot);
   const invalid = structuredClone(workspace);
-  invalid.views.push({ schemaVersion: 4, kind: 'view', workspaceId: invalid.manifest.id, id: 'invalid-view', name: '非法',
-    mechanicRegistrations: [], focusNodeIds: ['missing-concept'], pinnedRuleIds: [], collapsedNodeIds: [], positions: {}, structuralPresentation: 'line' });
+  invalid.views.push({ schemaVersion: 5, kind: 'view', workspaceId: invalid.manifest.id, id: 'invalid-view', name: '非法',
+    mechanicRegistrations: [], focusNodeIds: ['missing-concept'], pinnedRuleIds: [], collapsedNodeIds: [], positions: {}, structuralPresentation: 'line', taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } });
   assert.throws(() => validateWorkspace(invalid), { code: 'MISSING_REFERENCE' });
 });
 
@@ -53,8 +53,8 @@ test('删除全局规则会原子清理所有机制图与视图的固定引用',
   t.after(async () => { await store.close(); await rm(root, { recursive: true, force: true }); });
   const before = await store.read();
   const ruleId = before.rules.rules[0].id;
-  const view = { schemaVersion: 4, kind: 'view', workspaceId: before.manifest.id, id: 'pinned-rule-view', name: '固定规则',
-    mechanicRegistrations: [], focusNodeIds: [], pinnedRuleIds: [ruleId], collapsedNodeIds: [], positions: {}, structuralPresentation: 'line' };
+  const view = { schemaVersion: 5, kind: 'view', workspaceId: before.manifest.id, id: 'pinned-rule-view', name: '固定规则',
+    mechanicRegistrations: [], focusNodeIds: [], pinnedRuleIds: [ruleId], collapsedNodeIds: [], positions: {}, structuralPresentation: 'line', taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } };
   const created = await store.createView({ revision: before.revision, document: view, file: 'pinned-rule-view.view.json' });
   const removed = await store.deleteGlobalRule({ revision: created.revision, ruleId });
   assert.equal(removed.rules.rules.some(rule => rule.id === ruleId), false);
@@ -93,8 +93,13 @@ test('v10 迁移直接进入当前规则库与标签表，失败预览不会写�
   assert.equal(compatible.rules.rules.length, rules.rules.length);
   const executed = await migrateWorkspace(workspaceRoot, { from: 10, to: 12, revision: preview.revision, execute: true });
   assert.equal(executed.migrated, true);
+  // v12 只是过渡版本：只有再走 12 → 13 才能回到当前严格读取的协议。
+  const v12ToV13 = await migrateWorkspace(workspaceRoot, { from: 12, to: 13 });
+  await migrateWorkspace(workspaceRoot, { from: 12, to: 13, revision: v12ToV13.revision, execute: true });
   const migrated = await readWorkspace(workspaceRoot);
-  assert.equal(migrated.manifest.schemaVersion, 12);
+  assert.equal(migrated.manifest.schemaVersion, 13);
+  assert.equal(migrated.compatibilityMode, false);
+  assert.ok(migrated.mechanics.every(item => item.schemaVersion === 8 && item.taxonomyPresentation.mode === 'label'));
   assert.equal(migrated.rules.rules.length, rules.rules.length);
   assert.deepEqual(migrated.definitions.tagDefinitions, [
     { id: '战斗', displayName: '战斗', color: '#6B7280' },

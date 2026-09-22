@@ -27,10 +27,88 @@ async function waitForPublication(origin, token, attempts = 40) {
   throw new Error('后台文档发布未在预期时间内结束');
 }
 
+
+// v12 是自动升级链的入口：rules.json 已存在，但 mechanism/view 还缺少显式展示状态。
+async function downgradeFixtureToV12(projectRoot) {
+  const workspaceRoot = join(projectRoot, '.mechanics');
+  const workspace = await readWorkspace(workspaceRoot);
+  const manifestPath = join(workspaceRoot, 'workspace.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  await writeFile(manifestPath, JSON.stringify({ ...manifest, schemaVersion: 12 }, null, 2) + '\n');
+  for (const mechanic of workspace.mechanics) {
+    const path = join(workspaceRoot, workspace.files.find(file => file.kind === 'mechanic' && file.id === mechanic.id).path);
+    const { taxonomyPresentation, ...rest } = JSON.parse(await readFile(path, 'utf8'));
+    await writeFile(path, JSON.stringify({ ...rest, schemaVersion: 7 }, null, 2) + '\n');
+  }
+  for (const view of workspace.views) {
+    const path = join(workspaceRoot, workspace.files.find(file => file.kind === 'view' && file.id === view.id).path);
+    const { taxonomyPresentation, ...rest } = JSON.parse(await readFile(path, 'utf8'));
+    await writeFile(path, JSON.stringify({ ...rest, schemaVersion: 4 }, null, 2) + '\n');
+  }
+  return { workspaceRoot, manifest };
+}
+
+async function workspaceBytes(workspaceRoot) {
+  const entries = await readdir(workspaceRoot, { recursive: true, withFileTypes: true });
+  const paths = entries.filter(entry => entry.isFile()).map(entry => join(entry.parentPath, entry.name)).sort();
+  return Object.fromEntries(await Promise.all(paths.map(async path => [path, await readFile(path, 'utf8')])));
+}
 async function openProject(origin, projectRoot, metadata = {}, headers = {}) {
   return post(origin, '/api/project/open', { projectRoot, ...metadata }, headers);
 }
 
+
+test('v12 项目在打开时自动原子升级到 v13，直接严格读取则明确拒绝', async t => {
+  const temp = await mkdtemp(join(tmpdir(), 'game-graph-v12-upgrade-'));
+  const projectRoot = join(temp, 'v12-project');
+  await copyExampleFixture(projectRoot);
+  const { workspaceRoot } = await downgradeFixtureToV12(projectRoot);
+  // 未迁移的 v12 不能落进只读兼容模型：它缺少必填的展示状态。
+  await assert.rejects(readWorkspace(workspaceRoot), { code: 'WORKSPACE_VERSION_UNSUPPORTED' });
+  const server = await startServer({ port: 0, projectHistoryPath: join(temp, 'user', 'projects.json') });
+  t.after(async () => { await server.close(); await rm(temp, { recursive: true, force: true }); });
+  const opened = await openProject(server.origin, projectRoot);
+  assert.equal(opened.response.status, 200, JSON.stringify(opened.data));
+  assert.deepEqual(opened.data.projectUpgrade, { upgraded: true, from: 12, schemaVersion: 13 });
+  assert.equal(opened.data.manifest.schemaVersion, 13);
+  assert.equal(opened.data.compatibilityMode, false);
+  const explicit = JSON.stringify({ mode: 'label', expandedNodeIds: [] });
+  assert.ok(opened.data.mechanics.every(item => item.schemaVersion === 8 && JSON.stringify(item.taxonomyPresentation) === explicit));
+  // 升级真实落盘，重开不再需要第二次升级。
+  const onDisk = JSON.parse(await readFile(join(workspaceRoot, 'workspace.json'), 'utf8'));
+  assert.equal(onDisk.schemaVersion, 13);
+  for (const name of (await readdir(join(workspaceRoot, 'mechanics'))).filter(name => name.endsWith('.mechanic.json'))) {
+    assert.equal(JSON.parse(await readFile(join(workspaceRoot, 'mechanics', name), 'utf8')).schemaVersion, 8);
+  }
+  // 同一会话再次打开命中已升级的工作区，不再有第二次写入。
+  const reopened = await openProject(server.origin, projectRoot);
+  assert.equal(reopened.response.status, 200);
+  assert.equal(reopened.data.manifest.schemaVersion, 13);
+  await waitForPublication(server.origin, opened.data.projectSessionToken);
+});
+
+test('v12 自动升级失败时报明确错误且不写入任何文件', async t => {
+  const temp = await mkdtemp(join(tmpdir(), 'game-graph-v12-failed-'));
+  const projectRoot = join(temp, 'broken-v12');
+  await copyExampleFixture(projectRoot);
+  const { workspaceRoot } = await downgradeFixtureToV12(projectRoot);
+  const rulesPath = join(workspaceRoot, 'rules.json');
+  const rules = JSON.parse(await readFile(rulesPath, 'utf8'));
+  // 同一概念出现两条 is-a 出边：候选校验必须整体拒绝。
+  rules.rules.push({ id: 'evade-2-melee', source: 'evade', target: 'melee', relation: 'specializes' });
+  rules.rules.push({ id: 'evade-2-failure', source: 'evade', target: 'failure', relation: 'specializes' });
+  await writeFile(rulesPath, JSON.stringify(rules, null, 2) + '\n');
+  const before = await workspaceBytes(workspaceRoot);
+  const server = await startServer({ port: 0, projectHistoryPath: join(temp, 'user', 'projects.json') });
+  t.after(async () => { await server.close(); await rm(temp, { recursive: true, force: true }); });
+  const opened = await openProject(server.origin, projectRoot);
+  assert.equal(opened.response.status, 422, JSON.stringify(opened.data));
+  assert.equal(opened.data.error, 'MIGRATION_VALIDATION_FAILED');
+  assert.match(opened.data.message, /自动升级失败（v12 → v13）/);
+  assert.match(opened.data.message, /is-a 父概念必须唯一/);
+  assert.deepEqual(await workspaceBytes(workspaceRoot), before);
+  assert.equal((await fetch(server.origin + '/api/workspace')).status, 409);
+});
 test('无 session 服务支持跨源打开项目，并用 generation 阻止旧页面误写', async t => {
   const temp = await mkdtemp(join(tmpdir(), 'game-graph-project-switch-'));
   const first = join(temp, 'first-project'), second = join(temp, 'second-project');
@@ -64,15 +142,36 @@ test('无 session 服务支持跨源打开项目，并用 generation 阻止旧�
   assert.notEqual((await (await fetch(server.origin + '/api/workspace')).json()).manifest.name, '不应写入第二项目');
 });
 
-test('打开已有项目不注册受管 assets，目录权限不会阻断项目会话', async t => {
+test('受管 assets 路径冲突不会阻断项目会话，后台失败可查询且可重开恢复', async t => {
   const temp = await mkdtemp(join(tmpdir(), 'game-graph-open-readonly-')), project = join(temp, 'project');
   await copyExampleFixture(project);
+  await writeFile(join(project, '.agents'), '路径被文件占用');
   const server = await startServer({ port: 0, projectHistoryPath: join(temp, 'user', 'projects.json') });
   t.after(async () => { await server.close(); await rm(temp, { recursive: true, force: true }); });
 
   const opened = await openProject(server.origin, project);
   assert.equal(opened.response.status, 200);
-  await assert.rejects(access(join(project, '.agents')), { code: 'ENOENT' });
+  const statusUrl = server.origin + '/api/project/assets?projectSessionToken=' + encodeURIComponent(opened.data.projectSessionToken);
+  let status;
+  for (let index = 0; index < 200; index++) {
+    status = (await (await fetch(statusUrl)).json()).projectAssetSync;
+    if (status.state !== 'pending') break;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  assert.equal(status.state, 'failed');
+  assert.equal(status.code, 'PROJECT_SKILL_CONFLICT');
+  assert.equal((await fetch(server.origin + '/api/workspace')).status, 200);
+  assert.equal(await readFile(join(project, '.agents'), 'utf8'), '路径被文件占用');
+  await rm(join(project, '.agents'));
+  const reopened = await openProject(server.origin, project);
+  assert.equal(reopened.response.status, 200);
+  for (let index = 0; index < 200; index++) {
+    status = (await (await fetch(statusUrl)).json()).projectAssetSync;
+    if (status.state !== 'pending') break;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  assert.equal(status.state, 'current', status.message);
+  await access(join(project, '.mechanics/tools/workspace-tool.mjs'));
 });
 
 test('带项目会话令牌的写入始终命中其所属项目，不受当前项目切换影响', async t => {
@@ -195,6 +294,7 @@ test('文档导出设置与生成文档分别提交，并允许用未改动的�
   });
   assert.equal(saved.response.status, 200);
   assert.notEqual(saved.data.revision, settings.revision);
+  assert.deepEqual(saved.data.manifest.exportSelections, [{ kind: 'mechanic', mechanicId }]);
   assert.equal(saved.data.exportPublication.state, 'pending');
   const generated = await post(server.origin, '/api/document-export/generate', {
     projectSessionToken: saved.data.projectSessionToken, projectGeneration: saved.data.projectGeneration, revision: saved.data.revision,
@@ -210,6 +310,31 @@ test('文档导出设置与生成文档分别提交，并允许用未改动的�
   assert.equal(refreshed.mechanics.find(item => item.id === mechanicId).selected, true);
 });
 
+test('导出设置被外部修改后，旧 revision 生成文档仍显式失败', async t => {
+  const temp = await mkdtemp(join(tmpdir(), 'game-graph-document-export-conflict-'));
+  const projectRoot = join(temp, 'project'); await copyExampleFixture(projectRoot);
+  const server = await startServer({ projectRoot, port: 0, projectHistoryPath: join(temp, 'user', 'projects.json') });
+  t.after(async () => { await server.close(); await rm(temp, { recursive: true, force: true }); });
+
+  const workspace = await (await fetch(server.origin + '/api/workspace')).json();
+  const settings = await (await fetch(server.origin + '/api/document-export/settings?projectSessionToken=' + encodeURIComponent(workspace.projectSessionToken))).json();
+  const first = await post(server.origin, '/api/document-export/settings', {
+    projectSessionToken: workspace.projectSessionToken, projectGeneration: workspace.projectGeneration, revision: settings.revision,
+    selections: [{ kind: 'mechanic', mechanicId: settings.mechanics[0].id }],
+  });
+  assert.equal(first.response.status, 200);
+  const external = await post(server.origin, '/api/document-export/settings', {
+    projectSessionToken: first.data.projectSessionToken, projectGeneration: first.data.projectGeneration, revision: first.data.revision,
+    selections: [],
+  });
+  assert.equal(external.response.status, 200);
+
+  const conflict = await post(server.origin, '/api/document-export/generate', {
+    projectSessionToken: first.data.projectSessionToken, projectGeneration: first.data.projectGeneration, revision: first.data.revision,
+  });
+  assert.equal(conflict.response.status, 409);
+  assert.equal(conflict.data.error, 'REVISION_CONFLICT');
+});
 test('机制文件夹只重分类 canonical 文件，不改变机制 ID 或视图成员，且只能删除空目录', async t => {
   const temp = await mkdtemp(join(tmpdir(), 'game-graph-mechanic-folders-'));
   const projectRoot = join(temp, 'project'); await copyExampleFixture(projectRoot);

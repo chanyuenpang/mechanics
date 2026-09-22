@@ -22,11 +22,11 @@ game-graph agent rule add --project ./my-game ... --revision <机制资源版本
 
 Agent 查询与 mutation 的完整参数见 [Agent 查询与受约束写入](Agent查询接口.md)。
 
-`init` 可以在已有普通项目目录内创建 `.game-graph`，也可以创建尚不存在的项目目录；同时把安装包内的 `game-mechanic-search` 与 `game-mechanic-modeling` 注册到项目 `.agents/skills/`。已有 `.game-graph` 时明确拒绝，不覆盖。目标 skill 不存在时安装；内容与包内版本完全相同时视为已注册；路径被占用或内容不同时在创建工作区前返回 `PROJECT_SKILL_CONFLICT`，绝不覆盖。工作区 ID 默认取项目目录名，目录名不符合英文语义 kebab-case 时必须显式传 `--id`。
+`init` 可以在已有普通项目目录内创建 `.mechanics`，也可以创建尚不存在的项目目录；同时把安装包内的 `mechanics-search`、`mechanics-modeling`、`mechanics-doc` 注册到项目 `.agents/skills/`，把 `workspace-tool.mjs` 同步到 `.mechanics/tools/`。已有 `.mechanics` 时明确拒绝，不覆盖。目标 skill 不存在时安装；内容与包内版本完全相同时视为已注册；路径被占用或内容不同时在创建工作区前返回 `PROJECT_SKILL_CONFLICT`，绝不覆盖。工作区 ID 默认取项目目录名，目录名不符合英文语义 kebab-case 时必须显式传 `--id`。
 
-`web` 省略 `--project` 时以空项目状态启动，网页可以打开项目；项目缺少 `.game-graph` 时按用户提供的名称和稳定 ID 初始化。`validate/catalog/root` 省略 `--project` 时从 cwd 向上寻找最近的 `.game-graph/workspace.json`。项目切换先完整打开候选并取得锁，成功后才替换当前项目；每次切换递增 `projectGeneration`，旧页面或旧在线 mutation 写入明确返回 `PROJECT_CHANGED`。
+`web` 省略 `--project` 时以空项目状态启动，网页可以打开项目；项目缺少 `.mechanics` 时按用户提供的名称和稳定 ID 初始化。`validate/catalog/root` 省略 `--project` 时从 cwd 向上寻找最近的 `.mechanics/workspace.json`。项目切换先完整打开候选并取得锁，成功后才替换当前项目；每次切换递增 `projectGeneration`，旧页面或旧在线 mutation 写入明确返回 `PROJECT_CHANGED`。
 
-`catalog` 从 canonical definitions/mechanics 重建 catalog v5 的 Markdown-only Agent 读模型并回读验真。输出目录由 workspace v10 的 `agentExportPath` 指定，默认 `game-mechanics`；只包含生成的 `AGENTS.md`、`README.md`、唯一 `concepts.md` 与按实际机制目录生成的 `folders/<目录>/index.md`。文件夹只做机制图分类，不改变概念、规则或视图成员；目录通过生成指南确认归属，不接管或删除未知内容；旧 manifest/index/JSON 与逐概念读模型只在受控升级时清理。
+`catalog` 从 canonical definitions/rules/mechanics 重建 Markdown-only Agent 读模型并回读验真。输出目录由 workspace v13 的 `agentExportPath` 指定，默认 `mechanics`；只包含生成的 `AGENTS.md`、`README.md`、唯一 `concepts.md` 与按实际机制目录生成的 `folders/<目录>/index.md`。文件夹只做机制图分类，不改变概念、规则或视图成员；目录通过生成指南确认归属，不接管或删除未知内容；旧 manifest/index/JSON 与逐概念读模型只在受控升级时清理。
 
 服务只绑定 `127.0.0.1`，端口 0 可让系统选择空闲端口。没有 session、Bearer 或 Origin 授权，并允许普通网页跨源调用 JSON API；任何能访问本机端口并知道项目绝对路径的网页或进程都可能读写资料，因此只应在可信本机开发环境运行。Host、JSON、路径、整体 revision、资源 revision、projectGeneration 和工作区锁仍严格校验。
 
@@ -38,13 +38,15 @@ Windows 网页的「打开项目」直接调用现代系统文件夹选择器（
 
 ```text
 my-game/
-├── .game-graph/
+├── .mechanics/
 │   ├── workspace.json
-│   ├── definitions.graph.json
+│   ├── definitions.json
+│   ├── rules.json
 │   ├── mechanics/
 │   │   └── basic.mechanic.json
+│   ├── tools/                 受管工具，不计入文件树版本
 │   └── 关卡/首领.view.json
-└── game-mechanics/             默认，可配置为 docs/game-mechanics 等项目内目录
+└── mechanics/                  默认，可配置为 docs/mechanics 等项目内目录
     ├── AGENTS.md
     ├── README.md
     ├── concepts.md
@@ -53,7 +55,7 @@ my-game/
 
 canonical 目录递归发现普通 `*.mechanic.json` 和 `*.view.json`。隐藏条目与 `node_modules` 排除；其他后缀不作为规则或视图。文件名和目录不是图 ID。外部移动文件后按稳定 ID 恢复引用；缺失来源、坏 JSON、重复 ID、越界路径、junction/符号链接或嵌套工作区都整体失败，不返回部分成功。
 
-正式协议固定为 workspace v8、definitions/mechanic v4、view v3；查询协议与阅读合同为 v9。CLI 对旧版本严格失败，不兼容读取；只能用 `game-graph migrate --from 7 --to 8 --project <项目目录>` 预览并显式执行受控升级。
+正式协议固定为 workspace v13、definitions v7、rules v1、mechanic v8、view v5。CLI 与网页只把当前版本当作可写合同：打开项目时所有仍有迁移路径的旧协议（v7–v12）自动逐级预览→执行迁移（任何一跳失败都不写入文件），更早或未知版本仅按核心拓扑兼容模式只读打开，结构编辑以 `COMPATIBILITY_READ_ONLY` 拒绝。也可用 `mech migrate --from <旧版本> --to <新版本> --project <项目目录>` 逐级预览并显式执行，或用 `mech migrate-project --project <项目目录> --execute` 一次完成旧根、旧 skill 与协议的链式升级。
 
 ## 制作可安装包
 

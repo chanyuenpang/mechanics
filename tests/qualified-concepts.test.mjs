@@ -6,8 +6,8 @@ const node = id => ({ id, label: id, description: '测试概念', agentLocked: f
 const influence = (source, target) => ({ id: source + '-2-' + target, source, target, relation: 'influence', sign: 1, inheritance: { mode: 'none' } });
 const specializes = (source, target) => ({ id: source + '-2-' + target, source, target, relation: 'specializes' });
 function workspace(nodes, edges = [], mechanics = null) {
-  const graphs = mechanics ?? [{ schemaVersion: 7, kind: 'mechanic', workspaceId: 'sample', id: 'rules', name: '规则', scope: '测试', focusNodeIds: nodes.map(item => item.id), pinnedRuleIds: edges.map(edge => edge.id), positions: {} }];
-  return { manifest: { schemaVersion: 12, kind: 'workspace', id: 'sample', name: '测试', definitions: 'definitions.json', rules: 'rules.json', agentExportPath: 'mechanics', compositions: [] },
+  const graphs = mechanics ?? [{ schemaVersion: 8, kind: 'mechanic', workspaceId: 'sample', id: 'rules', name: '规则', scope: '测试', focusNodeIds: nodes.map(item => item.id), pinnedRuleIds: edges.map(edge => edge.id), positions: {}, taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } }];
+  return { manifest: { schemaVersion: 13, kind: 'workspace', id: 'sample', name: '测试', definitions: 'definitions.json', rules: 'rules.json', agentExportPath: 'mechanics', compositions: [] },
     definitions: { schemaVersion: 7, kind: 'definitions', workspaceId: 'sample', nodes, tagDefinitions: [], positions: {} }, rules: { schemaVersion: 1, kind: 'rules', workspaceId: 'sample', rules: edges }, mechanics: graphs, views: [] };
 }
 

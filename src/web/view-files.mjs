@@ -49,7 +49,8 @@ function materializeView(workspace, snapshot, original, graph) {
   const positions = completeViewPositions(workspace, original, snapshot.positions);
   return { mechanicRegistrations: snapshot.mechanicRegistrations.map(item => structuredClone(item)), focusNodeIds: structuredClone(snapshot.focusNodeIds ?? []), pinnedRuleIds: structuredClone(snapshot.pinnedRuleIds ?? []), collapsedNodeIds: [], positions,
     nodeColors: structuredClone(snapshot.nodeColors ?? {}), nodeStyles: structuredClone(snapshot.nodeStyles ?? {}), projectionPositions: structuredClone(snapshot.projectionPositions ?? {}), ...(snapshot.routeCache ? { routeCache: structuredClone(snapshot.routeCache) } : {}),
-    structuralPresentation: snapshot.structuralPresentation };
+    structuralPresentation: snapshot.structuralPresentation,
+    taxonomyPresentation: structuredClone(snapshot.taxonomyPresentation ?? { mode: 'label', expandedNodeIds: [] }) };
 }
 
 function updateViewProjection(workspace, snapshot) {
@@ -65,6 +66,7 @@ function updateViewProjection(workspace, snapshot) {
     projectionPositions: structuredClone(snapshot.projectionPositions ?? {}),
     ...(snapshot.routeCache ? { routeCache: structuredClone(snapshot.routeCache) } : {}),
     structuralPresentation: snapshot.structuralPresentation,
+    taxonomyPresentation: structuredClone(snapshot.taxonomyPresentation ?? { mode: 'label', expandedNodeIds: [] }),
   };
 }
 
@@ -102,14 +104,20 @@ export function prepareOpening(workspace, requestedId) {
         : structuredClone(snapshot), original, graph };
 }
 
-export async function readOpening(api, requestedId, cachedWorkspace = null) {
+export async function readOpening(api, requestedId, cachedWorkspace = null, readMechanic = null) {
   // 同一项目内的普通资源切换复用已验证快照，避免为每次导航重读整个工作区。
-  // 但 Agent 或外部编辑器可能在页面打开后写入了此机制图：旧快照把它误判为空图时，
-  // 必须回读一次 canonical workspace，不能把“请引用概念”的空状态展示给用户。
+  // Agent 或外部编辑器把旧快照中的空图补全时，只读取目标机制；不得为此扫描、校验并阻塞整个工作区。
   const opened = prepareOpening(cachedWorkspace ?? await api('/api/workspace'), requestedId);
   const requestedMechanic = typeof requestedId === 'object' && requestedId?.kind === 'mechanic' && requestedId.id !== null;
   if (cachedWorkspace && requestedMechanic && opened.graph.nodes.length === 0) {
-    return prepareOpening(await api('/api/workspace'), requestedId);
+    if (!readMechanic) return opened;
+    const file = cachedWorkspace.files.find(item => item.kind === 'mechanic' && item.id === requestedId.id)?.path;
+    if (!file) fail('目标机制文件不存在：' + requestedId.id);
+    const latest = await readMechanic({ id: requestedId.id, file });
+    const mechanics = cachedWorkspace.mechanics.map(item => item.id === requestedId.id ? latest.mechanic : item);
+    const resourceRevisions = structuredClone(cachedWorkspace.resourceRevisions);
+    resourceRevisions.mechanics[requestedId.id] = latest.resourceRevision;
+    return prepareOpening({ ...cachedWorkspace, mechanics, resourceRevisions }, requestedId);
   }
   return opened;
 }

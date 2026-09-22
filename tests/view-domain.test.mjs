@@ -24,9 +24,9 @@ test('注册顺序稳定，新增默认可见，重复注册与修改未注册�
 });
 
 test('隐藏只改变可见投影，注册事实和位置保持；Agent 查询不把视图当作语义范围', () => {
-  const view = { schemaVersion: 3, kind: 'view', workspaceId: 'test', id: 'battle', name: '战斗',
+  const view = { schemaVersion: 5, kind: 'view', workspaceId: 'test', id: 'battle', name: '战斗',
     mechanicRegistrations: [{ mechanicId: 'one', visible: true }, { mechanicId: 'two', visible: false }],
-    collapsedNodeIds: [], positions: { b: { x: 10, y: 20 } }, structuralPresentation: 'line' };
+    collapsedNodeIds: [], positions: { b: { x: 10, y: 20 } }, structuralPresentation: 'line', taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } };
   const data = { ...workspace, views: [view] };
   assert.deepEqual(composeView(data, view).nodes.map(item => item.id), ['a']);
   const scopes = queryWorkspace(data, { command: 'scopes' });

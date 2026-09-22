@@ -11,7 +11,7 @@ npm install -g @veewo/mechanics
 mech init <项目目录> --name <项目名称> --id <稳定项目ID>
 ```
 
-`init` 创建项目内 `.mechanics` 工作区，并安装受管的 `mechanics-search`、`mechanics-modeling` 与 `mechanics-doc` skills。之后在目标项目目录运行 `mech sync`，或通过 Mechanics 网页打开该项目，都会将这些受管 skill 更新为当前已安装包的版本。
+`init` 创建项目内 `.mechanics` 工作区，并安装受管的 `mechanics-search`、`mechanics-modeling` 与 `mechanics-doc` skills 和 `.mechanics/tools/workspace-tool.mjs`。之后运行 `mech sync` 可等待同步完成；通过 Mechanics 网页打开或初始化项目时，则在后台更新这些资产，不阻断页面响应。后台失败会显示提示并记录服务日志，修复后重新打开可重试。更新来源是当前运行服务的安装包，不会联网升级。
 
 ## 启动网页编辑器
 

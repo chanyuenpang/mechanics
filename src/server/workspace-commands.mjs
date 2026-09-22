@@ -31,7 +31,7 @@ export async function findWorkspace(start = process.cwd()) {
   return resolve(projectRoot, WORKSPACE_DIRECTORY);
 }
 
-export async function initProject(target, { name = '规则模型工作区', id = null, createProjectRoot = true } = {}) {
+export async function initProject(target, { name = '规则模型工作区', id = null, createProjectRoot = true, syncAssets = true } = {}) {
   if (!target) throw new ContractError('PROJECT_REQUIRED', 'init 必须指定项目目录');
   const requestedRoot = resolve(target);
   id ??= basename(requestedRoot);
@@ -50,9 +50,9 @@ export async function initProject(target, { name = '规则模型工作区', id =
     await lstat(workspaceRoot);
     throw new ContractError('WORKSPACE_EXISTS', `项目已经包含 ${WORKSPACE_DIRECTORY}，未修改：${projectRoot}`);
   } catch (error) { if (error.code !== 'ENOENT') throw error; }
-  await preflightProjectSkills(projectRoot);
+  if (syncAssets) await preflightProjectSkills(projectRoot);
 
-  const manifest = { schemaVersion: 12, kind: 'workspace', id, name, definitions: 'definitions.json', rules: 'rules.json',
+  const manifest = { schemaVersion: 13, kind: 'workspace', id, name, definitions: 'definitions.json', rules: 'rules.json',
     agentExportPath: DEFAULT_AGENT_EXPORT_PATH, compositions: [],
     lastView: { graphIds: [], activeLayerId: null, collapsedNodeIds: [], positions: {} } };
   const definitions = { schemaVersion: 7, kind: 'definitions', workspaceId: id, tagDefinitions: [], nodes: [], positions: {} };
@@ -75,7 +75,7 @@ export async function initProject(target, { name = '规则模型工作区', id =
   }
 
   try {
-    const skills = await registerProjectSkills(projectRoot);
+    const skills = syncAssets ? await registerProjectSkills(projectRoot) : {};
     const context = await projectContext(projectRoot, { manifest, createExportRoot: true });
     const canonical = await readWorkspace(context.workspaceRoot, { context });
     await publishCatalog(context.exportRoot, canonical);

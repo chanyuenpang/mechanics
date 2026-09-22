@@ -44,6 +44,25 @@ test('单文件保存真实落盘，读服务不持锁，写入冲突不覆盖',
   await assert.rejects(access(join(directory, '.mechanics.lock')), { code: 'ENOENT' });
 });
 
+
+test('机制图的 is-a 展开状态随草稿落盘并在重开后一致', async t => {
+  const { directory, store, workspace } = await fixture(t);
+  const pathOf = id => workspace.files.find(file => file.kind === 'mechanic' && file.id === id).path;
+  const mechanic = workspace.mechanics[0], childId = mechanic.focusNodeIds[0];
+  const document = { ...structuredClone(mechanic), taxonomyPresentation: { mode: 'label', expandedNodeIds: [childId] } };
+  const saved = await store.save({ revision: workspace.revision, kind: 'mechanic', id: mechanic.id, document });
+  const expected = { mode: 'label', expandedNodeIds: [childId] };
+  assert.deepEqual(JSON.parse(await readFile(join(directory, pathOf(mechanic.id)), 'utf8')).taxonomyPresentation, expected);
+  assert.deepEqual(saved.mechanics.find(item => item.id === mechanic.id).taxonomyPresentation, expected);
+  // 重开项目只从文件恢复，不靠运行时合成默认值。
+  const reopened = await createWorkspaceStore(directory);
+  try { assert.deepEqual((await reopened.read()).mechanics.find(item => item.id === mechanic.id).taxonomyPresentation, expected); }
+  finally { await reopened.close(); }
+  // 收起后回到显式空集合，文件与回读一致。
+  await store.save({ revision: saved.revision, kind: 'mechanic', id: mechanic.id,
+    document: { ...document, taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } } });
+  assert.deepEqual(JSON.parse(await readFile(join(directory, pathOf(mechanic.id)), 'utf8')).taxonomyPresentation, { mode: 'label', expandedNodeIds: [] });
+});
 test('外部修改与同时旧版本写入不会被覆盖；失败后草稿可修正再提交', async t => {
   const { directory, store, workspace } = await fixture(t);
   const file = join(directory, workspace.manifest.definitions);
@@ -77,7 +96,7 @@ test('删除被其他图层引用的定义、非法文件登记和非法边失�
 
 test('新建嵌套机制文件自然发现，不改配置；同名文件绝不覆盖', async t => {
   const { directory, store, workspace } = await fixture(t);
-  const document = { schemaVersion: 7, kind: 'mechanic', workspaceId: workspace.manifest.id, id: 'new-layer', name: '新图层', scope: '抽象规则', focusNodeIds: ['enemy', 'damage'], pinnedRuleIds: [], positions: {} };
+  const document = { schemaVersion: 8, kind: 'mechanic', workspaceId: workspace.manifest.id, id: 'new-layer', name: '新图层', scope: '抽象规则', focusNodeIds: ['enemy', 'damage'], pinnedRuleIds: [], positions: {}, taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } };
   const before = await readFile(join(directory, 'workspace.json'), 'utf8');
   const occupied = workspace.files.find(item => item.kind === 'mechanic').path;
   const occupiedBefore = await readFile(join(directory, occupied), 'utf8');

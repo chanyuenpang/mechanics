@@ -136,8 +136,8 @@ test('Agent 删除限定边时，同时移除组合视图中已失效的投影�
     source: edge.source, target: edge.target, sourceQualifiers: qualifiers,
     revision: workspace.resourceRevisions.rules });
   const projectionId = endpointProjectionId(edge.source, qualifiers);
-  workspace.views = [{ schemaVersion: 4, kind: 'view', workspaceId: workspace.manifest.id, id: 'combined', name: '组合视图',
-    mechanicRegistrations: [{ mechanicId: mechanic.id, visible: true }], focusNodeIds: [], pinnedRuleIds: [], projectionPositions: { [projectionId]: { x: 120, y: 80 } }, positions: {}, collapsedNodeIds: [], structuralPresentation: 'line' }];
+  workspace.views = [{ schemaVersion: 5, kind: 'view', workspaceId: workspace.manifest.id, id: 'combined', name: '组合视图',
+    mechanicRegistrations: [{ mechanicId: mechanic.id, visible: true }], focusNodeIds: [], pinnedRuleIds: [], projectionPositions: { [projectionId]: { x: 120, y: 80 } }, positions: {}, collapsedNodeIds: [], structuralPresentation: 'line', taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } }];
   applyAgentMutation(workspace, { resource: 'rule', action: 'delete', mechanic: mechanic.id,
     source: edge.source, target: edge.target, revision: workspace.resourceRevisions.rules });
   assert.equal(workspace.views[0].projectionPositions[projectionId], undefined);

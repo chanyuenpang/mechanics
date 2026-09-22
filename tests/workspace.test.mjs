@@ -130,17 +130,19 @@ test('web 无需项目路径，从普通目录或已有项目子目录启动都�
   }
 });
 
-test('web --project 以兼容模式打开 v10 工作区，且不在打开时写迁移', async t => {
+test('web --project 打开 v10 工作区时按迁移链自动升级到当前协议', async t => {
   const { projectRoot, root } = await fixture(t);
   await downgradeFixtureToV10(projectRoot);
+  // 直接读取仍是只读兼容模型，不写文件。
   const compatibility = await readWorkspace(root);
   assert.equal(compatibility.compatibilityMode, true);
   assert.ok(compatibility.rules.rules.length > 0, '旧机制图中的内嵌边必须形成临时规则库');
+  assert.equal(JSON.parse(await readFile(join(root, 'workspace.json'), 'utf8')).schemaVersion, 10);
   const child = spawn(process.execPath, [cli, 'web', '--project', projectRoot, '--port', '0'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   try {
     const url = await new Promise((accept, reject) => {
       let output = '', errors = '';
-      const timer = setTimeout(() => reject(new Error('v10 web 启动超时：' + errors)), 15000);
+      const timer = setTimeout(() => reject(new Error('v10 web 启动超时：' + errors)), 20000);
       child.once('error', error => { clearTimeout(timer); reject(error); });
       child.once('exit', code => { clearTimeout(timer); reject(new Error('v10 web 提前退出：' + code + ' ' + errors)); });
       child.stderr.on('data', chunk => { errors += chunk; });
@@ -152,7 +154,14 @@ test('web --project 以兼容模式打开 v10 工作区，且不在打开时写�
     });
     const project = JSON.parse((await httpGet(url + 'api/project')).body);
     assert.equal(project.status, 'active');
-    assert.equal(JSON.parse(await readFile(join(root, 'workspace.json'), 'utf8')).schemaVersion, 10);
+    // 打开项目会把可迁移的旧协议逐级升级并落盘：v10 → v12 → v13。
+    const onDisk = JSON.parse(await readFile(join(root, 'workspace.json'), 'utf8'));
+    assert.equal(onDisk.schemaVersion, 13);
+    const served = JSON.parse((await httpGet(url + 'api/workspace')).body);
+    assert.equal(served.manifest.schemaVersion, 13);
+    assert.equal(served.compatibilityMode, false);
+    assert.ok(served.mechanics.every(item => item.schemaVersion === 8 && item.taxonomyPresentation.mode === 'label'));
+    assert.ok(served.views.every(item => item.schemaVersion === 5));
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       const exited = new Promise(accept => child.once('exit', accept)); child.kill('SIGTERM'); await exited;

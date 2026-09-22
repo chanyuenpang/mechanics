@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { badgeDisplayModel, badgeInteractionTargetId, structuralProjection } from '../src/web/canvas.mjs';
+import { GraphCanvas, badgeDisplayModel, badgeInteractionTargetId } from '../src/web/canvas.mjs';
+import { structuralProjection } from '../src/domain/taxonomy-presentation.mjs';
 
 const canonicalGraph = {
   nodes: [
@@ -82,4 +83,26 @@ test('长 is-a 目标仍显示完整标识，并将完整目标放在自身无�
   assert.equal(model.badges[0].accessibleText, `is-a：${longLabel}（概念 ID：very-long-parent-id）`);
   assert.match(model.badges[1].accessibleText, /^其余：/);
   assert.doesNotMatch(model.badges[1].accessibleText, /very-long-parent-id/);
+});
+
+test('画布与路由请求共享同一显示投影：隐藏的 is-a 父概念不进入命中、几何或 Worker', async () => {
+  const canvas = Object.create(GraphCanvas.prototype), requests = [];
+  const source = {
+    nodes: [{ id: 'child', label: '子概念' }, { id: 'parent', label: '父概念' }, { id: 'effect', label: '效果' }],
+    edges: [
+      { id: 'child-is-parent', source: 'child', target: 'parent', relation: 'specializes' },
+      { id: 'child-affects-effect', source: 'child', target: 'effect', relation: 'influence', sign: 1 },
+    ],
+  };
+  Object.assign(canvas, {
+    positions: { child: { x: 0, y: 0 }, parent: { x: 300, y: 0 }, effect: { x: 600, y: 0 } }, mode: 'select',
+    draw() {}, transform() {},
+    callbacks: { computeGraph: request => { requests.push(request); return Promise.resolve({ routes: [], edgeIds: [], full: false }); } },
+  });
+  await canvas.update(source, canvas.positions, null, null, false,
+    { taxonomyPresentation: { mode: 'label', expandedNodeIds: [] }, retainedNodeIds: ['child'] });
+  assert.deepEqual(canvas.graph.nodes.map(node => node.id), ['child', 'effect']);
+  assert.deepEqual(canvas.graph.edges.map(edge => edge.id), ['child-affects-effect']);
+  assert.deepEqual(requests.map(request => request.payload.graph.nodes.map(node => node.id)), [['child', 'effect']]);
+  assert.equal(requests[0].geometryKey.includes('parent'), false, '几何签名不能带着隐藏父概念');
 });

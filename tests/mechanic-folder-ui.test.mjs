@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const app = await readFile(new URL('../src/web/app.mjs', import.meta.url), 'utf8');
 const style = await readFile(new URL('../src/web/style.css', import.meta.url), 'utf8');
-const queueCode = app.slice(app.indexOf('function write(operation)'), app.indexOf('function updateStatus()'));
+const queueCode = app.slice(app.indexOf('function mergeSingleMechanicSave('), app.indexOf('function updateStatus()'));
 const folderCode = app.slice(app.indexOf('function mechanismFolderPath('), app.indexOf('async function newGraph('));
 
 function harness({ fail = null, values = {} } = {}) {

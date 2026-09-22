@@ -24,6 +24,6 @@ game-graph agent impact --project ./my-game --from stamina --to failure
 
 ## 受约束写入
 
-写入接口、资源版本和编辑会话工作流保持不变，见 `game-graph --help` 与 `skills/game-mechanic-modeling/SKILL.md`。写入前用 `scopes` 获取整体与资源 revision；概念与规则操作仍使用已确认机制的草稿 open/save 工作流。
+写入接口、资源版本和编辑会话工作流保持不变，见 `mech --help` 与 `skills/mechanics-modeling/SKILL.md`。写入前用 `scopes` 获取整体与资源 revision；概念与规则操作仍使用已确认机制的草稿 open/save 工作流。
 
 错误写入 stderr JSON `{error,message,...details}`，不会在 stdout 返回部分成功。常见查询错误为 `QUERY_INVALID`、`NODE_NOT_FOUND`、`REVISION_CONFLICT` 与 `QUERY_VERSION_MISMATCH`。
