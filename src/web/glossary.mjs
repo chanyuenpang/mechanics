@@ -201,7 +201,8 @@ export function referencePositions(existing, ids, center) {
   return Object.fromEntries(ids.map(id => [id, positions[id]]));
 }
 
-export function prepareReference({ workspace, draft, selected, candidates, positions, center }) {
+// rules 只承载本次新概念的 is-a；它与 definitions 必须由调用方在同一次提交里落盘。
+export function prepareReference({ workspace, draft, selected, candidates, rules = null, positions, center }) {
   const definitions = copy(workspace.definitions), ids = new Set(definitions.nodes.map(node => node.id));
   const base = workspace.mechanics.find(item => item.id === draft.id);
   if (!base) throw new Error('当前机制不存在。');
@@ -218,7 +219,11 @@ export function prepareReference({ workspace, draft, selected, candidates, posit
   if (mechanic.focusNodeIds.some(id => !ids.has(id))) throw new Error('待引用概念不存在，请重新核实定义。');
   Object.assign(mechanic.positions, referencePositions(positions, additions, center));
   compose({ ...workspace, definitions, mechanics: [mechanic] }, [mechanic.id]);
-  return { definitions, mechanic, base: copy(base), candidates: copy(candidates), additions };
+  // 新概念的 is-a 父概念必须存在于本次提交的定义里；否则服务端会整体拒绝，不如在这里先给出中文原因。
+  if (rules) for (const rule of rules.rules.filter(item => item.relation === 'specializes' && candidates.some(node => node.id === item.source))) {
+    if (!ids.has(rule.target)) throw new Error('is-a 上位概念不存在，请重新核实定义：' + rule.target);
+  }
+  return { definitions, mechanic, base: copy(base), candidates: copy(candidates), rules: rules ? copy(rules) : null, additions };
 }
 
 // 两阶段明确提交：只有定义文件写盘，引用仍是机制草稿；失败后禁止盲目重放创建。
@@ -344,8 +349,8 @@ export class ConceptEditor {
 
 // 窗口候选只存在于本次引用会话；不直接改共享定义或机制文件。
 export class ConceptPicker {
-  constructor(container, session, definitions, referenced, { status, recover = () => {}, abandon = () => {}, allowCreate = true }) {
-    Object.assign(this, { container, session, definitions, referenced, status, allowCreate });
+  constructor(container, session, definitions, referenced, { status, recover = () => {}, abandon = () => {}, allowCreate = true, parentOptions = null }) {
+    Object.assign(this, { container, session, definitions, referenced, status, allowCreate, parentOptions });
     container.innerHTML = `<fieldset class="concept-picker-fields"><label class="field">搜索概念<input class="concept-search" type="search" aria-label="搜索概念" placeholder="名称、含义或 ID" autocomplete="off"></label>
       <div class="concept-picked" aria-label="待引用概念"></div><div class="choice-list concept-results" aria-label="搜索结果"></div><button class="concept-new quiet" type="button"></button>
       <section class="concept-form" aria-label="新概念定义" hidden></section></fieldset>
@@ -369,12 +374,13 @@ export class ConceptPicker {
     this.drawResults(); queueMicrotask(() => this.search.focus());
   }
   allNodes() { return [...this.definitions.nodes, ...this.session.candidates]; }
+  // 新建候选同样可以指定 is-a 父概念：候选每次打开表单时现取，已暂存的概念也能当父概念。
   begin() {
     const node = { id: '', label: this.session.query.trim(), aliases: '', description: '', tagIds: [], agentLocked: false };
     this.session.allowDuplicate = false;
     this.get('.concept-form').hidden = false;
     for (const selector of ['.concept-search', '.concept-picked', '.concept-results', '.concept-new']) { const discovery = this.get(selector); discovery.hidden = true; discovery.inert = true; }
-    this.editor = new ConceptEditor(this.get('.concept-form'), { mode: 'create', node, nodes: () => this.allNodes(), tagDefinitions: this.definitions.tagDefinitions ?? [], onSave: (form, { allowDuplicate }) => { this.session.form = form; this.session.allowDuplicate = allowDuplicate; this.stage(); }, onCancel: () => this.cancelForm(), onReuse: id => { this.session.selected.add(id); this.cancelForm(); } });
+    this.editor = new ConceptEditor(this.get('.concept-form'), { mode: 'create', node, nodes: () => this.allNodes(), tagDefinitions: this.definitions.tagDefinitions ?? [], parentOptions: this.parentOptions ? this.parentOptions() : null, onSave: (form, { allowDuplicate }) => { this.session.form = form; this.session.allowDuplicate = allowDuplicate; this.stage(); }, onCancel: () => this.cancelForm(), onReuse: id => { this.session.selected.add(id); this.cancelForm(); } });
     this.session.form = this.editor.form;
   }
   cancelForm() { this.session.form = null; this.get('.concept-form').hidden = true; for (const selector of ['.concept-search', '.concept-picked', '.concept-results', '.concept-new']) { const discovery = this.get(selector); discovery.hidden = false; discovery.inert = false; } this.drawResults(); this.search.focus(); }
@@ -384,6 +390,9 @@ export class ConceptPicker {
     if (this.allNodes().some(node => node.id === candidate.id)) throw new Error('概念 ID 已存在，请使用另一个稳定英文 ID。');
     if (sameNamedConcepts(this.allNodes(), form.label).length && !this.session.allowDuplicate) throw new Error('请复用已有概念，或明确勾选同名新建。');
     this.session.candidates.push(candidate); this.session.selected.add(candidate.id);
+    if (!(this.session.candidateParents instanceof Map)) this.session.candidateParents = new Map();
+    if (form.parentId) this.session.candidateParents.set(candidate.id, form.parentId);
+    else this.session.candidateParents.delete(candidate.id);
     this.cancelForm();
   }
   drawResults() {
@@ -405,9 +414,12 @@ export class ConceptPicker {
     const box = this.get('.concept-picked'); box.replaceChildren();
     for (const id of this.session.selected) {
       const node = this.allNodes().find(item => item.id === id);
+      const parentId = this.session.candidateParents instanceof Map ? this.session.candidateParents.get(id) : null;
       const chip = element('span', undefined, 'concept-chip'); chip.append(element('span', node.label));
+      if (parentId) chip.append(element('small', 'is-a ' + (this.allNodes().find(item => item.id === parentId)?.label ?? parentId), 'concept-parent'));
       const remove = action('', () => {
         this.session.selected.delete(id); this.session.candidates = this.session.candidates.filter(item => item.id !== id);
+        if (this.session.candidateParents instanceof Map) this.session.candidateParents.delete(id);
         this.drawResults();
       });
       remove.append(icon('close'));

@@ -1421,12 +1421,14 @@ async function addNode() {
   if (definitionMode()) { addTerm(); return; }
   if (activeId === null || viewMode() || legacy || autosave.blocked) return;
   setMode('select');
-  referenceSession ??= { targetId: activeId, query: '', selected: new Set(), candidates: [], form: null, commit: null };
+  referenceSession ??= { targetId: activeId, query: '', selected: new Set(), candidates: [], candidateParents: new Map(), form: null, commit: null };
   const session = referenceSession; let picker;
   $('dialog').classList.add('concept-dialog');
   try {
     await dialog('概念节点', container => {
       picker = new ConceptPicker(container, session, workspace.definitions, draft.focusNodeIds, {
+        // 新建候选的父概念可以来自整个工作区，也可以是本批待新建的概念。
+        parentOptions: () => [...parentCandidates(null), ...session.candidates.map(node => ({ id: node.id, label: node.label }))],
         status: (text, enabled) => { $('confirm-dialog').textContent = text; $('confirm-dialog').disabled = !enabled; },
         abandon: () => { referenceSession = null; $('dialog').close('cancel'); },
         recover: async () => {
@@ -1447,11 +1449,23 @@ async function addNode() {
         picker.stage();
         session.sourceDraft = clone(draft);
         const data = { ...workspace, mechanics: [draft] }, source = compose(data, [activeId]);
-        session.commit = new ReferenceCommit(prepareReference({ workspace, draft, selected: [...session.selected],
-          candidates: session.candidates.filter(node => session.selected.has(node.id)),
+        const candidates = session.candidates.filter(node => session.selected.has(node.id));
+        // 新概念的 is-a 与定义必须一次提交；父概念可以是已有概念，也可以是本批同样新建的概念。
+        const parents = session.candidateParents instanceof Map ? session.candidateParents : new Map();
+        const known = new Set([...workspace.definitions.nodes.map(node => node.id), ...candidates.map(node => node.id)]);
+        let nextRules = null;
+        for (const [childId, parentId] of parents) {
+          if (!session.selected.has(childId)) continue;
+          if (!known.has(parentId)) throw new Error('is-a 上位概念不存在或未被本次引用：' + parentId);
+          nextRules = setSpecializesParent(nextRules ?? workspace.rules.rules, childId, parentId);
+        }
+        session.commit = new ReferenceCommit(prepareReference({ workspace, draft, selected: [...session.selected], candidates,
+          rules: nextRules ? { ...clone(workspace.rules), rules: nextRules } : null,
           positions: graphPositions(data, source, {}, activeId, implicitPositions.get(contextKey())), center: canvas.center() }));
       }
-      const committing = session.commit.run(document => write(revision => api('/api/save', { revision, kind: 'definitions', document })), next => {
+      const committing = session.commit.run(document => write(revision => session.commit.plan.rules
+        ? api('/api/concept-taxonomy', { revision, definitions: document, rules: session.commit.plan.rules })
+        : api('/api/save', { revision, kind: 'definitions', document })), next => {
         if (activeId !== session.targetId || definitionMode() || viewMode() || json(draft) !== json(session.sourceDraft)) throw new Error('当前机制草稿已改变，请重新读取并核实。');
         return edit(data => { Object.assign(data, next); });
       });

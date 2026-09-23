@@ -8,7 +8,7 @@ import { readWorkspace } from '../src/server/workspace.mjs';
 import { matchingConcepts, sameNamedConcepts, prepareReference, ReferenceCommit, prepareConceptUpdate } from '../src/web/glossary.mjs';
 import { graphPositions } from '../src/web/view-files.mjs';
 import { copyExampleFixture } from './example-fixture.mjs';
-import { compose, downstreamNodes } from '../src/domain/graph.mjs';
+import { compose, downstreamNodes, setSpecializesParent } from '../src/domain/graph.mjs';
 
 const node = (id = 'aaa-new', label = '新概念') => ({
   id, label, description: '新概念的定义', agentLocked: false,
@@ -149,4 +149,27 @@ test('新节点不重叠；定义排序变化与撤销引用不移动已显示�
   for (const p of placed) for (const q of Object.values(positions)) assert.ok(p.x >= q.x + 166 || p.x + 166 <= q.x || p.y >= q.y + 62 || p.y + 62 <= q.y);
   const next = { ...workspace, definitions: plan.definitions };
   assert.deepEqual(graphPositions(next, compose(next, [draft.id]), {}, draft.id, positions), positions);
+});
+
+test('新建候选可以在同一次提交里写入 is-a 父概念，定义与规则一起落盘', async t => {
+  const { store, workspace, draft, positions } = await fixture(t);
+  const parent = workspace.definitions.nodes[0], child = node('ccc-child', '子概念');
+  const candidates = [child];
+  const rules = { ...structuredClone(workspace.rules), rules: setSpecializesParent(workspace.rules.rules, child.id, parent.id) };
+  const plan = prepareReference({ workspace, draft, selected: [child.id], candidates, rules, positions, center: { x: 0, y: 0 } });
+  assert.deepEqual(plan.rules.rules.at(-1), { id: 'ccc-child-2-' + parent.id, source: 'ccc-child', target: parent.id, relation: 'specializes' });
+  const commit = new ReferenceCommit(plan);
+  let saved = null;
+  await commit.run(async document => { saved = await store.saveConceptTaxonomy({ revision: workspace.revision, definitions: document, rules: plan.rules }); },
+    next => { assert.deepEqual(next.focusNodeIds.slice(-1), ['ccc-child']); return true; });
+  assert.equal(commit.phase, 'done'); assert.ok(saved);
+  const latest = await store.read();
+  assert.ok(latest.definitions.nodes.some(item => item.id === 'ccc-child'));
+  assert.ok(latest.rules.rules.some(item => item.relation === 'specializes' && item.source === 'ccc-child' && item.target === parent.id));
+  // 不指定父概念的计划不带规则文档，也就不会多写规则文件。
+  assert.equal(prepareReference({ workspace, draft, selected: [child.id], candidates, positions, center: { x: 0, y: 0 } }).rules, null);
+  // 父概念不存在时在提交前按中文原因拒绝，不做半成品写入。
+  const other = node('ddd-child', '另一个子概念');
+  const orphan = { ...structuredClone(workspace.rules), rules: [...workspace.rules.rules, { id: 'ddd-child-2-absent', source: 'ddd-child', target: 'absent', relation: 'specializes' }] };
+  assert.throws(() => prepareReference({ workspace, draft, selected: [other.id], candidates: [other], rules: orphan, positions, center: { x: 0, y: 0 } }), /上位概念不存在/);
 });

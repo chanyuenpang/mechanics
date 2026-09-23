@@ -64,3 +64,16 @@ test('标签页集中维护显示名与颜色，概念编辑器以彩色多选�
   assert.match(glossary, /button\.style\.setProperty\('--tag-color', tag\.color\)/);
   assert.match(glossary, /ids\.has\(tag\.id\) \? ids\.delete\(tag\.id\) : ids\.add\(tag\.id\)/);
 });
+
+test('引用窗口的新建候选同样可以指定 is-a，父概念随定义一次提交', () => {
+  const picker = glossary.slice(glossary.indexOf('export class ConceptPicker'), glossary.indexOf('// 名词表只是统一定义草稿的编辑视图'));
+  assert.match(picker, /\{ status, recover = \(\) => \{\}, abandon = \(\) => \{\}, allowCreate = true, parentOptions = null \}/);
+  assert.match(picker, /parentOptions: this\.parentOptions \? this\.parentOptions\(\) : null/);
+  assert.match(picker, /this\.session\.candidateParents\.set\(candidate\.id, form\.parentId\)/);
+  assert.match(picker, /this\.session\.candidateParents instanceof Map\) this\.session\.candidateParents\.delete\(id\)/);
+  const reference = app.slice(app.indexOf('async function addNode'), app.indexOf('function mechanismFolderPath'));
+  assert.match(reference, /parentOptions: \(\) => \[\.\.\.parentCandidates\(null\), \.\.\.session\.candidates\.map\(node => \(\{ id: node\.id, label: node\.label \}\)\)\]/);
+  assert.match(reference, /nextRules = setSpecializesParent\(nextRules \?\? workspace\.rules\.rules, childId, parentId\)/);
+  assert.match(reference, /is-a 上位概念不存在或未被本次引用/);
+  assert.match(reference, /api\('\/api\/concept-taxonomy', \{ revision, definitions: document, rules: session\.commit\.plan\.rules \}\)/);
+});
