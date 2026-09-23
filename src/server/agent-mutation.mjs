@@ -1,5 +1,6 @@
 import { assertSemanticId, semanticRuleId } from '../domain/identity.mjs';
 import { endpointProjectionId } from '../domain/endpoint-projection.mjs';
+import { setSpecializesParent } from '../domain/graph.mjs';
 import { ContractError, validateWorkspace } from '../domain/validate.mjs';
 
 const fail = (code, message, details = {}) => { throw Object.assign(new ContractError(code, message), details); };
@@ -141,16 +142,50 @@ function clearRemovedProjectionPositions(workspace, previousRules) {
   }
 }
 
+// is-a 的父概念只能整体替换出边：换边与各机制/视图 pinnedRuleIds 的清理必须同一次提交，
+// 否则删除被固定的旧规则而不同步清理，会让工作区在下次读取时以 MISSING_REFERENCE 失败。
+function replaceSpecializesParent(workspace, body, mechanic) {
+  const conceptId = requiredString(body, 'concept');
+  if (!conceptById(workspace, conceptId)) fail('NODE_NOT_FOUND', `概念不存在：${conceptId}`);
+  const requested = body.parent === undefined || body.parent === null || body.parent === '' || body.parent === 'none' ? null : requiredString(body, 'parent');
+  if (requested && !conceptById(workspace, requested)) fail('NODE_NOT_FOUND', `上位概念不存在：${requested}`);
+  const before = new Set(workspace.rules.rules.map(rule => rule.id));
+  workspace.rules.rules = setSpecializesParent(workspace.rules.rules, conceptId, requested);
+  const after = new Set(workspace.rules.rules.map(rule => rule.id));
+  const removed = new Set([...before].filter(id => !after.has(id)));
+  const added = [...after].filter(id => !before.has(id));
+  const companionMechanics = [], companionViews = [];
+  for (const candidate of workspace.mechanics) {
+    const next = candidate.pinnedRuleIds.filter(id => !removed.has(id));
+    if (next.length === candidate.pinnedRuleIds.length) continue;
+    candidate.pinnedRuleIds = next; companionMechanics.push(candidate);
+  }
+  for (const view of workspace.views) {
+    const next = view.pinnedRuleIds.filter(id => !removed.has(id));
+    if (next.length === view.pinnedRuleIds.length) continue;
+    view.pinnedRuleIds = next; companionViews.push(view);
+  }
+  if (added.length) {
+    for (const id of added) if (!mechanic.pinnedRuleIds.includes(id)) mechanic.pinnedRuleIds.push(id);
+    if (!mechanic.focusNodeIds.includes(conceptId)) mechanic.focusNodeIds.push(conceptId);
+    if (requested && !mechanic.focusNodeIds.includes(requested)) mechanic.focusNodeIds.push(requested);
+    if (!companionMechanics.includes(mechanic)) companionMechanics.push(mechanic);
+  }
+  return { kind: 'rules', document: workspace.rules, id: workspace.rules.workspaceId, companionMechanics, companionViews };
+}
+
 function mutateRule(workspace, body) {
-  const actions = new Set(['add', 'update', 'delete']);
-  if (!actions.has(body.action)) fail('AGENT_MUTATION_INVALID', 'rule action 必须是 add、update 或 delete');
+  const actions = new Set(['add', 'update', 'delete', 'set-parent']);
+  if (!actions.has(body.action)) fail('AGENT_MUTATION_INVALID', 'rule action 必须是 add、update、delete 或 set-parent');
   const writable = body.action === 'delete' ? ['mechanic', 'source', 'target', 'sourceQualifiers', 'targetQualifiers']
+    : body.action === 'set-parent' ? ['mechanic', 'concept', 'parent']
     : ['mechanic', 'source', 'target', 'relation', 'sign', 'ruleText', 'inheritance', 'sourceQualifiers', 'targetQualifiers', 'customData'];
   allowed(body, writable);
   const mechanicId = requiredString(body, 'mechanic');
   const mechanic = mechanicById(workspace, mechanicId);
   if (!mechanic) fail('SCOPE_NOT_FOUND', `机制不存在：${mechanicId}`);
   assertRevision(workspace, body, 'rules');
+  if (body.action === 'set-parent') return replaceSpecializesParent(workspace, body, mechanic);
   const source = requiredString(body, 'source'), target = requiredString(body, 'target');
   if (!conceptById(workspace, source) || !conceptById(workspace, target)) fail('NODE_NOT_FOUND', '规则端点必须是已存在的概念');
   const sourceQualifiers = has(body, 'sourceQualifiers') ? jsonValue(body, 'sourceQualifiers') : undefined;

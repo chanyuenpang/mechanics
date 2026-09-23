@@ -148,6 +148,7 @@ const mutationFields = {
     add: ['mechanic', 'source', 'target', 'source-qualifiers', 'target-qualifiers', 'relation', 'sign', 'text', 'inheritance', 'custom-data'],
     update: ['mechanic', 'source', 'target', 'source-qualifiers', 'target-qualifiers', 'relation', 'sign', 'text', 'inheritance', 'custom-data'],
     delete: ['mechanic', 'source', 'target', 'source-qualifiers', 'target-qualifiers'],
+    'set-parent': ['mechanic', 'concept', 'parent'],
   },
 };
 
@@ -189,7 +190,7 @@ export async function runRecipeMigration(action, values) {
 
 export async function runAgentMutation(resource, action, values) {
   const fields = mutationFields[resource]?.[action];
-  if (!fields) mutationFail('AGENT_MUTATION_INVALID', 'Agent 写入只支持 mechanic-folder create、mechanic create|update|arrange|delete、view delete、concept create|update|delete 或 rule add|update|delete');
+  if (!fields) mutationFail('AGENT_MUTATION_INVALID', 'Agent 写入只支持 mechanic-folder create、mechanic create|update|arrange|delete、view delete、concept create|update|delete 或 rule add|update|delete|set-parent');
   const container = resource === 'mechanic-folder' || (resource === 'mechanic' && action === 'create') || resource === 'view';
   const revisionOption = container ? 'workspace-revision' : 'revision';
   const common = new Set(['project', 'connect', 'format', revisionOption, 'project-generation', 'session', ...fields]);
@@ -218,6 +219,11 @@ export async function runAgentMutation(resource, action, values) {
     if (values['custom-data'] !== undefined) body.customData = values['custom-data'];
   } else {
     for (const key of ['mechanic', 'source', 'target', 'relation']) if (values[key] !== undefined) body[key] = values[key];
+    // rule set-parent 用 --concept/--parent 定位分类出边，不接受 --source/--target。
+    if (action === 'set-parent') {
+      if (values.concept !== undefined) body.concept = values.concept;
+      if (values.parent !== undefined) body.parent = values.parent;
+    }
     if (values.text !== undefined) body.ruleText = values.text;
     if (values['custom-data'] !== undefined) body.customData = values['custom-data'];
     for (const [option, field] of [['source-qualifiers', 'sourceQualifiers'], ['target-qualifiers', 'targetQualifiers']]) if (values[option] !== undefined) {

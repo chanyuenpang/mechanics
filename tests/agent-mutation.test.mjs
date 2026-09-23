@@ -316,6 +316,42 @@ test('Agent 自动排版消费显示投影：默认隐藏的 is-a 父概念不�
   assert.ok(Object.keys(saved.routeCache.paths).every(id => id === 'taxo-child-2-taxo-effect'));
   assert.match(arranged.resourceRevision, /^[a-f0-9]{64}$/u);
 });
+
+test('rule set-parent 一次调用更换 is-a 父概念并同步清理固定引用', async t => {
+  const { projectRoot, root } = await fixture(t);
+  let workspace = await readWorkspace(root);
+  for (const [id, label] of [['taxo-child', '子概念'], ['taxo-parent-a', '父概念A'], ['taxo-parent-b', '父概念B']]) {
+    workspace = await readWorkspace(root);
+    await offline(projectRoot, ['concept', 'create', '--id', id, '--label', label, '--description', 'is-a 命令测试概念。', '--revision', definitionsRevision(workspace)]);
+  }
+  workspace = await readWorkspace(root);
+  await offline(projectRoot, ['rule', 'add', '--mechanic', 'basic-rules', '--source', 'taxo-child', '--target', 'taxo-parent-a',
+    '--relation', 'specializes', '--revision', rulesRevision(workspace)]);
+  workspace = await readWorkspace(root);
+  const mechanicOf = data => data.mechanics.find(item => item.id === 'basic-rules');
+  assert.ok(workspace.rules.rules.some(rule => rule.id === 'taxo-child-2-taxo-parent-a'));
+  assert.ok(mechanicOf(workspace).pinnedRuleIds.includes('taxo-child-2-taxo-parent-a'));
+
+  // 一次调用完成更换：旧边、新边与各投影的固定引用必须在同一事务里一致。
+  await offline(projectRoot, ['rule', 'set-parent', '--mechanic', 'basic-rules', '--concept', 'taxo-child', '--parent', 'taxo-parent-b',
+    '--revision', rulesRevision(workspace)]);
+  workspace = await readWorkspace(root);
+  assert.equal(workspace.rules.rules.some(rule => rule.id === 'taxo-child-2-taxo-parent-a'), false);
+  assert.ok(workspace.rules.rules.some(rule => rule.id === 'taxo-child-2-taxo-parent-b'));
+  assert.equal(mechanicOf(workspace).pinnedRuleIds.includes('taxo-child-2-taxo-parent-a'), false);
+  assert.ok(mechanicOf(workspace).pinnedRuleIds.includes('taxo-child-2-taxo-parent-b'));
+
+  // 清除父概念，以及自连必须显式失败且不写入。
+  await offline(projectRoot, ['rule', 'set-parent', '--mechanic', 'basic-rules', '--concept', 'taxo-child', '--parent', 'none',
+    '--revision', rulesRevision(workspace)]);
+  workspace = await readWorkspace(root);
+  assert.equal(workspace.rules.rules.some(rule => rule.relation === 'specializes' && rule.source === 'taxo-child'), false);
+  const before = await readFile(join(root, 'rules.json'), 'utf8');
+  const selfLink = await failure(offline(projectRoot, ['rule', 'set-parent', '--mechanic', 'basic-rules', '--concept', 'taxo-child', '--parent', 'taxo-child',
+    '--revision', rulesRevision(workspace)]));
+  assert.equal(selfLink.body.error, 'SPECIALIZES_SELF_LINK');
+  assert.equal(await readFile(join(root, 'rules.json'), 'utf8'), before);
+});
 test('更新不含 ruleText 的既有规则时可以填写或清空规则', async t => {
   const { projectRoot, root } = await fixture(t), before = await readWorkspace(root);
   const mechanic = before.mechanics[0], edge = structuredClone(before.rules.rules.find(rule => mechanic.pinnedRuleIds.includes(rule.id)));
