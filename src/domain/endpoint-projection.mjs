@@ -42,10 +42,13 @@ export function projectEndpointQualifiers(graph) {
     canonicalSource: edge.source,
     canonicalTarget: edge.target,
   }));
-  // 若基础概念的所有可见端点都已由限定投影承接，则它会成为画布孤点；保留 canonical，隐藏该显示实例。
-  const visibleNodeIds = new Set(edges.flatMap(edge => [edge.source, edge.target]));
+  // 只有「全部可见端点都被限定投影承接」的基础概念才是应当隐藏的画布孤点——它已经被
+  // 上面的限定投影替代，再画一遍会是同一个概念的第二个实例。
+  // 没有任何规则的概念（例如刚引用进机制图、或刚清除了 is-a 的焦点节点）必须保留：
+  // 它不在任何边上，但它是这张图明确引用的成员，丢掉它会让节点从画布上凭空消失。
+  const replacedBaseIds = new Set([...projections.values()].map(projection => projection.baseConceptId));
   return { ...structuredClone(graph), nodes: [
-    ...graph.nodes.filter(node => visibleNodeIds.has(node.id)).map(node => structuredClone(node)),
+    ...graph.nodes.filter(node => !replacedBaseIds.has(node.id)).map(node => structuredClone(node)),
     ...projections.values(),
   ], edges };
 }
