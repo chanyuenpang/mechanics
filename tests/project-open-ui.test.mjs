@@ -63,9 +63,13 @@ test('概念详情的 is-a 开关是复选框，与颜色分区分离且只改�
   // 写入后必须重画：write() 只刷新侧栏，is-a 改动不重画就要用户自己刷新页面。
   const setParent = app.slice(app.indexOf('async function setConceptParent'), app.indexOf('async function setEdgeQualifiers'));
   assert.match(setParent, /await write\(revision => api\('\/api\/concept-taxonomy'/);
-  assert.match(setParent, /\n  render\(\);/);
+  assert.match(setParent, /if \(!syncLocalPinsAfterTaxonomy\(classifyTaxonomyChange\(beforeRules\), \[\[conceptId, parentId\]\]\)\) render\(\);/);
   assert.match(app, /api\('\/api\/concept-taxonomy', \{ revision, definitions, rules \}\)/);
   assert.match(app, /api\('\/api\/concept-taxonomy', \{ revision, \.\.\.\(definitionsChanged/);
+  // 三个 is-a 写入口（详情栏、修改概念、引用窗口新建）都必须同步当前文件的固定引用：
+  // 服务端删掉的要清理，显式投影还要把新规则固定进去，否则画布上没有分类边与节点标签。
+  assert.equal([...app.matchAll(/syncLocalPinsAfterTaxonomy\(classifyTaxonomyChange\(beforeRules\)/g)].length, 3);
+  assert.match(app, /nextPinnedRuleIds\(draft\.pinnedRuleIds, \{ removed, added: wanted, pinAdded: draft\.ruleSelection === 'explicit' \}\)/);
 });
 test('项目打开请求有超时，空项目错误可重新打开选择器', () => {
   const api = app.slice(app.indexOf('const API_REQUEST_TIMEOUT_MS'), app.indexOf('// 所有页面写入串行执行'));

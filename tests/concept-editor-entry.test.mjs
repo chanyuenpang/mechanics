@@ -42,6 +42,12 @@ test('共享编辑器用可搜索选择器指定 is-a 父概念，候选由调�
   assert.match(glossary, /\.\.\.\(this\.parentOptions \? \[this\.parentField\(\)\] : \[\]\)/);
   assert.match(glossary, /this\.form\.parentId = parentId \?\? '';/);
 });
+test('固定引用计算是纯函数：清理被删规则，显式投影补上新 is-a', () => {
+  const helper = glossary.slice(glossary.indexOf('export function nextPinnedRuleIds'), glossary.indexOf('export function conceptReferencePickerCandidates'));
+  assert.match(helper, /const kept = \(pinned \?\? \[\]\)\.filter\(id => !removed\.has\(id\)\);/);
+  assert.match(helper, /const next = pinAdded \? \[\.\.\.kept, \.\.\.added\.filter\(id => id && !kept\.includes\(id\)\)\] : kept;/);
+  assert.match(helper, /changed: next\.length !== \(pinned \?\? \[\]\)\.length/);
+});
 test('is-a 选择器打开时保留当前值的文字，清除是候选列表的第一项且不需要二次确认', () => {
   const picker = glossary.slice(glossary.indexOf('export class ConceptReferencePicker'), glossary.indexOf('export function validateConcept'));
   // 打开时不再清空输入框：展示文字（名称（ID））就是当前值的唯一确认，列表另用空过滤词展开。

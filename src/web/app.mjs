@@ -2,7 +2,7 @@ import { compose, tracePaths, summarizePaths, diagnose, downstreamNodes, setSpec
 import { GraphCanvas, graphGeometryKey } from '/canvas.mjs';
 import { createRouteCache, restoreRouteCache } from '/route-cache.mjs';
 import { GraphComputeCoordinator, computeCancelled } from '/graph-compute.mjs';
-import { GlossaryTable, ConceptEditor, ConceptPicker, ConceptReferencePicker, conceptPayloadFromForm, prepareReference, ReferenceCommit, prepareConceptUpdate, conceptStructurePresentation, isaParentCandidates, qualifierFormRowFromCanonical, qualifierRowForKind, qualifierValueControlModel, qualifierValueFromForm } from '/glossary.mjs';
+import { GlossaryTable, ConceptEditor, ConceptPicker, ConceptReferencePicker, conceptPayloadFromForm, prepareReference, ReferenceCommit, prepareConceptUpdate, conceptStructurePresentation, isaParentCandidates, nextPinnedRuleIds, qualifierFormRowFromCanonical, qualifierRowForKind, qualifierValueControlModel, qualifierValueFromForm } from '/glossary.mjs';
 import { ViewAutosave, viewSaveRequest, readOpening, createAndRememberView, graphPositions, changeViewVisibility, moveViewMechanic, registerViewMechanic, removeViewMechanic, prepareOpening } from '/view-files.mjs';
 import { assertSemanticId, semanticRuleId } from '/domain/identity.mjs';
 import { isEndpointProjection, projectEndpointQualifiers } from '/domain/endpoint-projection.mjs';
@@ -577,13 +577,38 @@ async function updateGlobalRule(id, change) {
 const parentCandidates = conceptId => isaParentCandidates(workspace.definitions.nodes, workspace.rules.rules, conceptId);
 // is-a 的唯一写入口：更换或清除某概念的父概念。rules 与受影响的 pinnedRuleIds 由服务端在一次
 // 提交里一起落盘——删掉一条被固定的 is-a 规则而不同步清理，会让工作区在下次读取时不可读。
+// 显式投影（ruleSelection: "explicit"）只投影 pinnedRuleIds：新写入的 is-a 规则必须同时
+// 固定到当前文件，否则画布上既没有分类边、也没有节点内的 is-a 标签——刷新页面也不会出现。
+// agent rule set-parent 与项目内 isa set 都按同一口径固定，网页这条路径此前漏了这一步。
+// 固定走当前文件的编辑通道：机制图进入草稿（随草稿保存），视图立即持久化。
+function syncLocalPinsAfterTaxonomy(removed, addedPairs) {
+  const wanted = [...addedPairs].filter(([, parentId]) => parentId).map(([childId, parentId]) => workspace.rules.rules
+    .find(rule => rule.relation === 'specializes' && rule.source === childId && rule.target === parentId)?.id).filter(Boolean);
+  if (viewMode()) {
+    const next = nextPinnedRuleIds(viewPinnedRuleIds, { removed, added: wanted, pinAdded: true });
+    if (!next.changed) return false;
+    editView(data => { data.pinnedRuleIds = next.pinned; }, { keepSelection: true });
+    return true;
+  }
+  if (!draft) return false;
+  const next = nextPinnedRuleIds(draft.pinnedRuleIds, { removed, added: wanted, pinAdded: draft.ruleSelection === 'explicit' });
+  if (!next.changed) return false;
+  return edit(data => { data.pinnedRuleIds = next.pinned; }) === true;
+}
+// 服务端在 is-a 提交里同步清理了被删规则的固定引用；客户端草稿/视图必须做同样的清理，
+// 否则下一次保存会因为引用已删除的规则而报 MISSING_REFERENCE（本机实测）。
+function classifyTaxonomyChange(beforeRules) {
+  const nextIds = new Set(workspace.rules.rules.map(rule => rule.id));
+  return new Set(beforeRules.map(rule => rule.id).filter(id => !nextIds.has(id)));
+}
 async function setConceptParent(conceptId, parentId) {
-  const nextRules = setSpecializesParent(workspace.rules.rules, conceptId, parentId);
-  if (nextRules === workspace.rules.rules) return false;
+  const beforeRules = workspace.rules.rules;
+  const nextRules = setSpecializesParent(beforeRules, conceptId, parentId);
+  if (nextRules === beforeRules) return false;
   await write(revision => api('/api/concept-taxonomy', { revision, rules: { ...clone(workspace.rules), rules: nextRules } }));
   // write() 只刷新侧栏；is-a 会改变画布投影、节点标签与详情栏，必须重画才能立即看到结果，
-  // 不能等用户刷新页面。
-  render();
+  // 不能等用户刷新页面。本地固定/清理成功时 edit() 自己会重画。
+  if (!syncLocalPinsAfterTaxonomy(classifyTaxonomyChange(beforeRules), [[conceptId, parentId]])) render();
   return true;
 }
 async function setEdgeQualifiers(id, side, qualifiers) {
@@ -1346,6 +1371,7 @@ async function editConcept(id) {
       const parentId = editor.form.parentId || null;
       const rules = parentId === currentParent ? null : { ...clone(workspace.rules), rules: setSpecializesParent(workspace.rules.rules, id, parentId) };
       if (!definitionsChanged && !rules) return;
+      const beforeRules = workspace.rules.rules;
       fields.disabled = true;
       try {
         // 概念定义与 is-a 规则一起提交：删除被固定的 is-a 规则时，pinnedRuleIds 必须在同一事务里清理。
@@ -1355,7 +1381,8 @@ async function editConcept(id) {
         if (blocked) error.message += '\n请关闭窗口后重新读取磁盘核实；不会自动覆盖或重复提交。';
         throw error;
       } finally { fields.disabled = false; }
-      conceptEditDirty = false; render();
+      conceptEditDirty = false;
+      if (!syncLocalPinsAfterTaxonomy(classifyTaxonomyChange(beforeRules), [[id, parentId]])) render();
     }, '保存概念', { settled: () => { $('confirm-dialog').disabled = blocked; } });
   } finally { conceptEditDirty = false; $('dialog-content').onkeydown = null; $('dialog').classList.remove('concept-dialog'); }
 }
@@ -1453,7 +1480,11 @@ async function addNode() {
         if (activeId !== session.targetId || definitionMode() || viewMode() || json(draft) !== json(session.sourceDraft)) throw new Error('当前机制草稿已改变，请重新读取并核实。');
         return edit(data => { Object.assign(data, next); });
       });
+      const beforeRules = workspace.rules.rules;
       picker.updateStatus(); await committing;
+      // 新建概念带来的 is-a 规则同样要固定进当前文件，否则显式投影里看不到节点标签。
+      syncLocalPinsAfterTaxonomy(classifyTaxonomyChange(beforeRules),
+        [...session.candidateParents].filter(([childId]) => session.selected.has(childId)));
       selection = session.commit.plan.additions.length === 1 ? { type: 'node', id: session.commit.plan.additions[0] } : { type: 'nodes', ids: session.commit.plan.additions };
       referenceSession = null; render();
       $('tool-hint').textContent = `已引用 ${session.commit.plan.additions.length} 个概念${session.commit.plan.candidates.length ? `，其中新建 ${session.commit.plan.candidates.length} 个` : ''}`;

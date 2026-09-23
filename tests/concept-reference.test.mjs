@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createWorkspaceStore } from '../src/server/store.mjs';
 import { readWorkspace } from '../src/server/workspace.mjs';
-import { matchingConcepts, sameNamedConcepts, prepareReference, ReferenceCommit, prepareConceptUpdate, isaParentCandidates, conceptReferencePickerCandidates } from '../src/web/glossary.mjs';
+import { matchingConcepts, sameNamedConcepts, prepareReference, ReferenceCommit, prepareConceptUpdate, isaParentCandidates, conceptReferencePickerCandidates, nextPinnedRuleIds } from '../src/web/glossary.mjs';
 import { graphPositions } from '../src/web/view-files.mjs';
 import { copyExampleFixture } from './example-fixture.mjs';
 import { compose, downstreamNodes, setSpecializesParent, specializesDescendants } from '../src/domain/graph.mjs';
@@ -172,6 +172,23 @@ test('新建候选可以在同一次提交里写入 is-a 父概念，定义与�
   const other = node('ddd-child', '另一个子概念');
   const orphan = { ...structuredClone(workspace.rules), rules: [...workspace.rules.rules, { id: 'ddd-child-2-absent', source: 'ddd-child', target: 'absent', relation: 'specializes' }] };
   assert.throws(() => prepareReference({ workspace, draft, selected: [other.id], candidates: [other], rules: orphan, positions, center: { x: 0, y: 0 } }), /is-a 父概念不存在/);
+});
+
+test('is-a 提交后当前文件的固定引用：删掉的必须清理，显式投影还要补上新规则', () => {
+  // 服务端删掉的规则留在草稿里会让下一次保存报 MISSING_REFERENCE。
+  assert.deepEqual(nextPinnedRuleIds(['a-2-b', 'keep-2-x'], { removed: new Set(['a-2-b']) }),
+    { pinned: ['keep-2-x'], changed: true });
+  // 显式投影只投影固定规则：新写入的 is-a 必须补上，画布才会出现分类边与节点标签。
+  assert.deepEqual(nextPinnedRuleIds(['keep-2-x'], { removed: new Set(), added: ['a-2-c'], pinAdded: true }),
+    { pinned: ['keep-2-x', 'a-2-c'], changed: true });
+  // 非显式投影按焦点投影，不额外固定。
+  assert.deepEqual(nextPinnedRuleIds(['keep-2-x'], { removed: new Set(), added: ['a-2-c'], pinAdded: false }),
+    { pinned: ['keep-2-x'], changed: false });
+  // 幂等：已经是当前状态时不做多余写入（否则每次保存都会产生无意义修订）。
+  assert.deepEqual(nextPinnedRuleIds(['keep-2-x', 'a-2-c'], { removed: new Set(), added: ['a-2-c'], pinAdded: true }),
+    { pinned: ['keep-2-x', 'a-2-c'], changed: false });
+  assert.deepEqual(nextPinnedRuleIds([], { removed: new Set(), added: [null, undefined], pinAdded: true }),
+    { pinned: [], changed: false });
 });
 
 test('单字检索只在名称/ID/别名里命中，多字才进入描述与标签，并按相关度排序', () => {

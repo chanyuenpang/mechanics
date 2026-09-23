@@ -47,6 +47,17 @@ export function conceptDuplicateModel(nodes, label, currentId) {
   return query ? nodes.filter(node => node.id !== currentId && normalized(node.label) === query).map(node => ({ id: node.id, label: node.label, description: node.description })) : [];
 }
 
+// is-a 提交后当前文件（机制图草稿或视图）应当持有的固定引用：
+// 1) 服务端在同一次提交里删掉的规则必须同步移除，否则下一次保存会因为引用已删除的规则
+//    报 MISSING_REFERENCE（本机实测）；
+// 2) 显式投影（ruleSelection: "explicit"）只投影 pinnedRuleIds，新写入的 is-a 规则必须补上，
+//    否则画布上既没有分类边、也没有节点内的 is-a 标签；非显式投影按焦点投影，不需要补。
+export function nextPinnedRuleIds(pinned, { removed = new Set(), added = [], pinAdded = false } = {}) {
+  const kept = (pinned ?? []).filter(id => !removed.has(id));
+  const next = pinAdded ? [...kept, ...added.filter(id => id && !kept.includes(id))] : kept;
+  return { pinned: next, changed: next.length !== (pinned ?? []).length || next.some((id, index) => id !== (pinned ?? [])[index]) };
+}
+
 export function conceptReferencePickerCandidates(nodes, { query = '', kind = 'qualifier', currentId, excluded = null } = {}) {
   if (!['base', 'qualifier', 'isa'].includes(kind)) throw new Error('概念引用类型必须是基础概念、限定概念或 is-a 父概念。');
   const blocked = excluded instanceof Set ? excluded : new Set();
