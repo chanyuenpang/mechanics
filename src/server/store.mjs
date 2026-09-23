@@ -781,6 +781,33 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
     await commitFiles(root, changes, { verify: () => readWorkspace(root) });
     return refreshCatalog();
   });
+  // is-a 的写入口：概念面板与新建/修改概念对话框都走这里。rules 与受影响的 mechanics/views
+  // 必须在同一次提交里落盘——删掉一条被 pinnedRuleIds 固定的 is-a 规则而不同步清理，会让工作区
+  // 在下次读取时以 MISSING_REFERENCE 失败。definitions 只在新建/改名时参与同一次提交。
+  const saveConceptTaxonomy = body => write(async () => {
+    const workspace = await current(body, scopeOf('definitions', 'rules'));
+    if (!body?.rules || typeof body.rules !== 'object') fail('CONCEPT_TAXONOMY_INVALID', 'is-a 提交必须提供完整的 rules 文档');
+    assertDocument(body.rules, 'rules');
+    const definitionsChanged = body.definitions !== undefined;
+    if (definitionsChanged) { assertDocument(body.definitions, 'definitions'); workspace.definitions = body.definitions; }
+    const nextRuleIds = new Set(body.rules.rules.map(rule => rule.id));
+    const removed = new Set(workspace.rules.rules.map(rule => rule.id).filter(id => !nextRuleIds.has(id)));
+    workspace.rules = body.rules;
+    const mechanics = workspace.mechanics.filter(mechanic => mechanic.pinnedRuleIds.some(id => removed.has(id)));
+    const views = workspace.views.filter(view => view.pinnedRuleIds.some(id => removed.has(id)));
+    for (const mechanic of mechanics) mechanic.pinnedRuleIds = mechanic.pinnedRuleIds.filter(id => !removed.has(id));
+    for (const view of views) view.pinnedRuleIds = view.pinnedRuleIds.filter(id => !removed.has(id));
+    validateWorkspace(workspace);
+    const changes = [
+      ...(definitionsChanged ? [{ path: workspace.manifest.definitions, document: workspace.definitions }] : []),
+      { path: workspace.manifest.rules, document: workspace.rules },
+      ...mechanics.map(mechanic => ({ path: workspace.files.find(file => file.kind === 'mechanic' && file.id === mechanic.id)?.path, document: mechanic })),
+      ...views.map(view => ({ path: workspace.files.find(file => file.kind === 'view' && file.id === view.id)?.path, document: view })),
+    ];
+    if (changes.some(change => !change.path)) fail('CONCEPT_TAXONOMY_INVALID', 'is-a 提交无法定位全部目标文件');
+    await commitFiles(root, changes, { verify: () => readWorkspace(root) });
+    return refreshCatalog();
+  });
   const removeMechanicNodes = body => write(async () => {
     const { mechanicId, nodeIds } = body ?? {};
     if (!Array.isArray(nodeIds) || !nodeIds.length || new Set(nodeIds).size !== nodeIds.length || nodeIds.some(id => typeof id !== 'string')) fail('MECHANIC_NODE_REMOVE_INVALID', '必须提供不重复的概念 ID');
@@ -891,6 +918,7 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
       return { ...committed, presentationDiagnostics: repaired.diagnostics };
     }),
     saveRulesAndMechanic,
+    saveConceptTaxonomy,
     deleteGlobalRule,
     removeMechanicNodes,
     createMechanic: body => create('mechanic', body),

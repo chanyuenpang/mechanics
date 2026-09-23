@@ -1,3 +1,5 @@
+import { semanticRuleId } from './identity.mjs';
+
 // 纯领域计算：不访问文件、浏览器、游戏引擎，不修改传入的工作区。
 export function composeProjection(workspace, { graphIds: selectedIds = [], focusNodeIds = [], pinnedRuleIds = [] } = {}) {
   const graphIds = [...new Set(selectedIds)].sort();
@@ -31,6 +33,26 @@ export function composeProjection(workspace, { graphIds: selectedIds = [], focus
 
 export function compose(workspace, selectedIds) {
   return composeProjection(workspace, { graphIds: selectedIds });
+}
+
+// 单父 is-a 的唯一写入口：先删掉该概念的全部 specializes 出边，再按需写入新父概念。
+// 纯函数，返回新数组；调用方必须在同一次校验里用 assertSpecializes 复核（自连与环都会被拒绝）。
+export function setSpecializesParent(rules, childId, parentId = null) {
+  const belongsToChild = rule => rule.relation === 'specializes' && rule.source === childId;
+  if (parentId === childId) {
+    const error = new Error(`概念 ${childId} 不能成为自己的上位概念`);
+    error.code = 'SPECIALIZES_SELF_LINK'; throw error;
+  }
+  const current = rules.find(belongsToChild);
+  if (parentId === null || parentId === undefined) {
+    return current ? rules.filter(rule => !belongsToChild(rule)) : rules;
+  }
+  if (current?.target === parentId) return rules;
+  const remaining = rules.filter(rule => !belongsToChild(rule));
+  let id;
+  try { id = semanticRuleId(childId, parentId, new Set(remaining.map(rule => rule.id))); }
+  catch (error) { error.code ??= 'DUPLICATE_ENDPOINT_RULE'; throw error; }
+  return [...remaining, { id, source: childId, target: parentId, relation: 'specializes' }];
 }
 
 // specializes 沿“具体概念 → 上位概念”单向保持极性；分类关系必须无环。

@@ -133,7 +133,7 @@ export async function startServer({ projectRoot = null, workspaceRoot = null, po
         }
         if (request.method === 'GET' && url.pathname === '/api/preferences') { send(200, await preferences.read()); return; }
         if (request.method === 'POST' && ['/api/directories/pick', '/api/project/open', '/api/project/select', '/api/project/reference-enter', '/api/project/settings', '/api/project/export-path', '/api/document-export/settings', '/api/document-export/generate', '/api/projects/pin',
-          '/api/projects/remove', '/api/save', '/api/rules-and-mechanic', '/api/rules/delete', '/api/mechanic-nodes/remove', '/api/local-ui-state', '/api/project-references/bind', '/api/project-references/declare', '/api/project-references/remove', '/api/mechanics', '/api/mechanic-folders', '/api/mechanic-folder-move', '/api/mechanic-folder-delete', '/api/mechanic-move', '/api/mechanic-delete', '/api/views', '/api/preferences', '/api/agent/session', '/api/agent/mutation', '/api/agent/draft'].includes(url.pathname)) {
+          '/api/projects/remove', '/api/save', '/api/rules-and-mechanic', '/api/concept-taxonomy', '/api/rules/delete', '/api/mechanic-nodes/remove', '/api/local-ui-state', '/api/project-references/bind', '/api/project-references/declare', '/api/project-references/remove', '/api/mechanics', '/api/mechanic-folders', '/api/mechanic-folder-move', '/api/mechanic-folder-delete', '/api/mechanic-move', '/api/mechanic-delete', '/api/views', '/api/preferences', '/api/agent/session', '/api/agent/mutation', '/api/agent/draft'].includes(url.pathname)) {
           if (!(request.headers['content-type'] ?? '').toLowerCase().startsWith('application/json')) {
             send(415, { error: 'JSON_REQUIRED', message: '写入必须使用 application/json' }); return;
           }
@@ -175,6 +175,7 @@ export async function startServer({ projectRoot = null, workspaceRoot = null, po
           }
           if (url.pathname === '/api/agent/mutation') { send(200, await projects.mutateAgent(body)); return; }
           if (url.pathname === '/api/rules-and-mechanic') { send(200, await projects.saveRulesAndMechanic(body)); return; }
+          if (url.pathname === '/api/concept-taxonomy') { send(200, await projects.saveConceptTaxonomy(body)); return; }
           if (url.pathname === '/api/rules/delete') { send(200, await projects.deleteGlobalRule(body)); return; }
           if (url.pathname === '/api/mechanic-nodes/remove') { send(200, await projects.removeMechanicNodes(body)); return; }
           if (url.pathname === '/api/mechanic-folders') { send(200, await projects.createMechanicFolder(body)); return; }
