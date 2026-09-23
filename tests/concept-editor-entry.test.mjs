@@ -80,6 +80,21 @@ test('引用窗口把同名复用回调交给共享编辑器，且不创建候�
   assert.doesNotMatch(begin, /session\.candidates\.push/);
 });
 
+test('概念表复用共享编辑对话框，并限制一次性渲染的行数', () => {
+  const table = glossary.slice(glossary.indexOf('export class GlossaryTable'));
+  assert.match(glossary, /export const CONCEPT_TABLE_LIMIT = 200;/);
+  // 编辑入口只触发 app 层的共享对话框，不再把表单内联插进大表。
+  assert.match(table, /configure\.onclick = \(\) => this\.edit\(node\.id\);/);
+  assert.doesNotMatch(glossary, /new ConceptEditor\(cell/);
+  assert.doesNotMatch(table, /openQualifierSettings|editorRow|editingId/);
+  assert.match(app, /edit: id => \{ void editConcept\(id\)\.catch\(showError\); \},/);
+  assert.doesNotMatch(app, /replace: \(id, nextNode\) => edit\(/);
+  // 一千多个概念不能一次性铺满表格：超出的用提示引导继续输入，被定位的概念始终渲染。
+  assert.match(table, /const shown = matches\.slice\(0, CONCEPT_TABLE_LIMIT\);/);
+  assert.match(table, /if \(this\.focusId\) \{/);
+  assert.match(table, /还有 \$\{matches\.length - shown\.length\} 个匹配概念，继续输入以缩小范围/);
+  assert.match(table, /this\.search\.value = ''; this\.focusId = id; this\.draw\(\); this\.focusId = null;/);
+});
 test('概念表以概念内容为主，并支持单行和表头批量 Agent 锁', () => {
   assert.match(glossary, /<col class="term-name"><col class="term-description"><col class="term-id"><col class="term-lock"><col class="term-actions">/);
   assert.doesNotMatch(glossary, /<col class="term-structure">/);
@@ -94,7 +109,8 @@ test('概念表以概念内容为主，并支持单行和表头批量 Agent 锁'
 test('标签页集中维护显示名与颜色，概念编辑器以彩色多选关联既有标签', () => {
   assert.match(glossary, /id="glossary-tags"/);
   assert.match(glossary, /picker\.type = 'color'/);
-  assert.match(glossary, /tagDefinitions: this\.tagDefinitions/);
+  // 概念编辑器由调用方注入标签定义（引用窗口），标签页本身维护显示名与颜色。
+  assert.match(glossary, /tagDefinitions: this\.definitions\.tagDefinitions \?\? \[\]/);
   assert.match(glossary, /button\.style\.setProperty\('--tag-color', tag\.color\)/);
   assert.match(glossary, /ids\.has\(tag\.id\) \? ids\.delete\(tag\.id\) : ids\.add\(tag\.id\)/);
 });

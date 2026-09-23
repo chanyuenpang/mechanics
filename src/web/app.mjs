@@ -590,7 +590,8 @@ function syncLocalPinsAfterTaxonomy(removed, addedPairs) {
     editView(data => { data.pinnedRuleIds = next.pinned; }, { keepSelection: true });
     return true;
   }
-  if (!draft) return false;
+  // 定义模式下 draft 是概念定义草稿，没有机制投影可言；固定引用只属于机制图/视图。
+  if (!draft || definitionMode()) return false;
   const next = nextPinnedRuleIds(draft.pinnedRuleIds, { removed, added: wanted, pinAdded: draft.ruleSelection === 'explicit' });
   if (!next.changed) return false;
   return edit(data => { data.pinnedRuleIds = next.pinned; }) === true;
@@ -1346,9 +1347,11 @@ function inspect() {
     }), output);
   }
 }
+// 概念只有一个编辑界面：这个共享对话框同时服务机制图节点属性面板与概念表，
+// 因此不再拒绝 definitionMode（概念表就是定义模式）。
 async function editConcept(id) {
   await writeQueue;
-  if (!workspace || busy() || definitionMode() || legacy || autosave.blocked) return;
+  if (!workspace || busy() || legacy || autosave.blocked) return;
   if (referenceSession?.commit) throw new Error('请先处理尚未完成的概念引用。');
   const node = workspace.definitions.nodes.find(item => item.id === id);
   if (!node) throw new Error('概念已不存在，请重新读取。');
@@ -1701,8 +1704,9 @@ async function createRule(source, target, relation) {
   return true;
 }
 const glossary = new GlossaryTable($('glossary'), {
-  change: (id, key, value) => edit(data => { data.nodes.find(node => node.id === id)[key] = value; }, { refresh: false }),
-  replace: (id, nextNode) => edit(data => { const index = data.nodes.findIndex(node => node.id === id); if (index < 0) throw new Error('概念已不存在，请重新读取。'); data.nodes[index] = structuredClone(nextNode); }),
+  // 概念表不再自带内联编辑器：编辑概念统一走共享对话框（含 is-a 选择、definitions+rules
+  // 一次提交与固定引用同步），概念一多也不会往这张大表里插入表单。
+  edit: id => { void editConcept(id).catch(showError); },
   setLocks: (ids, agentLocked) => edit(data => { const selected = new Set(ids); for (const node of data.nodes) if (selected.has(node.id)) node.agentLocked = agentLocked; }),
   updateTags: tagDefinitions => edit(data => { data.tagDefinitions = structuredClone(tagDefinitions); }),
   add: () => { void addTerm().catch(showError); },

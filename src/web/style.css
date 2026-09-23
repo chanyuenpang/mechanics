@@ -82,7 +82,7 @@ dialog:has(.project-dialog),dialog:has(.quick-open-search),dialog:has(.project-f
 .glossary-scroll { overflow: auto; min-height: 0; flex: 1; margin: 0 24px; border-top: 1px solid #e7e7e1; }
 .glossary-scroll table { border-collapse: separate; border-spacing: 0; table-layout: fixed; width: 100%; min-width: 860px; font-size: 12px; }
 .glossary-scroll .term-name { width: 18%; }.glossary-scroll .term-description { width: auto; }.glossary-scroll .term-id { width: 170px; }.glossary-scroll .term-lock { width: 86px; }.glossary-scroll .term-actions { width: 92px; }
-.glossary-scroll th { position: sticky; top: 0; z-index: 1; text-align: left; height: 38px; font-weight: 500; color: #787774; background: #fbfbfa; border-bottom: 1px solid #e7e7e1; border-right: 1px solid #eee; padding: 0 10px; }
+.glossary-more td{padding:12px 10px;color:#8a9683;font-size:11px;background:#fbfbfa}.glossary-scroll th { position: sticky; top: 0; z-index: 1; text-align: left; height: 38px; font-weight: 500; color: #787774; background: #fbfbfa; border-bottom: 1px solid #e7e7e1; border-right: 1px solid #eee; padding: 0 10px; }
 .glossary-scroll td { padding: 0; border-bottom: 1px solid #f0efec; border-right: 1px solid #f4f3f0; vertical-align: top; }
 .glossary-scroll tbody tr:hover { background: #f8faf6; }.glossary-scroll tbody tr:focus-within { background: #f6f9f2; }
 .glossary-scroll td.term-name-cell{padding:11px 10px;color:#334538}.glossary-scroll td.term-description-cell{padding:11px 10px;color:#687268;line-height:1.6;overflow-wrap:anywhere}

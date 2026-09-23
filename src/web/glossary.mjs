@@ -515,10 +515,16 @@ export class ConceptPicker {
   }
 }
 
+// 概念表一次最多渲染这么多行：1144 个概念时整表重建要数百毫秒，而且每次保存/过滤都会重排
+// 一千多行。超出的部分用一行提示引导继续输入缩小范围；被定位的概念始终渲染出来。
+export const CONCEPT_TABLE_LIMIT = 200;
+
 // 名词表只是统一定义草稿的编辑视图，不持有另一份节点数据。
+// 编辑概念只有一个界面：app 层的共享对话框（内置 is-a 选择与原子提交），这里只负责触发，
+// 不再把表单内联插进这张大表——那正是概念一多就卡顿的原因。
 export class GlossaryTable {
-  constructor(container, { change, replace, add, remove, setLocks, updateTags }) {
-    this.container = container; this.change = change; this.replace = replace; this.add = add; this.remove = remove; this.setLocks = setLocks; this.updateTags = updateTags; this.mode = 'concepts';
+  constructor(container, { edit, add, remove, setLocks, updateTags }) {
+    this.container = container; this.edit = edit; this.add = add; this.remove = remove; this.setLocks = setLocks; this.updateTags = updateTags; this.mode = 'concepts';
     container.innerHTML = `<div class="glossary-heading"><div><h1>概念表 <span id="glossary-count"></span></h1><p>直接编辑单元格 · 所有机制图共用这些概念</p></div><div><button id="glossary-concepts">概念</button><button id="glossary-tags" class="quiet">标签</button><button id="glossary-add">新增概念</button></div></div>
       <div class="glossary-tools"><input id="glossary-search" type="search" aria-label="搜索节点名词表" placeholder="搜索名称、ID 或定义…"><span>修改后 Ctrl S 保存</span></div>
       <div class="glossary-scroll"><table aria-label="统一节点名词表"><colgroup><col class="term-name"><col class="term-description"><col class="term-id"><col class="term-lock"><col class="term-actions"></colgroup><thead><tr><th scope="col">概念</th><th scope="col">概念含义</th><th scope="col">稳定 ID</th><th scope="col" class="term-lock-heading"><label><input id="glossary-lock-all" type="checkbox" aria-label="批量切换当前概念的 Agent 锁">Agent 锁</label></th><th scope="col">操作</th></tr></thead><tbody></tbody></table><div id="glossary-empty" hidden>没有匹配的概念</div><button id="glossary-add-row">新增一行</button></div>
@@ -563,7 +569,13 @@ export class GlossaryTable {
     this.lockAll.disabled = !!this.pending || matches.length === 0;
     this.container.querySelector('#glossary-count').textContent = `${matches.length} / ${this.nodes.length}`;
     this.container.querySelector('#glossary-empty').hidden = matches.length > 0;
-    for (const node of matches) {
+    const shown = matches.slice(0, CONCEPT_TABLE_LIMIT);
+    // 刚保存/新建的概念即使排在限额之外也要出现在表里，否则定位会落空。
+    if (this.focusId) {
+      const target = matches.find(node => node.id === this.focusId);
+      if (target && !shown.includes(target)) shown.unshift(target);
+    }
+    for (const node of shown) {
       const row = document.createElement('tr'); row.dataset.nodeId = node.id;
       const label = document.createElement('td'); label.className = 'term-name-cell'; label.append(element('strong', node.label));
       const description = document.createElement('td'); description.className = 'term-description-cell'; description.textContent = node.description;
@@ -575,8 +587,14 @@ export class GlossaryTable {
       remove.onclick = () => this.remove(node.id);
       const editState = conceptEditPresentation(node);
       const configure = document.createElement('button'); configure.textContent = editState.buttonLabel; configure.disabled = !!this.pending;
-      configure.onclick = () => this.openQualifierSettings(row, node);
+      configure.onclick = () => this.edit(node.id);
       actions.append(configure, remove); row.append(label, description, id, lock, actions); body.append(row);
+    }
+    if (matches.length > shown.length) {
+      const more = document.createElement('tr'); more.className = 'glossary-more';
+      const cell = document.createElement('td'); cell.colSpan = 5;
+      cell.textContent = `还有 ${matches.length - shown.length} 个匹配概念，继续输入以缩小范围`;
+      more.append(cell); body.append(more);
     }
     this.fitTextareas();
   }
@@ -606,17 +624,8 @@ export class GlossaryTable {
     };
     this.container.querySelector('.glossary-scroll').append(add);
   }
-  openQualifierSettings(row, node) {
-    if (this.pending) return;
-    if (this.editorRow) this.editorRow.remove();
-    this.editingId = conceptEditorOpenState(this.editingId, node.id);
-    if (!this.editingId) return;
-    const editor = document.createElement('tr'), cell = document.createElement('td'); cell.colSpan = 5; cell.className = 'concept-editor-row'; editor.append(cell); row.after(editor); this.editorRow = editor;
-    new ConceptEditor(cell, { mode: 'edit', node, nodes: () => this.nodes, tagDefinitions: this.tagDefinitions, onSave: form => { const nextNode = prepareConceptUpdate({ nodes: [node] }, node.id, form).nodes[0]; this.replace(node.id, nextNode); this.editingId = null; this.editorRow = null; editor.remove(); this.draw(); }, onCancel: () => { this.editingId = null; this.editorRow = null; editor.remove(); this.draw(); } });
-    return;
-  }
   focusNode(id) {
-    this.search.value = ''; this.draw();
+    this.search.value = ''; this.focusId = id; this.draw(); this.focusId = null;
     const row = [...this.container.querySelectorAll('tbody tr')].find(item => item.dataset.nodeId === id);
     row?.querySelector('input')?.focus(); row?.scrollIntoView({ block: 'nearest' });
   }
