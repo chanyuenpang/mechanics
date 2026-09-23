@@ -23,6 +23,15 @@ DSH 插件当前只提供只读能力（检索与图 widget），**没有**写�
 6. `draft save --draft <draftId>` 会再次校验草稿身份和 definitions/rules/mechanic 的 base revision，并以可回滚的三文件事务提交；对于新机制，只有此步骤成功后才会创建正式文件。冲突、非法 JSON、语义校验或回读失败都会保留草稿且不会保留部分写入。保存时保留仍有效的既有节点位置、清除过期路径缓存。
 7. 保存成功只表示 JSON 已提交；网页校验、自动排版、视图更新和文档导出均未执行，不能声称已完成这些派生操作。
 
+
+## is-a / 上位概念
+
+- is-a 就是 `rules.json` 里的一条 `specializes` 规则：`source` 是子概念，`target` 是它唯一的上位概念。**每个概念至多一个上位概念**；节点标签、`is-a` 徽标与展开虚线都只是这条关系的只读投影，不能创建、替代或反推关系。
+- 指定、更换、清除都只改 `rules.json`：在 `draft open` 返回的 `rules.json` 里，把该子概念已有的 `specializes` 出边**替换**为新的 `{ "id": "<子概念>-2-<上位概念>", "source": "<子概念>", "target": "<上位概念>", "relation": "specializes" }`（字段模板见 `guide` 的 `specializesRuleTemplate`），或直接删除这条出边以清除父概念。概念定义本身不变。
+- 拒绝码：`draft validate` 与 canonical 读取都会拒绝同一子概念的第二条出边 `SPECIALIZES_MULTIPLE_PARENTS`、自连 `SPECIALIZES_SELF_LINK`、成环 `SPECIALIZES_CYCLE`；失败时草稿保留、canonical 零写入。被当前机制 `pinnedRuleIds` 固定的旧 is-a 规则，必须在同一份草稿里一并移除该引用——`draft save` 的三文件事务只提交你写下的内容，不会替你猜。
+- 新建概念时若同时指定上位概念，两份草稿要一次提交：在同一 draft 里同时改 `definitions.json` 与 `rules.json`，再执行一次 `draft save`。只改其中一份会留下「概念已建、is-a 丢失」或端点不存在的候选，validate 会直接拒绝。
+- 已知限制：`draft open` 必须提供已存在的 `--mechanic`，因此**空机制工作区无法用本工具修改 is-a**；请先在网页里创建一张机制图，或让用户用网页的概念面板设置。
+
 ## 建模准则
 
 - 规则优先：先写出触发、参与者、状态变化、条件/例外和证据，再决定概念与连线。
