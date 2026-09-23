@@ -49,14 +49,14 @@ async function snapshot() { const manifest = await parse(join(workspace, 'worksp
 const operator = edge => edge.relation === 'specializes' ? 'is-a>' : edge.sign === 1 ? '+>' : edge.sign === -1 ? '->' : '?>';
 const guide = () => ({
   contractVersion: 6,
-  commands: ['scopes', 'search', 'graph', 'node', 'impact', 'draft open', 'draft validate', 'draft save'],
+  commands: ['scopes', 'search', 'graph', 'node', 'impact', 'draft open', 'draft validate', 'draft save', 'isa set'],
   workflow: ['scopes', 'draft open（目标不存在时携带名称与范围）', '编辑 definitions.json、rules.json 与 mechanic.json 三份草稿', 'draft validate', 'draft save'],
   conceptTemplate: { id: 'stable-concept-id', label: '概念名称', description: '概念定义。', tagIds: ['existing-tag-id'], agentLocked: false },
   influenceRuleTemplate: { id: 'source-concept-2-target-concept', source: 'source-concept', target: 'target-concept', relation: 'influence', sign: 1, inheritance: { mode: 'none' }, ruleText: '源概念如何影响目标概念。' },
   specializesRuleTemplate: { id: 'subtype-concept-2-supertype-concept', source: 'subtype-concept', target: 'supertype-concept', relation: 'specializes' },
   exportMaintenance: { createdMechanic: '新建机制图默认进入单独导出：curated 模式补一条独立选择，机制图所在的直接文件夹已选中则不补，视图永不自动进入导出清单', documents: '工具只维护导出清单；文档本身仍需显式生成（网页或 CLI）', failure: 'workspace.json 基线不符报 RESOURCE_REVISION_CONFLICT，提交后回读不符报 SAVE_UNCERTAIN；两者都保留草稿、canonical 零写入或已回滚' },
   mechanicSelection: { optionalField: 'ruleSelection', allowedValue: 'explicit', whenOmitted: '按 focusNodeIds 展开一跳规则并合入 pinnedRuleIds', whenExplicit: '节点保留 focusNodeIds 与固定规则端点；只投影 pinnedRuleIds 的规则，不展开相邻规则' },
-  constraints: ['概念标签只引用 definitions.tagDefinitions 中已存在的 tagIds；显示名和颜色只在标签表维护', '所有持久化 ID 使用英文小写 kebab-case', '规则只存于 rules.json，ID 固定为 source-2-target', '同一有向端点对在全工作区只能有一条规则', 'mechanic 用 focusNodeIds 与 pinnedRuleIds 选择投影；省略 ruleSelection 时展开焦点邻接规则，explicit 时只投影固定规则与焦点节点', '限定词只属于 influence 规则端点', 'node 的 upstream 只表示发现上游的遍历方向；paths 中的 nodes、steps、chain 与 effect 始终按规则声明的 source → target 方向返回', '草稿不允许 positions、projectionPositions 或 routeCache', 'save 前必须 validate；save 不执行自动排版或文档导出', 'search --query 先精确解析，只有精确未命中才返回 resolution.status 为 fuzzy 的模糊候选（label、alias、id、description），候选只是线索，必须用其中的稳定 ID 再查一次，工具不会自动消歧', 'graph --ids 只投影请求集合内部已声明的规则；集合外端点、路径推导、视图、坐标与配色都不进入结果'],
+  constraints: ['is-a 每个概念至多一个上位概念，用 isa set 更换或清除；不要手写第二条 specializes 出边', '概念标签只引用 definitions.tagDefinitions 中已存在的 tagIds；显示名和颜色只在标签表维护', '所有持久化 ID 使用英文小写 kebab-case', '规则只存于 rules.json，ID 固定为 source-2-target', '同一有向端点对在全工作区只能有一条规则', 'mechanic 用 focusNodeIds 与 pinnedRuleIds 选择投影；省略 ruleSelection 时展开焦点邻接规则，explicit 时只投影固定规则与焦点节点', '限定词只属于 influence 规则端点', 'node 的 upstream 只表示发现上游的遍历方向；paths 中的 nodes、steps、chain 与 effect 始终按规则声明的 source → target 方向返回', '草稿不允许 positions、projectionPositions 或 routeCache', 'save 前必须 validate；save 不执行自动排版或文档导出', 'search --query 先精确解析，只有精确未命中才返回 resolution.status 为 fuzzy 的模糊候选（label、alias、id、description），候选只是线索，必须用其中的稳定 ID 再查一次，工具不会自动消歧', 'graph --ids 只投影请求集合内部已声明的规则；集合外端点、路径推导、视图、坐标与配色都不进入结果'],
 });
 const semanticId = value => typeof value === 'string' && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u.test(value);
 const text = (value, field) => {
@@ -275,6 +275,41 @@ async function openDraft(mechanicId, options) {
   return { draftId: id, draftPath: draftFolder, definitionsPath, rulesPath, mechanicPath, revision: data.revision, target: mechanic ? 'existing' : 'new',
     geometry: '已从草稿移除；保存时保留既有节点位置并清除过期路径缓存' };
 }
+
+// is-a 的唯一写入口：作用在草稿的 rules.json 上，并同步该机制草稿的 pinnedRuleIds。
+// 更换 = 替换该概念唯一的 specializes 出边；--parent none 表示清除。
+async function setIsaParent(draftId, conceptId, parentOption) {
+  const folder = join(drafts, draftId);
+  if (relative(drafts, folder).startsWith('..' + sep)) fail('DRAFT_NOT_FOUND', '草稿不存在');
+  const meta = (await parse(join(folder, 'draft.json'))).value;
+  const draftDefinitions = await parse(join(folder, 'definitions.json')), draftRules = await parse(join(folder, 'rules.json')), draftMechanic = await parse(join(folder, 'mechanic.json'));
+  const nodes = validateDefinitions(draftDefinitions.value, meta.workspaceId);
+  validateRules(draftRules.value, meta.workspaceId, nodes);
+  if (!nodes.has(conceptId)) fail('NODE_NOT_FOUND', `概念不存在：${conceptId}`);
+  const parentId = parentOption === undefined || parentOption === null || parentOption === '' || parentOption === 'none' ? null : String(parentOption);
+  if (parentId !== null) {
+    if (!nodes.has(parentId)) fail('NODE_NOT_FOUND', `上位概念不存在：${parentId}`);
+    if (parentId === conceptId) fail('DRAFT_VALIDATION_FAILED', `概念 ${conceptId} 不能成为自己的上位概念（SPECIALIZES_SELF_LINK）`);
+  }
+  const rules = structuredClone(draftRules.value), mechanic = structuredClone(draftMechanic.value);
+  const previous = rules.rules.find(rule => rule.relation === 'specializes' && rule.source === conceptId) ?? null;
+  if ((previous?.target ?? null) === parentId) return { draftId, concept: conceptId, parent: parentId, changed: false, path: join(folder, 'rules.json') };
+  const nextId = parentId === null ? null : `${conceptId}-2-${parentId}`;
+  if (nextId && rules.rules.some(rule => rule.id === nextId)) fail('DRAFT_VALIDATION_FAILED', `概念 ${conceptId} 到 ${parentId} 已有其它规则，不能同时作为 is-a`);
+  rules.rules = rules.rules.filter(rule => !(rule.relation === 'specializes' && rule.source === conceptId));
+  if (nextId) rules.rules.push({ id: nextId, source: conceptId, target: parentId, relation: 'specializes' });
+  if (previous) mechanic.pinnedRuleIds = mechanic.pinnedRuleIds.filter(id => id !== previous.id);
+  if (nextId) {
+    if (!mechanic.pinnedRuleIds.includes(nextId)) mechanic.pinnedRuleIds.push(nextId);
+    for (const id of [conceptId, parentId]) if (!mechanic.focusNodeIds.includes(id)) mechanic.focusNodeIds.push(id);
+  }
+  validateRules(rules, meta.workspaceId, nodes);
+  validateMechanic(mechanic, meta.workspaceId, nodes, rules);
+  await writeFile(join(folder, 'rules.json'), JSON.stringify(rules, null, 2) + '\n');
+  await writeFile(join(folder, 'mechanic.json'), JSON.stringify(mechanic, null, 2) + '\n');
+  return { draftId, concept: conceptId, parent: parentId, changed: true, removedRuleId: previous?.id ?? null, addedRuleId: nextId,
+    rulesPath: join(folder, 'rules.json'), mechanicPath: join(folder, 'mechanic.json'), next: 'draft validate 通过后再 draft save' };
+}
 async function saveDraft(id, validateOnly = false) { const folder = join(drafts, id); if (relative(drafts, folder).startsWith('..' + sep)) fail('DRAFT_NOT_FOUND', '草稿不存在'); const meta = (await parse(join(folder, 'draft.json'))).value, draftDefinitions = await parse(join(folder, 'definitions.json')), draftRules = await parse(join(folder, 'rules.json')), draftMechanic = await parse(join(folder, 'mechanic.json'));
   return withLock(async () => {
     const data = await snapshot(), mechanic = data.mechanics.find(item => item.value.id === meta.mechanicId), creating = meta.created === true;
@@ -386,5 +421,10 @@ async function main() { const { positionals, options } = args(process.argv.slice
   if (command === 'draft' && action === 'open') { if (!options.mechanic) fail('TOOL_INVALID', 'draft open 需要 --mechanic'); return openDraft(options.mechanic, options); }
   if (command === 'draft' && action === 'save') { if (!options.draft) fail('TOOL_INVALID', 'draft save 需要 --draft'); return saveDraft(options.draft); }
   if (command === 'draft' && action === 'validate') { if (!options.draft) fail('TOOL_INVALID', 'draft validate 需要 --draft'); return saveDraft(options.draft, true); }
-  fail('TOOL_INVALID', '仅支持 guide、scopes/search/graph/node/impact、draft open|validate|save'); }
+  if (command === 'isa' && action === 'set') {
+    if (!options.draft) fail('TOOL_INVALID', 'isa set 需要 --draft');
+    if (!options.concept) fail('TOOL_INVALID', 'isa set 需要 --concept');
+    return setIsaParent(options.draft, options.concept, options.parent);
+  }
+  fail('TOOL_INVALID', '仅支持 guide、scopes/search/graph/node/impact、draft open|validate|save、isa set'); }
 main().then(emit).catch(error => { process.stderr.write(JSON.stringify({ error: error.code ?? 'TOOL_FAILED', message: error.message, ...error.details }) + '\n'); process.exitCode = 1; });

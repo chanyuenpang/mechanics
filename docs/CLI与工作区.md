@@ -18,9 +18,10 @@ game-graph agent guide --format json
 game-graph agent scopes --project ./my-game
 game-graph agent concept create --project ./my-game ... --revision <definitions资源版本>
 game-graph agent rule add --project ./my-game ... --revision <机制资源版本>
+game-graph agent rule set-parent --project ./my-game --mechanic <投影机制ID> --concept <子概念> --parent <上位概念|none>
 ```
 
-Agent 查询与 mutation 的完整参数见 [Agent 查询与受约束写入](Agent查询接口.md)。
+Agent 查询与 mutation 的完整参数见 [Agent 查询与受约束写入](Agent查询接口.md)。is-a 上位概念只由概念的「上位概念」字段承担，网页节点面板与概念对话框、`mech agent rule set-parent`、项目内 `workspace-tool.mjs isa set` 是同一条关系的三个入口；画布连线只创建影响规则。
 
 `init` 可以在已有普通项目目录内创建 `.mechanics`，也可以创建尚不存在的项目目录；同时把安装包内的 `mechanics-search`、`mechanics-modeling`、`mechanics-doc` 注册到项目 `.agents/skills/`，把 `workspace-tool.mjs` 同步到 `.mechanics/tools/`。已有 `.mechanics` 时明确拒绝，不覆盖。目标 skill 不存在时安装；内容与包内版本完全相同时视为已注册；路径被占用或内容不同时在创建工作区前返回 `PROJECT_SKILL_CONFLICT`，绝不覆盖。工作区 ID 默认取项目目录名，目录名不符合英文语义 kebab-case 时必须显式传 `--id`。
 
