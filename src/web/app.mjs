@@ -1361,10 +1361,13 @@ async function editConcept(id) {
     $('dialog').classList.add('concept-dialog');
     await dialog('修改概念', container => {
       fields = el('div'); container.append(fields);
+      // 对话框自己有底部「取消 / 保存概念」，编辑器不再渲染第二排按钮；
+      // 用户一改动就标记未保存，保证切换文件/关闭前的确认提示仍然有效。
       editor = new ConceptEditor(fields, { mode: 'edit', node, nodes: () => workspace.definitions.nodes, tagDefinitions: workspace.definitions.tagDefinitions ?? [],
         parentOptions: parentCandidates(id), parentId: workspace.rules.rules.find(rule => rule.relation === 'specializes' && rule.source === id)?.target ?? null,
-        onSave: form => { conceptEditDirty = true; $('dialog-form').requestSubmit(); },
+        showActions: false,
         onCancel: () => $('dialog').close('cancel') });
+      fields.addEventListener('input', () => { conceptEditDirty = true; }, { once: true });
       container.append(el('p', '保存到共享概念表，所有引用此概念的机制都会更新；当前机制草稿不受影响。', 'note'));
     }, async () => {
       if (blocked) throw new Error('请关闭窗口并重新读取磁盘核实。');
@@ -1665,7 +1668,8 @@ async function addTerm() {
   await dialog('新增概念', container => {
     const host = el('div'); container.append(host);
     editor = new ConceptEditor(host, { mode: 'create', node: {}, nodes: () => workspace.definitions.nodes, tagDefinitions: workspace.definitions.tagDefinitions ?? [], parentOptions: parentCandidates(null),
-      onSave: () => $('dialog-form').requestSubmit(), onCancel: () => $('dialog').close('cancel') });
+      showActions: false, onCancel: () => $('dialog').close('cancel') });
+    host.addEventListener('input', () => { conceptEditDirty = true; }, { once: true });
   }, async () => {
     const node = conceptPayloadFromForm(editor.form);
     if (workspace.definitions.nodes.some(item => item.id === node.id)) throw new Error('概念 ID 已存在：' + node.id);

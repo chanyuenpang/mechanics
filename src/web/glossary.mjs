@@ -349,8 +349,8 @@ const action = (text, run, className = 'quiet') => {
 
 
 export class ConceptEditor {
-  constructor(host, { mode, node, nodes, tagDefinitions = [], parentOptions = null, parentId = null, onSave, onCancel, onReuse }) {
-    const model = conceptEditorModel(mode, node); Object.assign(this, { host, mode, nodes, tagDefinitions, parentOptions, onSave, onCancel, onReuse, allowDuplicate: false, form: model.form });
+  constructor(host, { mode, node, nodes, tagDefinitions = [], parentOptions = null, parentId = null, showActions = true, onSave, onCancel, onReuse }) {
+    const model = conceptEditorModel(mode, node); Object.assign(this, { host, mode, nodes, tagDefinitions, parentOptions, showActions, onSave, onCancel, onReuse, allowDuplicate: false, form: model.form });
     // parentId 是 is-a 候选，不进入概念文档本身；只在调用方提供了可选父概念时才渲染控件。
     this.form.parentId = parentId ?? '';
     this.root = element('section', undefined, 'concept-editor'); this.root.setAttribute('aria-label', model.title); host.replaceChildren(this.root); this.render();
@@ -375,7 +375,10 @@ export class ConceptEditor {
     const state = element('strong', lock.state), description = element('p', lock.description); description.id = descriptionId; toggle.onchange = () => { this.form.agentLocked = toggle.checked; this.render(); }; card.append(toggle, state, description); permission.append(card);
     const error = element('p', undefined, 'concept-editor-error danger'); error.setAttribute('role', 'alert'); error.hidden = true;
     const actions = element('div', undefined, 'concept-editor-actions'); const save = action(this.mode === 'create' ? '创建并引用' : '保存概念', () => { try { if (this.mode === 'create' && conceptDuplicateModel(this.nodes(), this.form.label, this.form.id).length && !this.allowDuplicate) throw new Error('请确认仍创建同名概念，或复用已有概念。'); this.onSave(this.form, { allowDuplicate: this.allowDuplicate }); } catch (cause) { error.textContent = cause.message; error.hidden = false; } }, 'primary'); actions.append(save, action('取消', () => this.onCancel()));
-    this.root.replaceChildren(title, identity, discovery, ...(this.parentOptions ? [this.parentField()] : []), customData, permission, error, actions); this.drawDuplicates();
+    // 嵌在 app 对话框里时不渲染自带动作行：保存/取消由对话框底部按钮负责，避免出现两排按钮。
+    // is-a 紧跟身份分组整行展示；检索信息与自定义文本并排，权限整行，避免出现半行空白。
+    this.root.replaceChildren(title, identity, ...(this.parentOptions ? [this.parentField()] : []), discovery, customData, permission, error,
+      ...(this.showActions ? [actions] : [])); this.drawDuplicates();
   }
   // is-a 父概念是可检索的组合框：候选由调用方排除自身与更具体的后代后传入，
   // 当前父概念留在候选里并显示为已选中；有当前值时列表首项就是清除，点它即清除，不做二次确认。

@@ -74,12 +74,18 @@ test('引用窗口把同名复用回调交给共享编辑器，且不创建候�
   const constructor = glossary.slice(glossary.indexOf('export class ConceptEditor'), glossary.indexOf('  field(', glossary.indexOf('export class ConceptEditor')));
   const picker = glossary.indexOf('export class ConceptPicker');
   const begin = glossary.slice(glossary.indexOf('  begin() {', picker), glossary.indexOf('  cancelForm() {', picker));
-  assert.match(constructor, /\{ mode, node, nodes, tagDefinitions = \[\], parentOptions = null, parentId = null, onSave, onCancel, onReuse \}/);
-  assert.match(constructor, /Object\.assign\(this, \{ host, mode, nodes, tagDefinitions, parentOptions, onSave, onCancel, onReuse,/);
+  assert.match(constructor, /\{ mode, node, nodes, tagDefinitions = \[\], parentOptions = null, parentId = null, showActions = true, onSave, onCancel, onReuse \}/);
+  assert.match(constructor, /Object\.assign\(this, \{ host, mode, nodes, tagDefinitions, parentOptions, showActions, onSave, onCancel, onReuse,/);
   assert.match(begin, /onReuse: id => \{ this\.session\.selected\.add\(id\); this\.cancelForm\(\); \}/);
   assert.doesNotMatch(begin, /session\.candidates\.push/);
 });
 
+test('对话框里的共享编辑器不重复渲染动作行', () => {
+  assert.match(glossary, /\{ mode, node, nodes, tagDefinitions = \[\], parentOptions = null, parentId = null, showActions = true, onSave, onCancel, onReuse \}/);
+  assert.match(glossary, /\.\.\.\(this\.showActions \? \[actions\] : \[\]\)/);
+  // 两个 app 对话框（修改概念、新增概念）都由底部按钮提交，编辑器不再画第二排按钮。
+  assert.equal([...app.matchAll(/showActions: false/g)].length, 2);
+});
 test('概念表复用共享编辑对话框，并限制一次性渲染的行数', () => {
   const table = glossary.slice(glossary.indexOf('export class GlossaryTable'));
   assert.match(glossary, /export const CONCEPT_TABLE_LIMIT = 200;/);

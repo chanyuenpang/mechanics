@@ -42,6 +42,10 @@ test('概念详情的 is-a 开关是复选框，与颜色分区分离且只改�
   assert.doesNotMatch(app, /panel\.append\(button\(expanded\.includes\(node\.id\)/);
   // 与「节点风格／节点颜色」一样是 detail 分区：块间自带分隔线，不贴着颜色网格。
   assert.match(app, /el\('div', undefined, 'detail node-taxonomy'\)/);
+  // 概念编辑对话框按内容加宽：身份与 is-a 整行、名称/ID 并排、含义整行，权限不再和别的分组挤。
+  assert.match(style, /\.concept-dialog\{width:min\(1040px,calc\(100vw - 64px\)\);max-height:92dvh\}/);
+  assert.match(style, /\.concept-editor>\.concept-editor-taxonomy,\.concept-editor>\.concept-editor-permission\{grid-column:1\/-1\}/);
+  assert.match(style, /\.concept-editor-identity>legend,\.concept-editor-identity>\.concept-editor-duplicates,\.concept-editor-identity>\.field:has\(\[data-editor-field="description"\]\)\{grid-column:1\/-1\}/);
   // 选择器列表在侧栏里改为文档流内展开，避免被 #inspector 的滚动容器裁掉。
   assert.match(style, /\.detail\.node-taxonomy \.concept-reference-list\{position:static;max-height:190px;margin-top:4px\}/);
   // 列表项按名称 + 稳定 ID 两行排版，而不是把描述当预览混进结果。
