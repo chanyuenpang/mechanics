@@ -1,4 +1,4 @@
-import { compose, tracePaths, summarizePaths, diagnose, downstreamNodes } from '/domain/graph.mjs';
+import { compose, tracePaths, summarizePaths, diagnose, downstreamNodes, setSpecializesParent } from '/domain/graph.mjs';
 import { GraphCanvas, graphGeometryKey } from '/canvas.mjs';
 import { createRouteCache, restoreRouteCache } from '/route-cache.mjs';
 import { GraphComputeCoordinator, computeCancelled } from '/graph-compute.mjs';
@@ -571,6 +571,26 @@ async function updateGlobalRule(id, change) {
   change(rule);
   await write(revision => api('/api/save', { revision, kind: 'rules', document: rules }));
   selection = { type: 'edge', id }; render();
+}
+// 父概念候选排除自身与自身后代：分类环由 domain 拒绝，UI 先把明显非法的选项去掉。
+const descendantConceptIds = conceptId => {
+  const result = new Set(), queue = [conceptId];
+  while (queue.length) {
+    const current = queue.pop();
+    for (const rule of workspace.rules.rules) {
+      if (rule.relation !== 'specializes' || rule.source !== current || result.has(rule.target)) continue;
+      result.add(rule.target); queue.push(rule.target);
+    }
+  }
+  return result;
+};
+// is-a 的唯一写入口：更换或清除某概念的父概念。rules 与受影响的 pinnedRuleIds 由服务端在一次
+// 提交里一起落盘——删掉一条被固定的 is-a 规则而不同步清理，会让工作区在下次读取时不可读。
+async function setConceptParent(conceptId, parentId) {
+  const nextRules = setSpecializesParent(workspace.rules.rules, conceptId, parentId);
+  if (nextRules === workspace.rules.rules) return false;
+  await write(revision => api('/api/concept-taxonomy', { revision, rules: { ...clone(workspace.rules), rules: nextRules } }));
+  return true;
 }
 async function setEdgeQualifiers(id, side, qualifiers) {
   await updateGlobalRule(id, edge => {
@@ -1235,23 +1255,40 @@ function inspect() {
     else edit(change, { topology: false });
   });
   const isARule = workspace.rules.rules.find(item => item.relation === 'specializes' && item.source === node.id);
-  // 展开状态归当前文件：单图写 mechanism 草稿，叠加写 view，两者都改同一份 taxonomyPresentation。
-  if (isARule && (draft || viewMode())) {
-    const expanded = currentTaxonomyPresentation()?.expandedNodeIds ?? [];
-    const toggle = data => {
-      const current = data.taxonomyPresentation?.expandedNodeIds ?? [];
-      data.taxonomyPresentation = { mode: 'label', expandedNodeIds: current.includes(node.id)
-        ? current.filter(id => id !== node.id) : [...current, node.id] };
-    };
-    // 复选框与「节点风格／节点颜色」用同一套 detail 分区，块间自带分隔线，不与颜色选择器贴在一起。
+  // is-a 只有一个写入口：这里的父概念选择器。候选排除自身与自身后代，并提供「不指定」以清除。
+  if (!legacy) {
     const section = el('div', undefined, 'detail node-taxonomy');
-    section.append(el('strong', 'is-a 关系'));
-    const choice = el('label', undefined, 'choice node-taxonomy-choice');
-    const input = el('input'); input.type = 'checkbox'; input.checked = expanded.includes(node.id);
-    input.onchange = () => (viewMode() ? editView(toggle, { keepSelection: true }) : edit(toggle, { topology: false }));
-    const text = el('span');
-    text.append('显示直连父概念与虚线', el('small', '上位概念：' + name(isARule.target)));
-    choice.append(input, text); section.append(choice); panel.append(section);
+    section.append(el('strong', 'is-a 上位概念'));
+    const excluded = descendantConceptIds(node.id);
+    const select = el('select');
+    select.setAttribute('aria-label', 'is-a 上位概念：' + node.label);
+    const none = el('option'); none.value = ''; none.textContent = '不指定（清除上位概念）'; select.append(none);
+    for (const candidate of workspace.definitions.nodes) {
+      if (candidate.id === node.id || excluded.has(candidate.id)) continue;
+      const option = el('option'); option.value = candidate.id;
+      option.textContent = candidate.label + '（' + candidate.id + '）'; select.append(option);
+    }
+    select.value = isARule?.target ?? '';
+    select.onchange = () => {
+      void setConceptParent(node.id, select.value || null).catch(error => { showError(error); select.value = isARule?.target ?? ''; });
+    };
+    section.append(select);
+    // 展开开关只写当前文件的 taxonomyPresentation：单图写 mechanism 草稿，叠加写 view。
+    if (isARule && (draft || viewMode())) {
+      const expanded = currentTaxonomyPresentation()?.expandedNodeIds ?? [];
+      const toggle = data => {
+        const current = data.taxonomyPresentation?.expandedNodeIds ?? [];
+        data.taxonomyPresentation = { mode: 'label', expandedNodeIds: current.includes(node.id)
+          ? current.filter(id => id !== node.id) : [...current, node.id] };
+      };
+      const choice = el('label', undefined, 'choice node-taxonomy-choice');
+      const input = el('input'); input.type = 'checkbox'; input.checked = expanded.includes(node.id);
+      input.onchange = () => (viewMode() ? editView(toggle, { keepSelection: true }) : edit(toggle, { topology: false }));
+      const text = el('span');
+      text.append('显示直连父概念与虚线', el('small', '当前上位概念：' + name(isARule.target)));
+      choice.append(input, text); section.append(choice);
+    }
+    panel.append(section);
   }
   if (node.customData) detail(panel, '自定义文本', node.customData);
   detail(panel, 'Agent 锁', node.agentLocked ? '已锁定；Agent 不能修改或删除此概念' : '未锁定');

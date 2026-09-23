@@ -24,7 +24,12 @@ test('概念详情的 is-a 开关是复选框，与颜色分区分离且只改�
   assert.match(app, /if \(isARule && \(draft \|\| viewMode\(\)\)\) \{/);
   // 复选框而不是按钮，并带上位概念提示。
   assert.match(app, /input\.type = 'checkbox'; input\.checked = expanded\.includes\(node\.id\);/);
-  assert.match(app, /el\('small', '上位概念：' \+ name\(isARule\.target\)\)/);
+  // 面板提供父概念选择器（可清除），展开开关仍只写 taxonomyPresentation。
+  assert.match(app, /section\.append\(el\('strong', 'is-a 上位概念'\)\)/);
+  assert.match(app, /none\.textContent = '不指定（清除上位概念）'/);
+  assert.match(app, /void setConceptParent\(node\.id, select\.value \|\| null\)/);
+  assert.match(app, /const descendantConceptIds = conceptId => \{/);
+  assert.match(app, /el\('small', '当前上位概念：' \+ name\(isARule\.target\)\)/);
   assert.match(app, /viewMode\(\) \? editView\(toggle, \{ keepSelection: true \}\) : edit\(toggle, \{ topology: false \}\)/);
   assert.doesNotMatch(app, /panel\.append\(button\(expanded\.includes\(node\.id\)/);
   // 与「节点风格／节点颜色」一样是 detail 分区：块间自带分隔线，不贴着颜色网格。
