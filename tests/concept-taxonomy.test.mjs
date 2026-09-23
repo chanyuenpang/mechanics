@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createWorkspaceStore } from '../src/server/store.mjs';
-import { setSpecializesParent } from '../src/domain/graph.mjs';
+import { setSpecializesParent, specializesDescendants } from '../src/domain/graph.mjs';
 import { copyExampleFixture } from './example-fixture.mjs';
 
 async function fixture(t) {
@@ -17,6 +17,21 @@ async function fixture(t) {
 }
 
 const withRule = (rules, rule) => ({ ...structuredClone(rules), rules: [...structuredClone(rules.rules), rule] });
+
+test('specializesDescendants 沿 specializes 入边返回更具体的后代，不把父概念算进去', () => {
+  const rules = [
+    { id: 'mid-2-top', source: 'mid', target: 'top', relation: 'specializes' },
+    { id: 'leaf-2-mid', source: 'leaf', target: 'mid', relation: 'specializes' },
+    { id: 'other-2-top', source: 'other', target: 'top', relation: 'specializes' },
+    { id: 'x-2-y', source: 'x', target: 'y', relation: 'influence', sign: 1, inheritance: { mode: 'none' } },
+  ];
+  assert.deepEqual([...specializesDescendants(rules, 'top')].sort(), ['leaf', 'mid', 'other']);
+  assert.deepEqual([...specializesDescendants(rules, 'mid')], ['leaf']);
+  assert.deepEqual([...specializesDescendants(rules, 'leaf')], []);
+  // 影响规则不参与分类遍历；没有任何特化者的概念也没有后代。
+  assert.deepEqual([...specializesDescendants(rules, 'x')], []);
+  assert.deepEqual([...specializesDescendants(rules, undefined)], []);
+});
 
 test('setSpecializesParent 是单父写入口：替换、幂等、清除，自连显式失败', () => {
   const base = [

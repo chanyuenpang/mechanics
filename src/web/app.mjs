@@ -1,8 +1,8 @@
-import { compose, tracePaths, summarizePaths, diagnose, downstreamNodes, setSpecializesParent } from '/domain/graph.mjs';
+import { compose, tracePaths, summarizePaths, diagnose, downstreamNodes, setSpecializesParent, specializesDescendants } from '/domain/graph.mjs';
 import { GraphCanvas, graphGeometryKey } from '/canvas.mjs';
 import { createRouteCache, restoreRouteCache } from '/route-cache.mjs';
 import { GraphComputeCoordinator, computeCancelled } from '/graph-compute.mjs';
-import { GlossaryTable, ConceptEditor, ConceptPicker, ConceptReferencePicker, conceptPayloadFromForm, prepareReference, ReferenceCommit, prepareConceptUpdate, conceptStructurePresentation, qualifierFormRowFromCanonical, qualifierRowForKind, qualifierValueControlModel, qualifierValueFromForm } from '/glossary.mjs';
+import { GlossaryTable, ConceptEditor, ConceptPicker, ConceptReferencePicker, conceptPayloadFromForm, prepareReference, ReferenceCommit, prepareConceptUpdate, conceptStructurePresentation, isaParentCandidates, qualifierFormRowFromCanonical, qualifierRowForKind, qualifierValueControlModel, qualifierValueFromForm } from '/glossary.mjs';
 import { ViewAutosave, viewSaveRequest, readOpening, createAndRememberView, graphPositions, changeViewVisibility, moveViewMechanic, registerViewMechanic, removeViewMechanic, prepareOpening } from '/view-files.mjs';
 import { assertSemanticId, semanticRuleId } from '/domain/identity.mjs';
 import { isEndpointProjection, projectEndpointQualifiers } from '/domain/endpoint-projection.mjs';
@@ -572,25 +572,9 @@ async function updateGlobalRule(id, change) {
   await write(revision => api('/api/save', { revision, kind: 'rules', document: rules }));
   selection = { type: 'edge', id }; render();
 }
-// 父概念候选排除自身与自身后代：分类环由 domain 拒绝，UI 先把明显非法的选项去掉。
-const descendantConceptIds = conceptId => {
-  const result = new Set(), queue = [conceptId];
-  while (queue.length) {
-    const current = queue.pop();
-    for (const rule of workspace.rules.rules) {
-      if (rule.relation !== 'specializes' || rule.source !== current || result.has(rule.target)) continue;
-      result.add(rule.target); queue.push(rule.target);
-    }
-  }
-  return result;
-};
-// 父概念候选：排除自身与自身后代，避免让用户选出一个必被 domain 拒绝的分类环。
-const parentCandidates = conceptId => {
-  const excluded = conceptId ? descendantConceptIds(conceptId) : new Set();
-  return workspace.definitions.nodes
-    .filter(node => node.id !== conceptId && !excluded.has(node.id))
-    .map(node => ({ id: node.id, label: node.label }));
-};
+// is-a 父概念候选：排除自身与更具体的后代（沿 specializes 入边），
+// 否则既会把当前父概念（祖先）误当后代过滤掉，又会让用户选出必被 domain 拒绝的分类环。
+const parentCandidates = conceptId => isaParentCandidates(workspace.definitions.nodes, workspace.rules.rules, conceptId);
 // is-a 的唯一写入口：更换或清除某概念的父概念。rules 与受影响的 pinnedRuleIds 由服务端在一次
 // 提交里一起落盘——删掉一条被固定的 is-a 规则而不同步清理，会让工作区在下次读取时不可读。
 async function setConceptParent(conceptId, parentId) {
@@ -1181,9 +1165,9 @@ function inspect() {
     if (direct) {
       const id = edge.steps[0].ruleId ?? edge.id, originalEdge = workspace.rules.rules.find(item => item.id === id);
       if (originalEdge.relation === 'specializes') {
-        // is-a 只有一个写入口：概念的「上位概念」字段；连线面板只做只读呈现。
-        detail(panel, '上位概念', name(originalEdge.target));
-        panel.append(el('p', 'is-a 由子概念的上位概念字段维护；请在节点属性面板中更换或清除父概念。', 'note'));
+        // is-a 只有一个写入口：概念的 is-a 父概念字段；连线面板只做只读呈现。
+        detail(panel, 'is-a 父概念', name(originalEdge.target));
+        panel.append(el('p', 'is-a 由子概念的父概念字段维护；请在节点属性面板中更换或清除。', 'note'));
       } else {
         field(panel, '关系', String(originalEdge.sign), {
           options: [['1', '＋ 正向影响'], ['-1', '− 负向影响'], ['random', '？ 随机影响']],
@@ -1262,24 +1246,20 @@ function inspect() {
     else edit(change, { topology: false });
   });
   const isARule = workspace.rules.rules.find(item => item.relation === 'specializes' && item.source === node.id);
-  // is-a 只有一个写入口：这里的父概念选择器。候选排除自身与自身后代，并提供「不指定」以清除。
+  // is-a 只有一个写入口：这里的父概念选择器（可检索组合框）。
+  // 候选排除自身与更具体的后代；当前父概念留在候选里并显示为已选中，清除是独立动作。
   if (!legacy) {
     const section = el('div', undefined, 'detail node-taxonomy');
-    section.append(el('strong', 'is-a 上位概念'));
-    const excluded = descendantConceptIds(node.id);
-    const select = el('select');
-    select.setAttribute('aria-label', 'is-a 上位概念：' + node.label);
-    const none = el('option'); none.value = ''; none.textContent = '不指定（清除上位概念）'; select.append(none);
-    for (const candidate of workspace.definitions.nodes) {
-      if (candidate.id === node.id || excluded.has(candidate.id)) continue;
-      const option = el('option'); option.value = candidate.id;
-      option.textContent = candidate.label + '（' + candidate.id + '）'; select.append(option);
-    }
-    select.value = isARule?.target ?? '';
-    select.onchange = () => {
-      void setConceptParent(node.id, select.value || null).catch(error => { showError(error); select.value = isARule?.target ?? ''; });
-    };
-    section.append(select);
+    section.append(el('strong', 'is-a 父概念'));
+    const failParent = error => { showError(error); render(); };
+    const picker = new ConceptReferencePicker({
+      nodes: () => isaParentCandidates(workspace.definitions.nodes, workspace.rules.rules, node.id),
+      currentId: node.id, kind: 'isa', value: isARule?.target ?? '',
+      placeholder: '输入名称、ID、别名或含义搜索父概念', ariaLabel: 'is-a 父概念：' + node.label,
+      onSelect: id => { void setConceptParent(node.id, id).catch(failParent); },
+    });
+    section.append(picker.root);
+    if (isARule) section.append(button('清除 is-a 父概念', () => { void setConceptParent(node.id, null).catch(failParent); }, 'quiet'));
     // 展开开关只写当前文件的 taxonomyPresentation：单图写 mechanism 草稿，叠加写 view。
     if (isARule && (draft || viewMode())) {
       const expanded = currentTaxonomyPresentation()?.expandedNodeIds ?? [];
@@ -1292,7 +1272,7 @@ function inspect() {
       const input = el('input'); input.type = 'checkbox'; input.checked = expanded.includes(node.id);
       input.onchange = () => (viewMode() ? editView(toggle, { keepSelection: true }) : edit(toggle, { topology: false }));
       const text = el('span');
-      text.append('显示直连父概念与虚线', el('small', '当前上位概念：' + name(isARule.target)));
+      text.append('显示直连父概念与虚线', el('small', '当前 is-a 父概念：' + name(isARule.target)));
       choice.append(input, text); section.append(choice);
     }
     panel.append(section);
@@ -1427,8 +1407,8 @@ async function addNode() {
   try {
     await dialog('概念节点', container => {
       picker = new ConceptPicker(container, session, workspace.definitions, draft.focusNodeIds, {
-        // 新建候选的父概念可以来自整个工作区，也可以是本批待新建的概念。
-        parentOptions: () => [...parentCandidates(null), ...session.candidates.map(node => ({ id: node.id, label: node.label }))],
+        // 新建候选的 is-a 父概念可以来自整个工作区，也可以是本批待新建的概念。
+        parentOptions: () => [...parentCandidates(null), ...session.candidates],
         status: (text, enabled) => { $('confirm-dialog').textContent = text; $('confirm-dialog').disabled = !enabled; },
         abandon: () => { referenceSession = null; $('dialog').close('cancel'); },
         recover: async () => {
@@ -1456,7 +1436,7 @@ async function addNode() {
         let nextRules = null;
         for (const [childId, parentId] of parents) {
           if (!session.selected.has(childId)) continue;
-          if (!known.has(parentId)) throw new Error('is-a 上位概念不存在或未被本次引用：' + parentId);
+          if (!known.has(parentId)) throw new Error('is-a 父概念不存在或未被本次引用：' + parentId);
           nextRules = setSpecializesParent(nextRules ?? workspace.rules.rules, childId, parentId);
         }
         session.commit = new ReferenceCommit(prepareReference({ workspace, draft, selected: [...session.selected], candidates,

@@ -1,16 +1,25 @@
-import { compose } from '../domain/graph.mjs';
+import { compose, specializesDescendants } from '../domain/graph.mjs';
 import { assertSemanticId, normalizeAliases, normalizeSearchTerm } from '../domain/identity.mjs';
 import { icon } from './icons.mjs';
 
 const copy = value => structuredClone(value);
+// is-a 父概念候选：排除自身与更具体的后代（沿 specializes 入边，成环会被 domain 拒绝），
+// 但绝不排除祖先——当前父概念必须留在候选里，才能显示为已选中。
+export function isaParentCandidates(nodes, rules, conceptId) {
+  const excluded = conceptId ? specializesDescendants(rules, conceptId) : new Set();
+  if (conceptId) excluded.add(conceptId);
+  return nodes.filter(node => !excluded.has(node.id));
+}
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const normalized = text => normalizeSearchTerm(text);
 export const parseAliases = value => normalizeAliases(Array.isArray(value) ? value : String(value ?? '').split(/[\n,，]/u));
 export const parseTags = value => normalizeAliases(Array.isArray(value) ? value : String(value ?? '').split(/[\n,，]/u));
+// 检索面覆盖名称、稳定 ID、别名、描述与标签；缺字段的概念不能因为 String(undefined)
+// 而匹配到 "undefined" 这类查询词。
 export function matchingConcepts(nodes, query) {
   const words = normalized(query).split(/\s+/);
   return nodes.filter(node => words.every(word => [node.label, node.id, ...(node.aliases ?? []), node.description, ...(node.tagIds ?? [])]
-    .some(text => normalized(text).includes(word))));
+    .some(text => text !== undefined && text !== null && normalized(text).includes(word))));
 }
 export function sameNamedConcepts(nodes, label) { return nodes.filter(node => normalized(node.label) === normalized(label)); }
 
@@ -19,28 +28,30 @@ export function conceptDuplicateModel(nodes, label, currentId) {
   return query ? nodes.filter(node => node.id !== currentId && normalized(node.label) === query).map(node => ({ id: node.id, label: node.label, description: node.description })) : [];
 }
 
-export function conceptReferencePickerCandidates(nodes, { query = '', kind = 'qualifier', currentId } = {}) {
-  if (!['base', 'qualifier'].includes(kind)) throw new Error('概念引用类型必须是基础概念或限定概念。');
-  const eligible = nodes.filter(node => node.id !== currentId && (kind !== 'base' || !node.baseConceptId));
+export function conceptReferencePickerCandidates(nodes, { query = '', kind = 'qualifier', currentId, excluded = null } = {}) {
+  if (!['base', 'qualifier', 'isa'].includes(kind)) throw new Error('概念引用类型必须是基础概念、限定概念或 is-a 父概念。');
+  const blocked = excluded instanceof Set ? excluded : new Set();
+  const eligible = nodes.filter(node => node.id !== currentId && !blocked.has(node.id) && (kind !== 'base' || !node.baseConceptId));
   return matchingConcepts(eligible, query);
 }
 
 let conceptReferencePickerIndex = 0;
 export class ConceptReferencePicker {
-  constructor({ nodes, currentId, kind, value = '', ariaLabel, onSelect }) {
-    Object.assign(this, { nodes, currentId, kind, value, onSelect, activeIndex: -1 });
+  constructor({ nodes, currentId, kind, value = '', excluded = null, placeholder = '', ariaLabel, onSelect }) {
+    Object.assign(this, { nodes, currentId, kind, value, excluded, onSelect, activeIndex: -1 });
     this.id = 'concept-reference-options-' + ++conceptReferencePickerIndex;
     this.root = element('div', undefined, 'concept-reference-picker');
     this.input = element('input'); this.input.type = 'text'; this.input.setAttribute('role', 'combobox');
     this.input.setAttribute('aria-label', ariaLabel); this.input.setAttribute('aria-autocomplete', 'list');
     this.input.setAttribute('aria-controls', this.id); this.input.setAttribute('aria-expanded', 'false');
+    if (placeholder) this.input.placeholder = placeholder;
     this.list = element('div', undefined, 'concept-reference-list'); this.list.id = this.id; this.list.setAttribute('role', 'listbox'); this.list.hidden = true;
     this.root.append(this.input, this.list); this.syncValue();
     this.input.onfocus = () => this.open();
     this.input.oninput = () => { this.activeIndex = -1; this.draw(); };
     this.input.onkeydown = event => this.keydown(event);
   }
-  candidates() { return conceptReferencePickerCandidates(this.nodes(), { query: this.input.value, kind: this.kind, currentId: this.currentId }); }
+  candidates() { return conceptReferencePickerCandidates(this.nodes(), { query: this.input.value, kind: this.kind, currentId: this.currentId, excluded: this.excluded }); }
   syncValue() { this.input.value = this.value ? conceptReferencePresentation(this.value, this.nodes()) : ''; }
   open() { if (this.list.hidden) this.input.value = ''; this.list.hidden = false; this.input.setAttribute('aria-expanded', 'true'); this.draw(); }
   close() { this.list.hidden = true; this.input.setAttribute('aria-expanded', 'false'); this.input.removeAttribute('aria-activedescendant'); this.syncValue(); }
@@ -221,7 +232,7 @@ export function prepareReference({ workspace, draft, selected, candidates, rules
   compose({ ...workspace, definitions, mechanics: [mechanic] }, [mechanic.id]);
   // 新概念的 is-a 父概念必须存在于本次提交的定义里；否则服务端会整体拒绝，不如在这里先给出中文原因。
   if (rules) for (const rule of rules.rules.filter(item => item.relation === 'specializes' && candidates.some(node => node.id === item.source))) {
-    if (!ids.has(rule.target)) throw new Error('is-a 上位概念不存在，请重新核实定义：' + rule.target);
+    if (!ids.has(rule.target)) throw new Error('is-a 父概念不存在，请重新核实定义：' + rule.target);
   }
   return { definitions, mechanic, base: copy(base), candidates: copy(candidates), rules: rules ? copy(rules) : null, additions };
 }
@@ -304,19 +315,20 @@ export class ConceptEditor {
     const actions = element('div', undefined, 'concept-editor-actions'); const save = action(this.mode === 'create' ? '创建并引用' : '保存概念', () => { try { if (this.mode === 'create' && conceptDuplicateModel(this.nodes(), this.form.label, this.form.id).length && !this.allowDuplicate) throw new Error('请确认仍创建同名概念，或复用已有概念。'); this.onSave(this.form, { allowDuplicate: this.allowDuplicate }); } catch (cause) { error.textContent = cause.message; error.hidden = false; } }, 'primary'); actions.append(save, action('取消', () => this.onCancel()));
     this.root.replaceChildren(title, identity, discovery, ...(this.parentOptions ? [this.parentField()] : []), customData, permission, error, actions); this.drawDuplicates();
   }
-  // is-a 的写入口是「上位概念」字段：候选由调用方按自身与后代排除后传入，含清除选项。
+  // is-a 父概念是可检索的组合框：候选由调用方排除自身与更具体的后代后传入，
+  // 当前父概念留在候选里并显示为已选中；「清除」是显式动作，不再是下拉里的一个选项。
   parentField() {
-    const wrap = element('fieldset', undefined, 'concept-editor-taxonomy'); wrap.append(element('legend', '分类（is-a）'));
-    const field = element('label', undefined, 'field'), select = element('select');
-    select.dataset.editorField = 'parentId'; select.setAttribute('aria-label', 'is-a 上位概念');
-    const none = element('option'); none.value = ''; none.textContent = '不指定（没有上位概念）'; select.append(none);
-    for (const option of this.parentOptions) {
-      const item = element('option'); item.value = option.id; item.textContent = option.label + '（' + option.id + '）'; select.append(item);
-    }
-    select.value = this.form.parentId ?? '';
-    select.onchange = () => { this.form.parentId = select.value; };
-    field.append(element('span', '上位概念'), select);
-    wrap.append(field, element('p', '每个概念至多一个上位概念；更换时旧分类边会被替换，自连与成环会被拒绝。', 'note'));
+    const wrap = element('fieldset', undefined, 'concept-editor-taxonomy'); wrap.append(element('legend', 'is-a 父概念'));
+    const field = element('label', undefined, 'field');
+    const picker = new ConceptReferencePicker({
+      nodes: () => this.parentOptions, currentId: this.form.id, kind: 'isa', value: this.form.parentId ?? '',
+      placeholder: '输入名称、ID、别名或含义搜索父概念', ariaLabel: 'is-a 父概念',
+      onSelect: id => { this.form.parentId = id; },
+    });
+    picker.input.dataset.editorField = 'parentId';
+    field.append(element('span', 'is-a 父概念'), picker.root);
+    if (this.form.parentId) field.append(action('清除', () => { this.form.parentId = ''; this.render(); }, 'quiet'));
+    wrap.append(field, element('p', '每个概念至多一个 is-a 父概念；方向是「具体概念 → 父概念」，更换时旧分类边被替换，自连与成环会被拒绝。', 'note'));
     return wrap;
   }
   tagPicker() {

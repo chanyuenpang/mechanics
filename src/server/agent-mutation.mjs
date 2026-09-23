@@ -148,7 +148,7 @@ function replaceSpecializesParent(workspace, body, mechanic) {
   const conceptId = requiredString(body, 'concept');
   if (!conceptById(workspace, conceptId)) fail('NODE_NOT_FOUND', `概念不存在：${conceptId}`);
   const requested = body.parent === undefined || body.parent === null || body.parent === '' || body.parent === 'none' ? null : requiredString(body, 'parent');
-  if (requested && !conceptById(workspace, requested)) fail('NODE_NOT_FOUND', `上位概念不存在：${requested}`);
+  if (requested && !conceptById(workspace, requested)) fail('NODE_NOT_FOUND', `is-a 父概念不存在：${requested}`);
   const before = new Set(workspace.rules.rules.map(rule => rule.id));
   workspace.rules.rules = setSpecializesParent(workspace.rules.rules, conceptId, requested);
   const after = new Set(workspace.rules.rules.map(rule => rule.id));

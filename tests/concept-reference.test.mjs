@@ -5,10 +5,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createWorkspaceStore } from '../src/server/store.mjs';
 import { readWorkspace } from '../src/server/workspace.mjs';
-import { matchingConcepts, sameNamedConcepts, prepareReference, ReferenceCommit, prepareConceptUpdate } from '../src/web/glossary.mjs';
+import { matchingConcepts, sameNamedConcepts, prepareReference, ReferenceCommit, prepareConceptUpdate, isaParentCandidates, conceptReferencePickerCandidates } from '../src/web/glossary.mjs';
 import { graphPositions } from '../src/web/view-files.mjs';
 import { copyExampleFixture } from './example-fixture.mjs';
-import { compose, downstreamNodes, setSpecializesParent } from '../src/domain/graph.mjs';
+import { compose, downstreamNodes, setSpecializesParent, specializesDescendants } from '../src/domain/graph.mjs';
 
 const node = (id = 'aaa-new', label = '新概念') => ({
   id, label, description: '新概念的定义', agentLocked: false,
@@ -171,5 +171,32 @@ test('新建候选可以在同一次提交里写入 is-a 父概念，定义与�
   // 父概念不存在时在提交前按中文原因拒绝，不做半成品写入。
   const other = node('ddd-child', '另一个子概念');
   const orphan = { ...structuredClone(workspace.rules), rules: [...workspace.rules.rules, { id: 'ddd-child-2-absent', source: 'ddd-child', target: 'absent', relation: 'specializes' }] };
-  assert.throws(() => prepareReference({ workspace, draft, selected: [other.id], candidates: [other], rules: orphan, positions, center: { x: 0, y: 0 } }), /上位概念不存在/);
+  assert.throws(() => prepareReference({ workspace, draft, selected: [other.id], candidates: [other], rules: orphan, positions, center: { x: 0, y: 0 } }), /is-a 父概念不存在/);
+});
+
+test('is-a 父概念候选排除自身与更具体的后代，但必须保留当前父概念，并可检索', () => {
+  const nodes = [
+    { id: 'top', label: '顶层' },
+    { id: 'mid', label: '中层', aliases: ['middle'], description: '中间层概念', tagIds: ['战斗'] },
+    { id: 'leaf', label: '叶子' }, { id: 'other', label: '无关' },
+  ];
+  const rules = [
+    { id: 'mid-2-top', source: 'mid', target: 'top', relation: 'specializes' },
+    { id: 'leaf-2-mid', source: 'leaf', target: 'mid', relation: 'specializes' },
+  ];
+  // specializes 是「具体概念 → 父概念」：后代要沿入边找。当前父概念 top 必须留在候选里，
+  // 曾经的实现顺出边遍历，把 top 当成后代排除掉，详情栏才会显示为空。
+  assert.deepEqual(isaParentCandidates(nodes, rules, 'mid').map(node => node.id), ['top', 'other']);
+  assert.deepEqual(isaParentCandidates(nodes, rules, 'top').map(node => node.id), ['other']);
+  assert.deepEqual(isaParentCandidates(nodes, rules, 'leaf').map(node => node.id), ['top', 'mid', 'other']);
+  assert.deepEqual(isaParentCandidates(nodes, rules, '').map(node => node.id), ['top', 'mid', 'leaf', 'other']);
+  const search = (query, conceptId) => conceptReferencePickerCandidates(nodes,
+    { query, kind: 'isa', currentId: conceptId, excluded: specializesDescendants(rules, conceptId) }).map(node => node.id);
+  assert.deepEqual(search('中间层', 'leaf'), ['mid']);
+  assert.deepEqual(search('middle', 'leaf'), ['mid']);
+  assert.deepEqual(search('战斗', 'leaf'), ['mid']);
+  assert.deepEqual(search('', 'mid'), ['top', 'other']);
+  assert.deepEqual(search('top', 'mid'), ['top']);
+  // 缺字段的概念不会因为 String(undefined) 而匹配到 "undefined"。
+  assert.deepEqual(matchingConcepts([{ id: 'bare', label: '裸概念' }], 'undefined'), []);
 });

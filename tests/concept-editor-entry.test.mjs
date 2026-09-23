@@ -26,12 +26,17 @@ test('标签修改实时刷新同名提示并重置确认', () => {
 });
 
 
-test('共享编辑器提供 is-a 上位概念字段，候选由调用方注入且含清除选项', () => {
+test('共享编辑器用可搜索选择器指定 is-a 父概念，候选由调用方注入且含清除动作', () => {
   const field = glossary.slice(glossary.indexOf('  parentField() {'), glossary.indexOf('  tagPicker() {'));
   assert.match(glossary, /element\('fieldset', undefined, 'concept-editor-taxonomy'\)/);
-  assert.match(glossary, /select\.dataset\.editorField = 'parentId'/);
-  assert.match(field, /none\.textContent = '不指定（没有上位概念）'/);
-  assert.match(field, /select\.onchange = \(\) => \{ this\.form\.parentId = select\.value; \}/);
+  // 概念多时下拉框找不到目标，改成带搜索的组合框；当前父概念显示为已选中，清除是独立按钮。
+  assert.match(field, /new ConceptReferencePicker\(\{/);
+  assert.match(field, /nodes: \(\) => this\.parentOptions, currentId: this\.form\.id, kind: 'isa', value: this\.form\.parentId \?\? ''/);
+  assert.match(field, /placeholder: '输入名称、ID、别名或含义搜索父概念'/);
+  assert.match(field, /picker\.input\.dataset\.editorField = 'parentId'/);
+  assert.match(field, /onSelect: id => \{ this\.form\.parentId = id; \}/);
+  assert.match(field, /if \(this\.form\.parentId\) field\.append\(action\('清除'/);
+  assert.doesNotMatch(field, /el\(|element\('select'\)/);
   // 没有候选来源时不渲染该字段，避免出现无法落盘的死控件。
   assert.match(glossary, /\.\.\.\(this\.parentOptions \? \[this\.parentField\(\)\] : \[\]\)/);
   assert.match(glossary, /this\.form\.parentId = parentId \?\? '';/);
@@ -72,8 +77,8 @@ test('引用窗口的新建候选同样可以指定 is-a，父概念随定义一
   assert.match(picker, /this\.session\.candidateParents\.set\(candidate\.id, form\.parentId\)/);
   assert.match(picker, /this\.session\.candidateParents instanceof Map\) this\.session\.candidateParents\.delete\(id\)/);
   const reference = app.slice(app.indexOf('async function addNode'), app.indexOf('function mechanismFolderPath'));
-  assert.match(reference, /parentOptions: \(\) => \[\.\.\.parentCandidates\(null\), \.\.\.session\.candidates\.map\(node => \(\{ id: node\.id, label: node\.label \}\)\)\]/);
+  assert.match(reference, /parentOptions: \(\) => \[\.\.\.parentCandidates\(null\), \.\.\.session\.candidates\]/);
   assert.match(reference, /nextRules = setSpecializesParent\(nextRules \?\? workspace\.rules\.rules, childId, parentId\)/);
-  assert.match(reference, /is-a 上位概念不存在或未被本次引用/);
+  assert.match(reference, /is-a 父概念不存在或未被本次引用/);
   assert.match(reference, /api\('\/api\/concept-taxonomy', \{ revision, definitions: document, rules: session\.commit\.plan\.rules \}\)/);
 });

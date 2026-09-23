@@ -40,7 +40,7 @@ export function compose(workspace, selectedIds) {
 export function setSpecializesParent(rules, childId, parentId = null) {
   const belongsToChild = rule => rule.relation === 'specializes' && rule.source === childId;
   if (parentId === childId) {
-    const error = new Error(`概念 ${childId} 不能成为自己的上位概念`);
+    const error = new Error(`概念 ${childId} 不能成为自己的 is-a 父概念`);
     error.code = 'SPECIALIZES_SELF_LINK'; throw error;
   }
   const current = rules.find(belongsToChild);
@@ -88,6 +88,21 @@ export function assertSpecializes(edges) {
     visiting.delete(node); visited.add(node);
   }
   for (const node of adjacent.keys()) visit(node);
+}
+
+// is-a 的 specializes 出边是「具体概念 → 父概念」，所以某概念**更具体**的后代要沿入边找。
+// 父概念候选必须排除自身与这些后代，否则选出的父概念会立刻形成分类环。
+export function specializesDescendants(rules, conceptId) {
+  const parents = rules.filter(rule => rule.relation === 'specializes');
+  const result = new Set(), queue = [conceptId];
+  while (queue.length) {
+    const current = queue.pop();
+    for (const rule of parents) {
+      if (rule.target !== current || result.has(rule.source)) continue;
+      result.add(rule.source); queue.push(rule.source);
+    }
+  }
+  return result;
 }
 
 // graph.mjs 只处理作者声明的边。is-a 仍是结构声明，不在这里派生规则；

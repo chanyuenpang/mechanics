@@ -8,7 +8,7 @@ test('isa set 在草稿里替换 is-a 出边并同步固定引用，validate/sav
   const projectRoot = await copiedExampleProject(t);
   const guide = await runWorkspaceTool(projectRoot, ['guide']);
   assert.ok(guide.commands.includes('isa set'));
-  assert.ok(guide.constraints.some(line => line.includes('至多一个上位概念')));
+  assert.ok(guide.constraints.some(line => line.includes('至多一个父概念')));
 
   const draft = await runWorkspaceTool(projectRoot, ['draft', 'open', '--mechanic', 'basic-rules']);
   const rulesBefore = JSON.parse(await readFile(draft.rulesPath, 'utf8'));

@@ -26,13 +26,13 @@ game-graph agent impact --project ./my-game --from stamina --to failure
 
 写入接口、资源版本和编辑会话工作流保持不变，见 `mech --help` 与 `skills/mechanics-modeling/SKILL.md`。写入前用 `scopes` 获取整体与资源 revision；概念与规则操作仍使用已确认机制的草稿 open/save 工作流。
 
-is-a（上位概念）是对齐写入里唯一有二义性的高频操作，因此有独立入口，不要手写成第二条 `specializes` 出边：
+is-a 是对齐写入里唯一有二义性的高频操作，因此有独立入口，不要手写成第二条 `specializes` 出边：
 
 ```sh
-node <项目>/.mechanics/tools/workspace-tool.mjs isa set --draft <draftId> --concept <子概念> --parent <上位概念|none>
-mech agent rule set-parent --project ./my-game --mechanic <投影机制ID> --concept <子概念> --parent <上位概念|none> --revision <机制资源版本>
+node <项目>/.mechanics/tools/workspace-tool.mjs isa set --draft <draftId> --concept <子概念> --parent <父概念|none>
+mech agent rule set-parent --project ./my-game --mechanic <投影机制ID> --concept <子概念> --parent <父概念|none> --revision <机制资源版本>
 ```
 
-两个入口都保证「每个概念至多一个上位概念」：把该子概念已有的 `specializes` 出边替换为新父概念（`--parent none` 清除），并在同一次提交里从所有受影响的机制与视图移除旧规则的固定引用；项目内工具还会把新规则固定到当前草稿机制。自连、成环与第二父概念仍由语义校验拒绝（`SPECIALIZES_SELF_LINK`、`SPECIALIZES_CYCLE`、`SPECIALIZES_MULTIPLE_PARENTS`），失败时草稿保留、canonical 零写入。网页的节点属性面板与新建/修改概念对话框写入的是同一条关系。
+两个入口都保证「每个概念至多一个 is-a 父概念」：把该子概念已有的 `specializes` 出边替换为新父概念（`--parent none` 清除），并在同一次提交里从所有受影响的机制与视图移除旧规则的固定引用；项目内工具还会把新规则固定到当前草稿机制。自连、成环与第二父概念仍由语义校验拒绝（`SPECIALIZES_SELF_LINK`、`SPECIALIZES_CYCLE`、`SPECIALIZES_MULTIPLE_PARENTS`），失败时草稿保留、canonical 零写入。网页的节点属性面板与新建/修改概念对话框写入的是同一条关系。
 
 错误写入 stderr JSON `{error,message,...details}`，不会在 stdout 返回部分成功。常见查询错误为 `QUERY_INVALID`、`NODE_NOT_FOUND`、`REVISION_CONFLICT` 与 `QUERY_VERSION_MISMATCH`。
