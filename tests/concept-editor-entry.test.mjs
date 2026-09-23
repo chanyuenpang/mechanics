@@ -25,12 +25,23 @@ test('标签修改实时刷新同名提示并重置确认', () => {
   assert.equal([...field.matchAll(/this\.drawDuplicates\(\)/g)].length, 1);
 });
 
+
+test('共享编辑器提供 is-a 上位概念字段，候选由调用方注入且含清除选项', () => {
+  const field = glossary.slice(glossary.indexOf('  parentField() {'), glossary.indexOf('  tagPicker() {'));
+  assert.match(glossary, /element\('fieldset', undefined, 'concept-editor-taxonomy'\)/);
+  assert.match(glossary, /select\.dataset\.editorField = 'parentId'/);
+  assert.match(field, /none\.textContent = '不指定（没有上位概念）'/);
+  assert.match(field, /select\.onchange = \(\) => \{ this\.form\.parentId = select\.value; \}/);
+  // 没有候选来源时不渲染该字段，避免出现无法落盘的死控件。
+  assert.match(glossary, /\.\.\.\(this\.parentOptions \? \[this\.parentField\(\)\] : \[\]\)/);
+  assert.match(glossary, /this\.form\.parentId = parentId \?\? '';/);
+});
 test('引用窗口把同名复用回调交给共享编辑器，且不创建候选', () => {
   const constructor = glossary.slice(glossary.indexOf('export class ConceptEditor'), glossary.indexOf('  field(', glossary.indexOf('export class ConceptEditor')));
   const picker = glossary.indexOf('export class ConceptPicker');
   const begin = glossary.slice(glossary.indexOf('  begin() {', picker), glossary.indexOf('  cancelForm() {', picker));
-  assert.match(constructor, /\{ mode, node, nodes, tagDefinitions = \[\], onSave, onCancel, onReuse \}/);
-  assert.match(constructor, /Object\.assign\(this, \{ host, mode, nodes, tagDefinitions, onSave, onCancel, onReuse,/);
+  assert.match(constructor, /\{ mode, node, nodes, tagDefinitions = \[\], parentOptions = null, parentId = null, onSave, onCancel, onReuse \}/);
+  assert.match(constructor, /Object\.assign\(this, \{ host, mode, nodes, tagDefinitions, parentOptions, onSave, onCancel, onReuse,/);
   assert.match(begin, /onReuse: id => \{ this\.session\.selected\.add\(id\); this\.cancelForm\(\); \}/);
   assert.doesNotMatch(begin, /session\.candidates\.push/);
 });

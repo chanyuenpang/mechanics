@@ -44,6 +44,12 @@ test('概念详情的 is-a 开关是复选框，与颜色分区分离且只改�
   // 展开后画布画的是同一条 is-a 边的虚线，而不是另画一遍分类线。
   assert.match(canvasSource, /edge\.relation === 'specializes' \? \{ 'stroke-dasharray': '6 4' \} : \{\}/);
   assert.match(canvasSource, /const projection = this\.graph;/);
+  // 新建/修改概念对话框都注入父概念候选，并通过同一条原子提交路径写入。
+  assert.match(app, /const parentCandidates = conceptId => \{/);
+  assert.match(app, /parentOptions: parentCandidates\(id\), parentId: workspace\.rules\.rules\.find/);
+  assert.match(app, /parentOptions: parentCandidates\(null\),/);
+  assert.match(app, /api\('\/api\/concept-taxonomy', \{ revision, definitions, rules \}\)/);
+  assert.match(app, /api\('\/api\/concept-taxonomy', \{ revision, \.\.\.\(definitionsChanged/);
 });
 test('项目打开请求有超时，空项目错误可重新打开选择器', () => {
   const api = app.slice(app.indexOf('const API_REQUEST_TIMEOUT_MS'), app.indexOf('// 所有页面写入串行执行'));

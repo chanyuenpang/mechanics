@@ -584,6 +584,13 @@ const descendantConceptIds = conceptId => {
   }
   return result;
 };
+// 父概念候选：排除自身与自身后代，避免让用户选出一个必被 domain 拒绝的分类环。
+const parentCandidates = conceptId => {
+  const excluded = conceptId ? descendantConceptIds(conceptId) : new Set();
+  return workspace.definitions.nodes
+    .filter(node => node.id !== conceptId && !excluded.has(node.id))
+    .map(node => ({ id: node.id, label: node.label }));
+};
 // is-a 的唯一写入口：更换或清除某概念的父概念。rules 与受影响的 pinnedRuleIds 由服务端在一次
 // 提交里一起落盘——删掉一条被固定的 is-a 规则而不同步清理，会让工作区在下次读取时不可读。
 async function setConceptParent(conceptId, parentId) {
@@ -1343,16 +1350,22 @@ async function editConcept(id) {
     await dialog('修改概念', container => {
       fields = el('div'); container.append(fields);
       editor = new ConceptEditor(fields, { mode: 'edit', node, nodes: () => workspace.definitions.nodes, tagDefinitions: workspace.definitions.tagDefinitions ?? [],
+        parentOptions: parentCandidates(id), parentId: workspace.rules.rules.find(rule => rule.relation === 'specializes' && rule.source === id)?.target ?? null,
         onSave: form => { conceptEditDirty = true; $('dialog-form').requestSubmit(); },
         onCancel: () => $('dialog').close('cancel') });
       container.append(el('p', '保存到共享概念表，所有引用此概念的机制都会更新；当前机制草稿不受影响。', 'note'));
     }, async () => {
       if (blocked) throw new Error('请关闭窗口并重新读取磁盘核实。');
       const document = prepareConceptUpdate(workspace.definitions, id, editor.form);
-      if (json(document) === json(workspace.definitions)) return;
+      const definitionsChanged = json(document) !== json(workspace.definitions);
+      const currentParent = workspace.rules.rules.find(rule => rule.relation === 'specializes' && rule.source === id)?.target ?? null;
+      const parentId = editor.form.parentId || null;
+      const rules = parentId === currentParent ? null : { ...clone(workspace.rules), rules: setSpecializesParent(workspace.rules.rules, id, parentId) };
+      if (!definitionsChanged && !rules) return;
       fields.disabled = true;
       try {
-        await write(revision => api('/api/save', { revision, kind: 'definitions', document }));
+        // 概念定义与 is-a 规则一起提交：删除被固定的 is-a 规则时，pinnedRuleIds 必须在同一事务里清理。
+        await write(revision => api('/api/concept-taxonomy', { revision, ...(definitionsChanged ? { definitions: document } : {}), ...(rules ? { rules } : {}) }));
       } catch (error) {
         blocked = ['REVISION_CONFLICT', 'SAVE_UNCERTAIN'].includes(error.code);
         if (blocked) error.message += '\n请关闭窗口后重新读取磁盘核实；不会自动覆盖或重复提交。';
@@ -1619,12 +1632,21 @@ async function addTerm() {
   let editor;
   await dialog('新增概念', container => {
     const host = el('div'); container.append(host);
-    editor = new ConceptEditor(host, { mode: 'create', node: {}, nodes: () => workspace.definitions.nodes, tagDefinitions: workspace.definitions.tagDefinitions ?? [],
+    editor = new ConceptEditor(host, { mode: 'create', node: {}, nodes: () => workspace.definitions.nodes, tagDefinitions: workspace.definitions.tagDefinitions ?? [], parentOptions: parentCandidates(null),
       onSave: () => $('dialog-form').requestSubmit(), onCancel: () => $('dialog').close('cancel') });
-  }, () => {
+  }, async () => {
     const node = conceptPayloadFromForm(editor.form);
     if (workspace.definitions.nodes.some(item => item.id === node.id)) throw new Error('概念 ID 已存在：' + node.id);
-    edit(data => { data.nodes.push(node); });
+    const parentId = editor.form.parentId || null;
+    if (!parentId) {
+      edit(data => { data.nodes.push(node); });
+      glossary.focusNode(node.id); return true;
+    }
+    // 指定 is-a 时概念必须与规则一起提交；候选基于当前定义草稿，未保存的概念编辑一并落盘。
+    const definitions = { ...clone(draft), nodes: [...clone(draft.nodes), node] };
+    const rules = { ...clone(workspace.rules), rules: setSpecializesParent(workspace.rules.rules, node.id, parentId) };
+    await write(revision => api('/api/concept-taxonomy', { revision, definitions, rules }));
+    draft = clone(workspace.definitions); baseline = clone(draft); conceptEditDirty = false;
     glossary.focusNode(node.id); return true;
   }, '新增概念');
 }

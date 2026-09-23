@@ -271,8 +271,10 @@ const action = (text, run, className = 'quiet') => {
 
 
 export class ConceptEditor {
-  constructor(host, { mode, node, nodes, tagDefinitions = [], onSave, onCancel, onReuse }) {
-    const model = conceptEditorModel(mode, node); Object.assign(this, { host, mode, nodes, tagDefinitions, onSave, onCancel, onReuse, allowDuplicate: false, form: model.form });
+  constructor(host, { mode, node, nodes, tagDefinitions = [], parentOptions = null, parentId = null, onSave, onCancel, onReuse }) {
+    const model = conceptEditorModel(mode, node); Object.assign(this, { host, mode, nodes, tagDefinitions, parentOptions, onSave, onCancel, onReuse, allowDuplicate: false, form: model.form });
+    // parentId 是 is-a 候选，不进入概念文档本身；只在调用方提供了可选父概念时才渲染控件。
+    this.form.parentId = parentId ?? '';
     this.root = element('section', undefined, 'concept-editor'); this.root.setAttribute('aria-label', model.title); host.replaceChildren(this.root); this.render();
     queueMicrotask(() => this.root.querySelector('[data-editor-field="' + model.firstField + '"]')?.focus());
   }
@@ -295,7 +297,22 @@ export class ConceptEditor {
     const state = element('strong', lock.state), description = element('p', lock.description); description.id = descriptionId; toggle.onchange = () => { this.form.agentLocked = toggle.checked; this.render(); }; card.append(toggle, state, description); permission.append(card);
     const error = element('p', undefined, 'concept-editor-error danger'); error.setAttribute('role', 'alert'); error.hidden = true;
     const actions = element('div', undefined, 'concept-editor-actions'); const save = action(this.mode === 'create' ? '创建并引用' : '保存概念', () => { try { if (this.mode === 'create' && conceptDuplicateModel(this.nodes(), this.form.label, this.form.id).length && !this.allowDuplicate) throw new Error('请确认仍创建同名概念，或复用已有概念。'); this.onSave(this.form, { allowDuplicate: this.allowDuplicate }); } catch (cause) { error.textContent = cause.message; error.hidden = false; } }, 'primary'); actions.append(save, action('取消', () => this.onCancel()));
-    this.root.replaceChildren(title, identity, discovery, customData, permission, error, actions); this.drawDuplicates();
+    this.root.replaceChildren(title, identity, discovery, ...(this.parentOptions ? [this.parentField()] : []), customData, permission, error, actions); this.drawDuplicates();
+  }
+  // is-a 的写入口是「上位概念」字段：候选由调用方按自身与后代排除后传入，含清除选项。
+  parentField() {
+    const wrap = element('fieldset', undefined, 'concept-editor-taxonomy'); wrap.append(element('legend', '分类（is-a）'));
+    const field = element('label', undefined, 'field'), select = element('select');
+    select.dataset.editorField = 'parentId'; select.setAttribute('aria-label', 'is-a 上位概念');
+    const none = element('option'); none.value = ''; none.textContent = '不指定（没有上位概念）'; select.append(none);
+    for (const option of this.parentOptions) {
+      const item = element('option'); item.value = option.id; item.textContent = option.label + '（' + option.id + '）'; select.append(item);
+    }
+    select.value = this.form.parentId ?? '';
+    select.onchange = () => { this.form.parentId = select.value; };
+    field.append(element('span', '上位概念'), select);
+    wrap.append(field, element('p', '每个概念至多一个上位概念；更换时旧分类边会被替换，自连与成环会被拒绝。', 'note'));
+    return wrap;
   }
   tagPicker() {
     const wrap = element('fieldset', undefined, 'concept-tag-picker'); wrap.append(element('legend', '标签'));
