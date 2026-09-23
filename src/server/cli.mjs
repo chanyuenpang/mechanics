@@ -17,6 +17,7 @@ import { listProjectReferences } from './project-references.mjs';
 import { registerProjectSkills } from './project-skills.mjs';
 import { migrateLegacyProject } from './migrate-legacy-project.mjs';
 import { startRenderServer } from './mcp-render.mjs';
+import { CURRENT_WORKSPACE_VERSION, WORKSPACE_MIGRATION_STEPS } from './migration.mjs';
 
 const execFileAsync = promisify(execFile);
 const delay = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
@@ -53,6 +54,7 @@ async function startWebServer(options) {
   }
 }
 
+const migrationHelp = Object.entries(WORKSPACE_MIGRATION_STEPS).map(([from, to]) => `--from ${from} --to ${to}`).join(' | ');
 const usage = `Mechanics ${metadata.version} · 规则、概念与关系解释工具
 
 mech init <项目目录> [--name <名称>] [--id <稳定ID>]
@@ -60,7 +62,7 @@ mech sync [--project <项目目录>]（同步项目内受管 skill 与 JSON 工�
 mech web [--project <项目目录>] [--port 4319]
 mech mcp render（在当前目录向上定位固定 .mechanics 后启动只读对话渲染 MCP server）
 mech validate [--project <项目目录>]
-mech migrate --from 7 --to 8 | --from 8 --to 9 | --from 9 --to 10 | --from 10 --to 12 | --from 11 --to 12 | --from 9 --to 9（悬空节点修复） --project <项目目录> [--revision <预览版本>] [--execute]（默认仅预览）
+mech migrate ${migrationHelp} | --from 9 --to 9（悬空节点修复） --project <项目目录> [--revision <预览版本>] [--execute]（默认仅预览）
 mech migrate-project --project <旧项目目录> [--execute]（旧 .game-graph 的一键显式迁移）
 mech repair projection-positions --project <项目目录> [--revision <预览版本>] [--execute]（只删除已无规则引用的限定投影坐标）
 mech catalog [--project <项目目录>]（重建 mechanics Agent 文档）
@@ -102,7 +104,7 @@ mech --help | --version
 web 省略 --project 时以空项目状态启动，由网页打开项目。
 validate / catalog / root 省略 --project 时，从当前目录向上寻找最近的 .mechanics。
 init 不覆盖已有 .mechanics 或不同内容的同名 skill，并注册包内 Mechanics skills 到项目 .agents/skills。
-运行时只读取项目内固定 v11 工作区；旧版本只能通过显式 migrate 迁移。
+当前工作区协议为 v${CURRENT_WORKSPACE_VERSION}；web 打开项目时自动逐级升级有迁移路径的旧版本，validate / catalog / agent 等命令要求可读取的当前协议；也可用 migrate 显式预览后执行。
 需要 Node.js 24+。不上传分析资料，也不自动公开发布。`;
 
 try {

@@ -33,14 +33,14 @@ dsh plugin --profile <profile> add <本目录路径 或 @veewo/dsh-mechanics>
 
 ## 客户端半
 
-`lib/client.js` 是**手写**的 lazy-CJS bundle（`window.__ModuleLoader__.load({ id, factory })`，factory 末尾导出 `apply` 与 `inject`），不引入构建链，也没有 sourcemap——`/plugins/<id>/client.js.map` 会 404，仅影响调试体验。
+`lib/client.js` 是手写的 lazy-CJS 模块，交给当前 DSH 的组合客户端脚本加载；不能用旧的 `/plugins/<id>/client.js` 单文件 URL（返回 404）判断它未加载。
 
-它只做一件事：把两个 wire 工具名注册进 keyed slot `tool.call.toolview`。
+它注册检索工具卡，并监听 `tool/ptc-dispatch` 成功结算事件，在聊天流插入独立的 `mechanics-widget` 节点；节点使用宿主传入的 `cwd` 请求插件图页面。
 
 - `mechanics_graph` → 只读 SVG 概念图卡：圆形布局、按影响符号着色的箭头、hover 看定义与规则文字、点击节点展开定义与集合内关系。
 - `mechanics_search` → 检索卡：概念详情、歧义/模糊候选（含 `matchedBy` 与分数）、双向直接规则、双概念未解析、未找到，各一支。
 
-卡的一切都来自冻结的 call/result 切片（host 半写入的 `presentationMeta`）；running 态没有载荷时如实渲染等待态。卡不订阅会话事件、不重建 transcript、不读会话服务，因此重放时会渲染出同一张卡。
+检索卡读取冻结的调用与结果；图卡不依赖 PTC 子调用的 `presentationMeta`，而由完成事件的稳定 ID 与会话 `cwd` 构造只读图页面。工具执行、图页面 200、对话流节点可见须分别验收。
 
 ## 本地预览：不用重启宿主也能看卡
 

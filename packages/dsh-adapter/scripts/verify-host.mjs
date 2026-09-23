@@ -1,14 +1,10 @@
 #!/usr/bin/env node
 // 重启后的实测验收：只观测，不改状态。
 //
-//   node scripts/verify-host.mjs [--url http://127.0.0.1:3080] [--home <DSH_HOME>] [--package <包目录>]
+//   node scripts/verify-host.mjs [--url http://127.0.0.1:3080] [--token <网页登录令牌>] [--project <项目目录> --ids <ID,ID>]
 //
-// 三条 HTTP/组装事实 + 一条会话日志事实：
-//   1. /plugins/<包名>/client.js 返回 200，且字节与本地 lib/client.js 完全一致（服务的是我们写的那份）；
-//   2. 首页启动清单里出现该 bundle 的 script 地址（客户端半真的进了页面）；
-//   3. bundle 路由 404 时明确报告「宿主尚未重启」，而不是含糊地失败；
-//   4. 会话日志里能找到工具调用，且对应的 tool/result 事件带 meta（图卡载荷进了持久日志）。
-import { createHash } from 'node:crypto';
+// 从认证首页读取真实组合脚本 URL，验证脚本、插件路由、可选图页面和会话日志。
+// 脚本不得输出登录令牌；组合脚本不与独立客户端文件逐字节相等。
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
@@ -31,62 +27,60 @@ const note = (ok, label) => {
   (ok ? passed : failed).push(label);
 };
 
-const sha256 = value => createHash('sha256').update(value).digest('hex');
-
-// ---- 1 + 3：bundle 路由 ----
-const bundlePath = join(packageDir, manifest.exports['./client']);
-const route = url + '/plugins/' + packageName + '/client.js';
+// ---- 前端组合批次：当前 DSH 只服务启动图声明的精确 URL ----
+const token = option('token', undefined);
 let served = undefined;
+let html = undefined;
 try {
-  const response = await fetch(route);
-  if (!response.ok) throw new Error('HTTP ' + response.status);
-  served = Buffer.from(await response.arrayBuffer());
-} catch (error) {
-  console.log('FAIL ' + route + ' → ' + error.message);
-  failed.push('bundle 路由');
-  console.log('\n结论：宿主尚未重启或该包未进入本次组装——插件在启动时组装，重启 dsh web 后再跑本脚本。');
-  process.exitCode = 1;
-}
-if (served !== undefined) {
-  note(true, 'bundle 路由返回 200：' + route);
-  const local = readFileSync(bundlePath);
-  note(sha256(served) === sha256(local), '服务端 bundle 与本地 lib/client.js 字节一致（' + served.length + ' 字节）');
-}
-
-// ---- 1b：插件自持的只读路由（Code Mode 下卡片就是靠它取数据的） ----
-if (served !== undefined) {
-  try {
-    // 未知子路径必须回我的 JSON 404；fallback handler 的 404 没有 content-type，据此区分"路由没注册"。
-    const marker = await fetch(url + '/mechanics');
-    const contentType = marker.headers.get('content-type') ?? '';
-    const body = await marker.json().catch(() => undefined);
-    note(marker.status === 404 && contentType.startsWith('application/json') && body?.error === 'NOT_FOUND',
-      '插件自持路由已注册（/mechanics 回 JSON 404：' + marker.status + ' ' + (body?.error ?? '无 JSON') + '）');
-  } catch (error) {
-    note(false, '插件自持路由不可达：' + error.message);
+  let headers = {};
+  if (token !== undefined) {
+    const login = await fetch(url + '/?token=' + encodeURIComponent(token), { redirect: 'manual' });
+    const cookie = login.headers.get('set-cookie')?.split(';')[0];
+    if (login.status !== 303 || !cookie) throw new Error('登录令牌未获宿主确认：HTTP ' + login.status);
+    headers = { cookie };
   }
-  const project = option('project', undefined);
-  if (project !== undefined) {
+  const response = await fetch(url + '/', { headers });
+  if (!response.ok) throw new Error('HTTP ' + response.status + '（若启用认证，请传 --token）');
+  html = await response.text();
+  note(true, '认证后首页可读取启动图');
+} catch (error) {
+  note(false, '首页启动图不可读：' + error.message);
+}
+if (html !== undefined) {
+  const hrefs = [...html.matchAll(/<link\b[^>]*\bhref="([^"]+)"/g)].map(match => match[1].replaceAll('&amp;', '&'));
+  const batch = hrefs.find(href => href.startsWith('/plugins/??') && href.includes(packageName + '/client.js'));
+  note(batch !== undefined, '启动图的组合脚本包含 ' + packageName);
+  if (batch !== undefined) {
     try {
-      const ids = option('ids', undefined);
-      const query = '/mechanics/graph?project=' + encodeURIComponent(project) + (ids === undefined ? '' : '&ids=' + encodeURIComponent(ids));
-      const projection = await fetch(url + query);
-      const value = await projection.json().catch(() => undefined);
-      note(projection.status === 200 && Array.isArray(value?.nodes) && value.nodes.length > 0,
-        '路由返回投影：' + projection.status + ' ' + (value?.conceptIds ?? []).length + ' 个概念 / ' + (value?.edges ?? []).length + ' 条集合内关系');
+      const response = await fetch(new URL(batch, url));
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      served = await response.text();
+      note(served.includes('mechanics-widget') && served.includes('mechanics_graph'), '组合脚本返回 200 且包含 Mechanics 图卡模块');
     } catch (error) {
-      note(false, '路由投影读取失败：' + error.message);
+      note(false, '启动图中的组合脚本不可读：' + error.message);
     }
   }
 }
 
-// ---- 2：首页启动清单 ----
+// ---- 插件自持的只读路由（图卡取数据的独立入口） ----
 if (served !== undefined) {
   try {
-    const html = await (await fetch(url + '/')).text();
-    note(html.includes('/plugins/' + packageName + '/client.js'), '首页启动清单包含该 bundle 的地址');
+    const marker = await fetch(url + '/mechanics');
+    const body = await marker.json().catch(() => undefined);
+    note(marker.status === 404 && marker.headers.get('content-type')?.startsWith('application/json') && body?.error === 'NOT_FOUND',
+      '插件自持路由已注册（/mechanics 返回 JSON NOT_FOUND）');
   } catch (error) {
-    note(false, '首页读取失败：' + error.message);
+    note(false, '插件自持路由不可达：' + error.message);
+  }
+  const project = option('project', undefined), ids = option('ids', undefined);
+  if (project !== undefined && ids !== undefined) {
+    try {
+      const response = await fetch(url + '/mechanics/widget?project=' + encodeURIComponent(project) + '&ids=' + encodeURIComponent(ids));
+      const page = await response.text();
+      note(response.status === 200 && page.includes('__MECHANICS_CONCEPTS_PAYLOAD__'), '实际图页面返回 200 且包含概念图载荷');
+    } catch (error) {
+      note(false, '图页面读取失败：' + error.message);
+    }
   }
 }
 
@@ -143,7 +137,7 @@ if (served !== undefined) {
         continue;
       }
       for (const line of text.split('\n')) {
-        if (!line.includes('mechanics_')) continue;
+        if (!line.includes('tool/')) continue;
         let event;
         try {
           event = JSON.parse(line);
@@ -155,11 +149,11 @@ if (served !== undefined) {
           calls.set(String(event.data.callId), name);
           modes.add('native');
         }
-        if (event.type === 'tool/code-dispatch-start' && name.startsWith('mechanics_')) {
+        if (event.type === 'tool/ptc-dispatch-start' && name.startsWith('mechanics_')) {
           calls.set(String(event.data.subCallId), name);
           modes.add('code');
         }
-        if (event.type === 'tool/code-dispatch' && name.startsWith('mechanics_')) codeDispatches += 1;
+        if (event.type === 'tool/ptc-dispatch' && name.startsWith('mechanics_')) codeDispatches += 1;
         if (event.type === 'tool/result') {
           const callId = String(event.data?.message?.source?.callId ?? '');
           if (!calls.has(callId)) continue;
@@ -168,16 +162,18 @@ if (served !== undefined) {
         }
       }
     }
-    note(calls.size > 0, '会话日志里有 mechanics_* 工具调用（' + calls.size + ' 次：' + [...new Set(calls.values())].join(', ') + '；承载方式 ' + ([...modes].join('+') || '未知') + '）');
     if (calls.size === 0) {
-      console.log('提示：先在会话里调用一次 mechanics_graph，再看这里。');
+      console.log('SKIP 最近会话日志中没有 mechanics_* 调用；要验收对话内图卡，请在目标会话调用 mechanics_graph 后再检查。');
+    } else {
+      note(true, '会话日志里有 mechanics_* 工具调用（' + calls.size + ' 次：' + [...new Set(calls.values())].join(', ') + '；承载方式 ' + [...modes].join('+') + '）');
+    }
+    if (calls.size === 0) {
+      // 没有调用记录不能证明或否定客户端对话图卡是否成功。
     } else if (modes.has('native')) {
       note(nativeWithMeta > 0 && nativeWithoutMeta === 0, '原生顶层调用的 tool/result 全部带卡片 meta（带 ' + nativeWithMeta + ' 条 / 缺 ' + nativeWithoutMeta + ' 条）');
     } else {
-      // Code Mode 是契约内的差异，不是安装失败：子调用按定义不产出 presentationMeta。
-      console.log('NOTE 本次调用全部来自 Code Mode 子调用（' + codeDispatches + ' 条 tool/code-dispatch）：按契约 presentationMeta 只对顶层调用计算，'
-        + '因此这些事件本身不带 meta。卡片不依赖它：拿得到会话 cwd 与稳定 ID 时直接挂插件自持路由上的真 widget'
-        + '（/mechanics/widget，与网页、Codex MCP 同一份页面），只有拿不到 cwd 或调用参数时才退回自绘 SVG 或如实说明。');
+      // PTC 子派发不带顶层卡片 meta；对话图卡由客户端监听成功结算事件并用 cwd 挂载。
+      note(codeDispatches > 0, 'PTC 子派发有完成事件（' + codeDispatches + ' 条 tool/ptc-dispatch）；对话图卡仍须在网页实测');
     }
   }
 }

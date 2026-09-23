@@ -23,7 +23,7 @@ game-graph agent rule set-parent --project ./my-game --mechanic <投影机制ID>
 
 Agent 查询与 mutation 的完整参数见 [Agent 查询与受约束写入](Agent查询接口.md)。is-a 只由概念的「is-a 父概念」字段承担，网页节点面板与概念对话框、`mech agent rule set-parent`、项目内 `workspace-tool.mjs isa set` 是同一条关系的三个入口；画布连线只创建影响规则。
 
-`init` 可以在已有普通项目目录内创建 `.mechanics`，也可以创建尚不存在的项目目录；同时把安装包内的 `mechanics-search`、`mechanics-modeling`、`mechanics-doc` 注册到项目 `.agents/skills/`，把 `workspace-tool.mjs` 同步到 `.mechanics/tools/`。已有 `.mechanics` 时明确拒绝，不覆盖。目标 skill 不存在时安装；内容与包内版本完全相同时视为已注册；路径被占用或内容不同时在创建工作区前返回 `PROJECT_SKILL_CONFLICT`，绝不覆盖。工作区 ID 默认取项目目录名，目录名不符合英文语义 kebab-case 时必须显式传 `--id`。
+`init` 可以在已有普通项目目录内创建 `.mechanics`，也可以创建尚不存在的项目目录；同时把安装包内的 `mechanics-search`、`mechanics-modeling`、`mechanics-doc` 三个受管 skill 注册到项目 `.agents/skills/`，把 `workspace-tool.mjs` 同步到 `.mechanics/tools/`。已有 `.mechanics` 时明确拒绝，不覆盖。目标 skill 不存在时安装；文件集合与内容完全相同时视为已注册；内容不同或含过期附件时用当前安装包的完整目录整体替换（暂存目录 → 备份 → 原子改名），中断报 `PROJECT_SKILL_REGISTRATION_PARTIAL`。只有路径被普通文件或符号链接占用时才在创建工作区前返回 `PROJECT_SKILL_CONFLICT`，绝不覆盖非受管路径。工作区 ID 默认取项目目录名，目录名不符合英文语义 kebab-case 时必须显式传 `--id`。
 
 `web` 省略 `--project` 时以空项目状态启动，网页可以打开项目；项目缺少 `.mechanics` 时按用户提供的名称和稳定 ID 初始化。`validate/catalog/root` 省略 `--project` 时从 cwd 向上寻找最近的 `.mechanics/workspace.json`。项目切换先完整打开候选并取得锁，成功后才替换当前项目；每次切换递增 `projectGeneration`，旧页面或旧在线 mutation 写入明确返回 `PROJECT_CHANGED`。
 
@@ -66,4 +66,4 @@ npm run check
 npm run check:package
 ```
 
-包验收会审查 dry-run 清单，创建 `dist/game-graph-<version>.tgz`，在隔离目录安装并验证 CLI、两个 canonical skill、项目初始化时的 skill 注册、只读查询、受约束 mutation、在线服务、静态资源和工作区读取。skill 的维护源固定在 Game-Graph 包 `skills/`；项目 `.agents/skills/` 是初始化产生的注册副本，不反向成为工具真相。公开发布的完整步骤见仓库根目录 [`DISTRIBUTION.md`](../DISTRIBUTION.md)；本地 tarball 仅是发布前验收，不能代替 registry 回读验证。
+包验收会审查 dry-run 清单，创建 `dist/game-graph-<version>.tgz`，在隔离目录安装并验证 CLI、三个受管 skill、项目初始化时的 skill 注册、只读查询、受约束 mutation、在线服务、静态资源和工作区读取。skill 的维护源固定在 Game-Graph 包 `skills/`；项目 `.agents/skills/` 是初始化产生的注册副本，不反向成为工具真相。公开发布的完整步骤见仓库根目录 [`DISTRIBUTION.md`](../DISTRIBUTION.md)；本地 tarball 仅是发布前验收，不能代替 registry 回读验证。

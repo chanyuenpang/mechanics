@@ -114,7 +114,7 @@ test('bundle 以 lazy-CJS 契约注册，导出面齐备', async () => {
   assert.equal(registration.id, '@veewo/dsh-mechanics');
   assert.equal(typeof registration.factory, 'function');
   // vm 里的数组来自另一个 realm，断言前摊回宿主 realm。
-  assert.deepEqual([...moduleExports.inject], ['slots']);
+  assert.deepEqual([...moduleExports.inject], ['slots', 'uiConversation']);
   for (const key of ['apply', 'GraphCard', 'SearchCard', 'graphCardModel', 'searchCardModel', 'layoutNodes', 'edgeGeometry']) {
     assert.equal(typeof moduleExports[key], 'function', key + ' 必须是函数');
   }
@@ -126,19 +126,16 @@ test('apply 注册两张 keyed 工具卡与 widget 节点，不触及其他 slot
   const injections = [];
   const definitions = [];
   const ctx = {
-    get: name => (name === 'slots' ? {
+    get: name => name === 'slots' ? {
       inject: (slot, callback) => injections.push(slot) && callback(),
       register: (options, component) => registered.push({ options, component }),
-    } : name === 'conversationEvents' ? {
-      // 镜像运行时的注册校验（dsh-client-runtime：target 与 buildViewNode 必须一起声明），
-      // 上一版少了 target 时正是这里会在浏览器里抛错、把整个客户端半连坐掉。
-      register: definition => {
-        if ((definition.target === undefined) !== (definition.buildViewNode === undefined)) {
-          throw new Error('conversation Definition "' + definition.kind + '" must declare target and buildViewNode together');
-        }
-        definitions.push(definition);
-      },
-    } : undefined),
+    } : undefined,
+    uiConversation: { events: { register: definition => {
+      if ((definition.target === undefined) !== (definition.buildViewNode === undefined)) {
+        throw new Error('conversation Definition "' + definition.kind + '" must declare target and buildViewNode together');
+      }
+      definitions.push(definition);
+    } } },
   };
   moduleExports.apply(ctx);
   // 工具行只留检索卡；机制图走独立节点（两份会重复显示同一张图）。
@@ -238,16 +235,19 @@ test('按调用折叠图卡数据：只有成功的成图才产出节点', async
   const started = definition.start({}, { event: { type: 'tool/call', seq: 40, data: { turn: 7, callId: 'run1', name: 'run_code', arguments: '{}' } } });
   assert.equal(started.callId, 'run1');
   const dispatch = event => definition.update({ state: started }, { event });
-  const ok = dispatch({ type: 'tool/code-dispatch', seq: 42, data: { rootCallId: 'run1', name: 'mechanics_graph', arguments: { conceptIds: ['turn', 'draw'] }, isError: false } });
+  const pending = { type: 'tool/ptc-dispatch-start', seq: 41, data: { rootCallId: 'run1', subCallId: 'sub1', name: 'mechanics_graph', arguments: { conceptIds: ['turn', 'draw'] } } };
+  assert.equal(definition.match(pending), null, '未完成的子调用不应提前展示图卡');
+  const completed = { type: 'tool/ptc-dispatch', seq: 42, data: { rootCallId: 'run1', parentCallId: 'run1', subCallId: 'sub1', name: 'mechanics_graph', arguments: { conceptIds: ['turn', 'draw'] }, isError: false, content: [] } };
+  const ok = dispatch(completed);
   assert.deepEqual([...ok.latest.ids], ['turn', 'draw']);
   // 失败的成图、别的工具都不产出引用。
-  assert.equal(dispatch({ type: 'tool/code-dispatch', seq: 43, data: { rootCallId: 'run1', name: 'mechanics_graph', arguments: { conceptIds: ['turn'] }, isError: true } }).latest, undefined);
-  assert.equal(dispatch({ type: 'tool/code-dispatch', seq: 44, data: { rootCallId: 'run1', name: 'mechanics_search', arguments: { query: 'x' }, isError: false } }).latest, undefined);
+  assert.equal(dispatch({ type: 'tool/ptc-dispatch', seq: 43, data: { rootCallId: 'run1', name: 'mechanics_graph', arguments: { conceptIds: ['turn'] }, isError: true } }).latest, undefined);
+  assert.equal(dispatch({ type: 'tool/ptc-dispatch', seq: 44, data: { rootCallId: 'run1', name: 'mechanics_search', arguments: { query: 'x' }, isError: false } }).latest, undefined);
   // 路由：子派发没有 turn 字段，必须按 rootCallId 归到发起它的那次调用上（上一版按 turn 路由，永远落进空 id）。
-  const routed = definition.match({ type: 'tool/code-dispatch', data: { rootCallId: 'run1', name: 'mechanics_graph' } });
+  const routed = definition.match({ type: 'tool/ptc-dispatch', data: { rootCallId: 'run1', name: 'mechanics_graph' } });
   assert.equal(routed.id, 'run1');
   assert.equal(routed.role, 'update');
-  assert.equal(definition.match({ type: 'tool/code-dispatch', data: { name: 'mechanics_graph' } }), null);
+  assert.equal(definition.match({ type: 'tool/ptc-dispatch', data: { name: 'mechanics_graph' } }), null);
   const startedMatch = definition.match({ type: 'tool/call', data: { callId: 'c9', name: 'run_code', arguments: '{}' } });
   assert.equal(startedMatch.id, 'c9');
   assert.equal(startedMatch.role, 'start');
@@ -282,25 +282,23 @@ test('原生调用按 tool/result 配对，失败不产出节点', async () => {
   assert.equal(definition.buildViewNode({ state: failed, key: 'k4', id: 'c2', matches: [] }), null);
 });
 
-test('widget 节点由会话所属 workspace 解析项目，每一环断裂都写出来', async () => {
+test('widget 节点使用聊天槽位提供的 cwd 构造图页面', async () => {
   const { react, moduleExports } = await loadBundle();
-  const workspaces = [{ sessionIds: ['s1'], path: 'G:/Projects/tiny-world' }, { sessionIds: ['s2'], path: 'G:/Projects/other' }];
-  const useWorkspaces = selector => selector({ items: workspaces });
+  const cwd = 'G:/Projects/tiny-world/mechanics';
   react.beginRender();
-  const rendered = moduleExports.MechanicsWidgetNode({ node: { kind: 'mechanics-widget', data: { ids: ['turn', 'draw'] } }, useWorkspaces, sessionId: 's1' });
+  const rendered = moduleExports.MechanicsWidgetNode({ node: { kind: 'mechanics-widget', data: { ids: ['turn', 'draw'] } }, cwd });
   assert.equal(rendered.props['data-state'], 'turn-widget');
   const frame = collect(rendered, node => node.type === 'iframe')[0];
-  assert.match(frame.props.src, /\/mechanics\/widget\?project=G%3A%2FProjects%2Ftiny-world&ids=turn%2Cdraw/);
+  assert.match(frame.props.src, /\/mechanics\/widget\?project=G%3A%2FProjects%2Ftiny-world%2Fmechanics&ids=turn%2Cdraw/);
   const hasText = text => node => Array.isArray(node.children) && node.children.some(child => typeof child === 'string' && child.includes(text));
-  // 节点数据里没有 ID / 解析不到工作区：都在节点里如实写出来，不静默空白。
   react.beginRender();
-  const noIds = moduleExports.MechanicsWidgetNode({ node: { kind: 'mechanics-widget', data: {} }, useWorkspaces, sessionId: 's1' });
+  const noIds = moduleExports.MechanicsWidgetNode({ node: { kind: 'mechanics-widget', data: {} }, cwd });
   assert.equal(noIds.props['data-state'], 'turn-widget-unavailable');
   assert.ok(collect(noIds, hasText('没有拿到可渲染的稳定概念 ID')).length > 0);
   react.beginRender();
-  const noProject = moduleExports.MechanicsWidgetNode({ node: { kind: 'mechanics-widget', data: { ids: ['turn'] } }, useWorkspaces, sessionId: 's9' });
+  const noProject = moduleExports.MechanicsWidgetNode({ node: { kind: 'mechanics-widget', data: { ids: ['turn'] } } });
   assert.equal(noProject.props['data-state'], 'turn-widget-unavailable');
-  assert.ok(collect(noProject, hasText('解析不到该会话所属的工作区目录')).length > 0);
+  assert.ok(collect(noProject, hasText('没有收到会话工作目录 cwd')).length > 0);
 });
 
 test('conceptIdsFromArgs 只接受形状正确的调用参数', async () => {

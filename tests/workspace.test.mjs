@@ -12,6 +12,7 @@ import { initWorkspace, findProject, findWorkspace } from '../src/server/workspa
 import { publishCatalog } from '../src/server/catalog.mjs';
 import packageInfo from '../package.json' with { type: 'json' };
 import { copyExampleFixture } from './example-fixture.mjs';
+import { CURRENT_WORKSPACE_VERSION, WORKSPACE_MIGRATION_STEPS } from '../src/server/migration.mjs';
 
 const example = fileURLToPath(new URL('../examples/card-game/', import.meta.url));
 const cli = fileURLToPath(new URL('../src/server/cli.mjs', import.meta.url));
@@ -69,6 +70,19 @@ async function snapshot(root) {
   }
   return result;
 }
+
+test('顶层和常用子命令帮助与包版本及当前迁移链一致', () => {
+  for (const args of [['--help'], ['migrate', '--help'], ['agent', 'guide', '--help'], ['references', 'list', '--help'], ['repair', 'projection-positions', '--help']]) {
+    const result = call(args, example);
+    assert.equal(result.status, 0, `${args.join(' ')}: ${result.stderr}`);
+    assert.ok(result.stdout.startsWith(`Mechanics ${packageInfo.version} ·`));
+    assert.match(result.stdout, new RegExp(`当前工作区协议为 v${CURRENT_WORKSPACE_VERSION}`));
+    assert.doesNotMatch(result.stdout, /固定 v11 工作区|旧版本只能通过显式 migrate/);
+    for (const [from, to] of Object.entries(WORKSPACE_MIGRATION_STEPS)) {
+      assert.ok(result.stdout.includes(`--from ${from} --to ${to}`), `缺少 v${from} → v${to}`);
+    }
+  }
+});
 
 test('CLI 在仓库外初始化项目，子目录定位同一项目，显式目标优先且不覆盖已有工作区', async t => {
   const { temp, projectRoot } = await fixture(t);

@@ -308,7 +308,7 @@ window.__ModuleLoader__.load({
           if (name === GRAPH_TOOL_NAME || name === RUN_CODE_NAME) return { id: String(event.data.callId), role: "start" };
           return null;
         }
-        if (event.type === "tool/code-dispatch") {
+        if (event.type === "tool/ptc-dispatch" || event.type === "tool/code-dispatch") {
           const root = String(event.data?.rootCallId ?? event.data?.parentCallId ?? "");
           return root.length > 0 ? { id: root, role: "update" } : null;
         }
@@ -327,7 +327,7 @@ window.__ModuleLoader__.load({
       update: (context, match) => {
         const state = context.state;
         const data = match.event?.data ?? {};
-        if (match.event.type === "tool/code-dispatch") {
+        if (match.event.type === "tool/ptc-dispatch" || match.event.type === "tool/code-dispatch") {
           if (String(data.name ?? "") !== GRAPH_TOOL_NAME || data.isError === true) return state;
           const ids = idsFromCallArguments(data.arguments);
           return ids === undefined ? state : { ...state, latest: { seq: match.event.seq, ids } };
@@ -363,15 +363,8 @@ window.__ModuleLoader__.load({
     function MechanicsWidgetNode(props) {
       const node = props.node;
       const matched = node === undefined || node === null ? null : node.data;
-      const useWorkspaces = props.useWorkspaces;
-      const sessionId = props.sessionId;
-      const project = typeof useWorkspaces === "function" && sessionId !== undefined
-        ? useWorkspaces(state => {
-          const items = (state && state.items) || [];
-          const owner = items.find(item => Array.isArray(item?.sessionIds) && item.sessionIds.includes(sessionId));
-          return owner === undefined ? undefined : owner.path;
-        })
-        : undefined;
+      // Chat 节点槽位只提供会话 cwd，不注入 sessionId/useWorkspaces；路由会向上定位工作区根。
+      const project = typeof props.cwd === "string" && props.cwd.length > 0 ? props.cwd : undefined;
       const [height, setHeight] = React.useState(360);
       React.useEffect(() => {
         const onMessage = event => {
@@ -393,7 +386,7 @@ window.__ModuleLoader__.load({
         return note("这个节点没有拿到可渲染的稳定概念 ID，因此没有 widget。");
       }
       if (typeof project !== "string" || project.length === 0) {
-        return note("解析不到该会话所属的工作区目录（session " + String(sessionId) + "），因此无法挂载 widget。");
+        return note("聊天节点没有收到会话工作目录 cwd，因此无法挂载 widget。");
       }
       const src = routeBase() + ROUTE_PREFIX + "/widget?project=" + encodeURIComponent(project) + "&ids=" + encodeURIComponent(matched.ids.join(","));
       return h("div", { style: STYLE.card, "data-tool": "mechanics_graph", "data-state": "turn-widget" },
@@ -418,16 +411,13 @@ window.__ModuleLoader__.load({
         slots.inject("tool.call.toolview", () => slots.register({ name: "tool.call.toolview", key: view.key }, view.component));
       }
       // 按轮次折叠图卡数据（服务缺失时自动降级：select 拿不到数据就不占用收尾席位）。
-      const conversationEvents = ctx.get("conversationEvents");
-      if (conversationEvents !== undefined && typeof conversationEvents.register === "function") {
-        conversationEvents.register(mechanicsTurnDefinition);
-      }
+      ctx.uiConversation.events.register(mechanicsTurnDefinition);
       // 自己的节点类型：流里独立一格，宽度不受工具卡限制，也不会被折叠插件收走。
       slots.inject("conversation.chat.node", () => slots.register({ name: "conversation.chat.node", key: WIDGET_NODE_KIND }, MechanicsWidgetNode));
     }
 
     exports.apply = apply;
-    exports.inject = ["slots"];
+    exports.inject = ["slots", "uiConversation"];
     exports.GraphCard = GraphCard;
     exports.SearchCard = SearchCard;
     exports.graphCardModel = graphCardModel;
