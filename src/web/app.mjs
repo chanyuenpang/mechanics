@@ -400,7 +400,6 @@ function updateStatus() {
   $('positive-tool').disabled = !workspace || definitionMode() || activeId === null || busy();
   $('negative-tool').disabled = $('positive-tool').disabled;
   $('random-tool').disabled = $('positive-tool').disabled;
-  $('specializes-tool').disabled = $('positive-tool').disabled;
   updateRelationTools();
   $('save-state').textContent = legacy ? '旧记录已保留' : viewMode() ? '视图自动保存' : dirty() ? '规则未保存' : '规则已保存';
   $('save').hidden = viewMode() || legacy;
@@ -440,9 +439,10 @@ function updateStatus() {
   $('compute-status').hidden = opening || !computeState;
   $('compute-message').textContent = computeState?.kind === 'layout' ? '正在后台排版…' : '正在后台重绘连线…';
 }
-const relationMode = relation => relation === 'specializes' ? 'specializes' : relation === 'random' ? 'random' : relation === 1 ? 'positive' : 'negative';
+// is-a 不再有连线模式：父概念在概念面板与对话框中指定，relationMode 只服务影响连线。
+const relationMode = relation => relation === 'specializes' ? 'select' : relation === 'random' ? 'random' : relation === 1 ? 'positive' : 'negative';
 function updateRelationTools() {
-  for (const [mode, relation] of [['positive', 1], ['negative', -1], ['random', 'random'], ['specializes', 'specializes']]) {
+  for (const [mode, relation] of [['positive', 1], ['negative', -1], ['random', 'random']]) {
     const selected = lastRelation === relation;
     const control = $(mode + '-tool'); control.setAttribute('aria-checked', String(selected)); control.classList.toggle('is-selected', selected); control.tabIndex = selected ? 0 : -1;
   }
@@ -1159,7 +1159,8 @@ function inspect() {
           void updateGlobalRule(id, item => {
             if (value === 'specializes') { item.relation = 'specializes'; delete item.sign; delete item.inheritance; delete item.sourceQualifiers; delete item.targetQualifiers; }
             else { item.sign = value === 'random' ? 'random' : Number(value); item.relation = 'influence'; item.inheritance ??= { mode: 'none' }; }
-          }).then(() => selectRelation(value === 'specializes' || value === 'random' ? value : Number(value), { beginLink: false })).catch(showError);
+          // 转成 is-a 时不更新默认连线类型：is-a 只能由父概念选择器管理，不再有连线模式。
+        }).then(() => { if (value !== 'specializes') selectRelation(value === 'random' ? 'random' : Number(value), { beginLink: false }); }).catch(showError);
         },
       });
       if (originalEdge.relation !== 'specializes') {
@@ -1565,7 +1566,6 @@ function setMode(mode) {
   if (!definitionMode() || mode === 'select') {
     canvas.setMode(mode);
     $('tool-hint').textContent = legacy ? '旧叠加只读 · 左键平移 · Shift+左键框选' : mode === 'select' ? '左键平移 · Shift+左键框选 · 双击节点连线 · Shift 增选'
-      : mode === 'specializes' ? '先点具体概念，再点上位概念 · 特化 / 是某种，不写影响符号'
         : mode === 'random' ? '先点影响源，再点目标 · 目标可能增加或减少，不表示概率'
           : '先点击影响源，再点击受影响节点 · 写入当前机制';
   }
@@ -2175,13 +2175,13 @@ $('toggle-inspector').onclick = () => {
 $('diagnostics').onclick = () => { selection = { type: 'diagnostics' }; inspect(); };
 $('dismiss-error').onclick = () => { $('error').hidden = true; };
 $('close-dialog').onclick = $('cancel-dialog').onclick = () => $('dialog').close('cancel');
-for (const [mode, relation] of [['positive', 1], ['negative', -1], ['random', 'random'], ['specializes', 'specializes']]) {
+for (const [mode, relation] of [['positive', 1], ['negative', -1], ['random', 'random']]) {
   const control = $(mode + '-tool');
   control.onclick = () => selectRelation(relation);
   control.onkeydown = event => {
     if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' ', 'Enter'].includes(event.key)) return;
     event.preventDefault();
-    const choices = [['positive', 1], ['negative', -1], ['random', 'random'], ['specializes', 'specializes']];
+    const choices = [['positive', 1], ['negative', -1], ['random', 'random']];
     const index = choices.findIndex(([key]) => key === mode);
     const target = ['ArrowLeft', 'ArrowUp'].includes(event.key) ? choices[(index + choices.length - 1) % choices.length] : ['ArrowRight', 'ArrowDown'].includes(event.key) ? choices[(index + 1) % choices.length] : [mode, relation];
     selectRelation(target[1]); $(target[0] + '-tool').focus();

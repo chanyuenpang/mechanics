@@ -117,6 +117,11 @@ test('操作控件使用统一 SVG 图标，关系记号仍作为领域信息保
   assert.match(app, /resourceIcon\.append\(icon\(kind === 'view' \? 'view' : 'mechanic'\)\)/);
   assert.match(app, /projectIcon\.append\(icon\(item\.pinned \? 'pin' : 'project'\)\)/);
   assert.match(html, /id="positive-tool"[^>]*>＋→<\/button>/);
+  // is-a 不再有连线工具：工具条只保留三种影响连线，页面里不再有任何 specializes 工具引用。
+  assert.match(html, /id="random-tool"[^>]*>？→<\/button><\/div>/);
+  assert.doesNotMatch(html, /specializes-tool/);
+  assert.doesNotMatch(app, /specializes-tool/);
+  assert.match(app, /const relationMode = relation => relation === 'specializes' \? 'select' :/);
 });
 
 test('资源标签双击关闭，当前草稿仍通过既有确认流程处理', () => {
