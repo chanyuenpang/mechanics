@@ -1,7 +1,7 @@
 import { lstat, realpath, open, readdir, mkdir } from 'node:fs/promises';
 import { resolve, relative, isAbsolute, sep } from 'node:path';
 import { createHash } from 'node:crypto';
-import { assertDocument, validateWorkspace, ContractError } from '../domain/validate.mjs';
+import { assertDocument, validateWorkspace, validateMechanicResource, validateViewResource, workspaceValidationCore, ContractError } from '../domain/validate.mjs';
 import { resolvePresentationReferences } from '../domain/presentation.mjs';
 import { compatibilityWorkspace } from './compatibility.mjs';
 import { projectContext, projectRootFromWorkspace } from './project-context.mjs';
@@ -24,12 +24,22 @@ export function withoutPresentation(value) {
     .map(([key, item]) => [key, withoutPresentation(item)]));
 }
 // 最近打开快照属于界面状态，不是工作区语义。
-function semanticWorkspaceDocument(document) {
+// 提交后的版本重算（store 的 is-a 写入路径）必须用同一份归一化文本，因此导出。
+export function semanticWorkspaceDocument(document) {
   if (document?.kind !== 'workspace') return withoutPresentation(document);
   const { lastView, ...rest } = document;
   return withoutPresentation(rest);
 }
 // 每资源语义版本：写入服务用它做按资源的冲突判定，Agent 工具用它做 compare-and-swap 句柄。
+// 工作区版本 = 全部文件的语义快照 + 可见目录集合的哈希。
+// 提交后可以用「提交前的快照 + 本次改动的文件」重算，不必重读整个工作区。
+export function workspaceRevision({ snapshots, directories }) {
+  const hash = createHash('sha256');
+  for (const [file, snapshot] of [...snapshots].sort(([a], [b]) => a.localeCompare(b))) hash.update(JSON.stringify([file, snapshot]));
+  // 空目录变化也会改变文件树版本，避免目录操作基于旧树执行；受管工具目录除外。
+  hash.update(JSON.stringify([...directories].filter(directory => directory !== managedToolDirectory)));
+  return hash.digest('hex');
+}
 export function workspaceResourceRevisions(workspace) {
   const byId = documents => Object.fromEntries([...documents]
     .sort((a, b) => a.id.localeCompare(b.id))
@@ -156,19 +166,18 @@ export async function readWorkspace(workspaceRoot, { context = null, isolateReso
     throw new ContractError('PROJECT_CONTEXT_MISMATCH', '工作区不属于当前项目上下文：' + root);
   }
   // 基础资料是项目的唯一核心合同；机制图和视图只是引用这些事实的阅读、编辑资源。
-  // 兼容解码完成后仍以当前跨文件规则验证核心拓扑。
-  validateWorkspace({ manifest, definitions, rules, mechanics: [], views: [], files: [] }, { validateResourceReferences: false });
+  // 兼容解码完成后仍以当前跨文件规则验证核心拓扑——而且只验证这一次：
+  // 逐资源校验改为拿着核心索引检查自身结构与引用，避免对每张机制图重跑一遍完整校验。
+  const core = workspaceValidationCore({ manifest, definitions, rules });
   const mechanics = [], views = [], mechanicFiles = [], viewFiles = [];
   const resourceDiagnostics = [];
-  const resourceManifest = { ...manifest, compositions: [] };
-  delete resourceManifest.exportSelections;
-  delete resourceManifest.lastView;
-  const validateMechanic = (document, file) => validateWorkspace({ manifest: resourceManifest, definitions, rules,
-    mechanics: [document], views: [], files: [{ kind: 'mechanic', id: document.id, path: file }] });
   for (const item of compatible.mechanics) {
     const { document, path: file } = item;
-    try { assertDocument(document, 'mechanic', file); validateMechanic(document, file); mechanics.push(document); mechanicFiles.push(file); }
-    catch (error) {
+    try {
+      assertDocument(document, 'mechanic', file);
+      validateMechanicResource(core, document, file);
+      mechanics.push(document); mechanicFiles.push(file);
+    } catch (error) {
       if (!isolateResources) throw error;
       resourceDiagnostics.push({ kind: 'mechanic', path: file, code: error.code ?? 'RESOURCE_INVALID', message: error.message });
     }
@@ -177,11 +186,7 @@ export async function readWorkspace(workspaceRoot, { context = null, isolateReso
     const { document, path: file } = item;
     try {
       assertDocument(document, 'view', file);
-      validateWorkspace({ manifest: resourceManifest, definitions, rules, mechanics, views: [...views, document], files: [
-        ...mechanics.map((item, index) => ({ kind: 'mechanic', id: item.id, path: mechanicFiles[index] })),
-        ...views.map((item, index) => ({ kind: 'view', id: item.id, path: viewFiles[index] })),
-        { kind: 'view', id: document.id, path: file }
-      ] });
+      validateViewResource(core, document, file);
       views.push(document); viewFiles.push(file);
     } catch (error) {
       if (!isolateResources) throw error;
@@ -206,13 +211,13 @@ export async function readWorkspace(workspaceRoot, { context = null, isolateReso
   }
   const validated = validateWorkspace({ manifest: presentationManifest, definitions, rules, mechanics, views, files });
   const { workspace, diagnostics: presentationDiagnostics } = resolvePresentationReferences({ ...validated, files });
-  const hash = createHash('sha256');
-  for (const [file, snapshot] of [...snapshots].sort(([a], [b]) => a.localeCompare(b))) hash.update(JSON.stringify([file, snapshot]));
-  // 空目录变化也会改变文件树版本，避免目录操作基于旧树执行；受管工具目录除外。
-  hash.update(JSON.stringify(directories.filter(directory => directory !== managedToolDirectory)));
-  return { ...workspace, projectRoot: context.projectRoot, workspaceRoot: root, agentExportRoot: context.exportRoot,
+  const result = { ...workspace, projectRoot: context.projectRoot, workspaceRoot: root, agentExportRoot: context.exportRoot,
     agentExportPath: context.agentExportPath, agentExportStatus: context.exportStatus, agentExportError: context.exportError,
     files, directories, presentationDiagnostics: [...compatible.compatibilityDiagnostics, ...presentationDiagnostics], resourceDiagnostics, compatibilityMode: compatible.compatibilityMode,
     workspaceState: resourceDiagnostics.length ? 'degraded' : 'ready',
-    revision: hash.digest('hex'), resourceRevisions: workspaceResourceRevisions(workspace) };
+    revision: workspaceRevision({ snapshots, directories }), resourceRevisions: workspaceResourceRevisions(workspace) };
+  // 每份文件的语义快照只供同进程的写入路径在提交后重算版本使用：
+  // 定义为不可枚举，既不进入 HTTP 响应，也不随 JSON 序列化复制一遍。
+  Object.defineProperty(result, 'fileSnapshots', { value: snapshots, enumerable: false });
+  return result;
 }

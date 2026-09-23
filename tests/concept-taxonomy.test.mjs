@@ -75,6 +75,11 @@ test('更换父概念在一次提交里写 rules 并清理 pinnedRuleIds，工�
   const onDiskMechanic = JSON.parse(await readFile(join(root, reopened.files.find(file => file.kind === 'mechanic' && file.id === mechanic.id).path), 'utf8'));
   assert.equal(onDiskMechanic.pinnedRuleIds.includes('damage-2-failure'), false);
   assert.ok(saved.revision !== workspace.revision);
+  // 提交后不重读整个工作区，而是用提交前的文件快照 + 本次改动的文件重算版本：
+  // 这里锁定重算结果与下一次真实读取完全一致，否则客户端下一次写入会误报 REVISION_CONFLICT。
+  assert.equal(saved.revision, reopened.revision);
+  assert.deepEqual(saved.resourceRevisions, reopened.resourceRevisions);
+  assert.equal(Object.keys(saved).includes('fileSnapshots'), false, '内部快照不得进入响应');
 });
 
 test('新建概念与 is-a 规则可以同一次提交，非法分类零写入', async t => {

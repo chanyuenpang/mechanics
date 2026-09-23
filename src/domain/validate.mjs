@@ -52,6 +52,48 @@ function validateRuleQualifiers(qualifiers, nodes, location) {
   }
 }
 
+// 读取路径按资源逐个校验时，核心（清单/概念/规则）只需校验一次：
+// 之前对每张机制图都重跑一次完整 validateWorkspace，代价是 O(资源数 × 规则数)——
+// 在 1144 概念 / 3047 规则 / 199 机制图的项目上，读一次工作区要为此多花约 2.7 秒。
+// 返回的索引就是逐资源校验需要的全部核心事实。
+export function workspaceValidationCore({ manifest, definitions, rules }) {
+  const validated = validateWorkspace({ manifest, definitions, rules, mechanics: [], views: [], files: [] }, { validateResourceReferences: false });
+  return { manifest: validated.manifest, definitions: validated.definitions, rules: validated.rules,
+    nodes: new Set(definitions.nodes.map(node => node.id)),
+    ruleIds: new Set(rules.rules.map(rule => rule.id)),
+    mechanicIds: new Set(), viewIds: new Set() };
+}
+
+function assertResourceIdentity(core, document) {
+  const problem = semanticIdProblem(document.id);
+  if (problem) throw new ContractError('INVALID_SEMANTIC_ID', `持久化领域 ID ${problem}：${document.id}`);
+  if (document.workspaceId !== core.manifest.id) throw new ContractError('WORKSPACE_MISMATCH', '文档所属工作区与清单不一致');
+}
+
+// 机制图资源：只校验自身文档结构、工作区归属与对核心 ID 的引用。
+export function validateMechanicResource(core, document, location = document?.id) {
+  assertDocument(document, 'mechanic', location);
+  assertResourceIdentity(core, document);
+  document.focusNodeIds.forEach(id => requireReference(core.nodes, id, location));
+  document.pinnedRuleIds.forEach(id => requireReference(core.ruleIds, id, location));
+  core.mechanicIds.add(document.id);
+  return document;
+}
+
+// 视图资源：在前者基础上增加机制注册（必须指向已校验的机制图）与视图自身 ID 唯一性。
+export function validateViewResource(core, document, location = document?.id) {
+  assertDocument(document, 'view', location);
+  assertResourceIdentity(core, document);
+  if (core.viewIds.has(document.id)) throw new ContractError('DUPLICATE_ID', `视图文件 中 ID 重复：${document.id}`);
+  const registered = registeredMechanicIds(document);
+  if (new Set(registered).size !== registered.length) throw new ContractError('DUPLICATE_ID', `${location} 中机制注册重复`);
+  registered.forEach(id => requireReference(core.mechanicIds, id, location));
+  document.focusNodeIds.forEach(id => requireReference(core.nodes, id, location));
+  document.pinnedRuleIds.forEach(id => requireReference(core.ruleIds, id, location));
+  core.viewIds.add(document.id);
+  return document;
+}
+
 export function validateWorkspace({ manifest, definitions, rules, mechanics, views = [], files = [] }, { validateResourceReferences = true } = {}) {
   assertDocument(manifest, 'workspace', 'workspace.json');
   assertDocument(definitions, 'definitions', manifest.definitions);
@@ -124,17 +166,21 @@ export function validateWorkspace({ manifest, definitions, rules, mechanics, vie
       seen.set(id, binding.id);
     }
   }
+  // 规则 ID 集合只建一次：放进机制图循环会让代价变成 O(资源数 × 规则数)
+  // （199 张机制图 × 3047 条规则时约半秒），这是纯重复工作。
+  const ruleIds = new Set(rules.rules.map(rule => rule.id));
   if (validateResourceReferences) for (const graph of mechanics) {
     graph.focusNodeIds.forEach(id => requireReference(nodes, id, graph.id));
-    graph.pinnedRuleIds.forEach(id => requireReference(new Set(rules.rules.map(rule => rule.id)), id, graph.id));
+    graph.pinnedRuleIds.forEach(id => requireReference(ruleIds, id, graph.id));
   }
   unique(manifest.compositions, '叠加组合');
   const viewIds = unique(views, '视图文件');
   if (!validateResourceReferences) return { manifest, definitions, rules, mechanics, views };
   const exportSelections = manifest.exportSelections;
   if (exportSelections !== undefined) {
+    const mechanicPaths = new Map(files.filter(item => item.kind === 'mechanic').map(item => [item.id, item.path]));
     const mechanismFolders = new Map(mechanics.map(graph => {
-      const file = files.find(item => item.kind === 'mechanic' && item.id === graph.id)?.path ?? '';
+      const file = mechanicPaths.get(graph.id) ?? '';
       const parent = file.includes('/') ? file.slice(0, file.lastIndexOf('/')) : '';
       return [graph.id, parent === 'mechanics' ? '' : parent.startsWith('mechanics/') ? parent.slice('mechanics/'.length) : parent];
     }));
@@ -175,13 +221,14 @@ export function validateWorkspace({ manifest, definitions, rules, mechanics, vie
     // 坐标、折叠状态与路由缓存属于展示状态；读取时由 presentation resolver
     // 按当前语义图过滤。它们绝不能升级为领域完整性失败。
   }
+  const viewPaths = new Map(files.filter(file => file.kind === 'view').map(file => [file.id, file.path]));
   for (const view of views) {
-    const location = files.find(file => file.kind === 'view' && file.id === view.id)?.path ?? `视图 ${view.id}`;
+    const location = viewPaths.get(view.id) ?? `视图 ${view.id}`;
     const registered = registeredMechanicIds(view);
     if (new Set(registered).size !== registered.length) throw new ContractError('DUPLICATE_ID', `${location} 中机制注册重复`);
     registered.forEach(id => requireReference(graphIds, id, location));
     view.focusNodeIds.forEach(id => requireReference(nodes, id, location));
-    view.pinnedRuleIds.forEach(id => requireReference(new Set(rules.rules.map(rule => rule.id)), id, location));
+    view.pinnedRuleIds.forEach(id => requireReference(ruleIds, id, location));
   }
   return { manifest, definitions, rules, mechanics, views };
 }

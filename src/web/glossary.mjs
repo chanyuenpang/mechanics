@@ -54,6 +54,9 @@ export function conceptReferencePickerCandidates(nodes, { query = '', kind = 'qu
   return matchingConcepts(eligible, query);
 }
 
+// 候选一次最多渲染这么多行：概念上千时，把全部匹配塞进 DOM 既慢又没法看，
+// 剩下的用一行提示引导继续输入缩小范围。
+export const CONCEPT_REFERENCE_LIMIT = 40;
 let conceptReferencePickerIndex = 0;
 export class ConceptReferencePicker {
   constructor({ nodes, currentId, kind, value = '', excluded = null, placeholder = '', ariaLabel, onSelect, clearOption = null }) {
@@ -78,6 +81,10 @@ export class ConceptReferencePicker {
     const clear = this.clearOption && this.value ? [{ clear: true, label: this.clearOption }] : [];
     return [...clear, ...this.candidates().map(node => ({ node }))];
   }
+  visibleEntries() {
+    const entries = this.entries();
+    return { entries: entries.slice(0, CONCEPT_REFERENCE_LIMIT), total: entries.length };
+  }
   syncValue() { this.input.value = this.value ? conceptReferencePresentation(this.value, this.nodes()) : ''; }
   open() {
     if (this.list.hidden) {
@@ -93,7 +100,7 @@ export class ConceptReferencePicker {
   }
   clear() { this.value = ''; this.query = ''; this.close(); this.onSelect(null); }
   draw() {
-    const entries = this.entries(); this.list.replaceChildren();
+    const { entries, total } = this.visibleEntries(); this.list.replaceChildren();
     if (!entries.length) { this.activeIndex = -1; this.input.removeAttribute('aria-activedescendant'); this.list.append(element('div', '无匹配概念', 'concept-reference-empty')); return; }
     if (this.activeIndex >= entries.length) this.activeIndex = entries.length - 1;
     for (const [index, entry] of entries.entries()) {
@@ -105,6 +112,7 @@ export class ConceptReferencePicker {
       option.onmousedown = event => { event.preventDefault(); entry.clear ? this.clear() : this.select(entry.node); };
       this.list.append(option);
     }
+    if (total > entries.length) this.list.append(element('div', `还有 ${total - entries.length} 个候选，继续输入以缩小范围`, 'concept-reference-more'));
     if (this.activeIndex >= 0) this.input.setAttribute('aria-activedescendant', this.id + '-' + this.activeIndex);
     else this.input.removeAttribute('aria-activedescendant');
   }
@@ -112,14 +120,14 @@ export class ConceptReferencePicker {
   keydown(event) {
     if (event.key === 'Escape') { event.preventDefault(); this.close(); return; }
     if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
-      event.preventDefault(); this.open(); const last = this.entries().length - 1;
+      event.preventDefault(); this.open(); const last = this.visibleEntries().entries.length - 1;
       if (event.key === 'ArrowDown') this.activeIndex = Math.min(last, this.activeIndex + 1);
       else if (event.key === 'ArrowUp') this.activeIndex = Math.max(0, this.activeIndex - 1);
       else this.activeIndex = event.key === 'Home' ? 0 : last;
       this.draw(); return;
     }
     if (event.key !== 'Enter' || this.activeIndex < 0) return;
-    const entry = this.entries()[this.activeIndex];
+    const entry = this.visibleEntries().entries[this.activeIndex];
     if (!entry) return;
     event.preventDefault();
     if (entry.clear) this.clear(); else this.select(entry.node);
@@ -359,7 +367,7 @@ export class ConceptEditor {
     this.root.replaceChildren(title, identity, discovery, ...(this.parentOptions ? [this.parentField()] : []), customData, permission, error, actions); this.drawDuplicates();
   }
   // is-a 父概念是可检索的组合框：候选由调用方排除自身与更具体的后代后传入，
-  // 当前父概念留在候选里并显示为已选中；「清除」是显式动作，不再是下拉里的一个选项。
+  // 当前父概念留在候选里并显示为已选中；有当前值时列表首项就是清除，点它即清除，不做二次确认。
   parentField() {
     const wrap = element('fieldset', undefined, 'concept-editor-taxonomy'); wrap.append(element('legend', 'is-a 父概念'));
     const field = element('label', undefined, 'field');
@@ -452,7 +460,8 @@ export class ConceptPicker {
   }
   drawResults() {
     const list = this.get('.concept-results'); list.replaceChildren();
-    for (const node of matchingConcepts(this.allNodes(), this.session.query)) {
+    const matches = matchingConcepts(this.allNodes(), this.session.query), shown = matches.slice(0, CONCEPT_REFERENCE_LIMIT);
+    for (const node of shown) {
       const label = element('label', undefined, 'choice'), input = element('input'); input.type = 'checkbox';
       const used = this.referenced.includes(node.id), fresh = this.session.candidates.some(item => item.id === node.id);
       input.disabled = used; input.checked = used || this.session.selected.has(node.id); input.setAttribute('aria-label', '引用 ' + node.label);
@@ -462,6 +471,8 @@ export class ConceptPicker {
       list.append(label);
     }
     if (!list.childElementCount) list.append(element('p', '没有匹配概念', 'note'));
+    // 概念上千时不能把全部匹配塞进列表：先给最相关的一屏，再提示继续输入。
+    if (matches.length > shown.length) list.append(element('p', `还有 ${matches.length - shown.length} 个匹配概念，继续输入以缩小范围`, 'note concept-results-more'));
     if (this.allowCreate) this.get('.concept-new').replaceChildren(icon('plus'), document.createTextNode(this.session.query.trim() ? '新建「' + this.session.query.trim() + '」' : '新建概念'));
     this.drawPicked(); this.updateStatus();
   }

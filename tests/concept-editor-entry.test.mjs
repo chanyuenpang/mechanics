@@ -55,6 +55,12 @@ test('is-a 选择器打开时保留当前值的文字，清除是候选列表的
   assert.match(picker, /option\.onmousedown = event => \{ event\.preventDefault\(\); entry\.clear \? this\.clear\(\) : this\.select\(entry\.node\); \};/);
   assert.match(picker, /if \(entry\.clear\) this\.clear\(\); else this\.select\(entry\.node\);/);
   assert.doesNotMatch(picker, /requestClear|concept-reference-confirm|this\.input\.onblur/);
+  // 概念上千时不能把全部匹配塞进 DOM：只渲染前 CONCEPT_REFERENCE_LIMIT 项并提示继续输入。
+  assert.match(glossary, /export const CONCEPT_REFERENCE_LIMIT = 40;/);
+  assert.match(picker, /visibleEntries\(\) \{\n    const entries = this\.entries\(\);\n    return \{ entries: entries\.slice\(0, CONCEPT_REFERENCE_LIMIT\), total: entries\.length \};/);
+  assert.match(picker, /还有 \$\{total - entries\.length\} 个候选，继续输入以缩小范围/);
+  assert.match(glossary, /const matches = matchingConcepts\(this\.allNodes\(\), this\.session\.query\), shown = matches\.slice\(0, CONCEPT_REFERENCE_LIMIT\)/);
+  assert.match(glossary, /还有 \$\{matches\.length - shown\.length\} 个匹配概念，继续输入以缩小范围/);
   // 列表项只显示名称与稳定 ID，不把描述当预览混进结果。
   assert.match(picker, /option\.append\(element\('strong', entry\.node\.label\), element\('small', entry\.node\.id\)\)/);
 });

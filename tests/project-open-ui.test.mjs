@@ -60,6 +60,10 @@ test('概念详情的 is-a 开关是复选框，与颜色分区分离且只改�
   assert.match(app, /const parentCandidates = conceptId => isaParentCandidates\(workspace\.definitions\.nodes, workspace\.rules\.rules, conceptId\)/);
   assert.match(app, /parentOptions: parentCandidates\(id\), parentId: workspace\.rules\.rules\.find/);
   assert.match(app, /parentOptions: parentCandidates\(null\),/);
+  // 写入后必须重画：write() 只刷新侧栏，is-a 改动不重画就要用户自己刷新页面。
+  const setParent = app.slice(app.indexOf('async function setConceptParent'), app.indexOf('async function setEdgeQualifiers'));
+  assert.match(setParent, /await write\(revision => api\('\/api\/concept-taxonomy'/);
+  assert.match(setParent, /\n  render\(\);/);
   assert.match(app, /api\('\/api\/concept-taxonomy', \{ revision, definitions, rules \}\)/);
   assert.match(app, /api\('\/api\/concept-taxonomy', \{ revision, \.\.\.\(definitionsChanged/);
 });

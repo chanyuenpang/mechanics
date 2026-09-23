@@ -1,7 +1,7 @@
 import { realpath, rename, readdir, rmdir, lstat, unlink, readFile } from 'node:fs/promises';
 import { resolve, relative, posix, dirname } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { readWorkspace, readDocument, discover, assertRelativeFile, ensureWorkspaceDirectory, workspacePath, workspaceResourceRevisions } from './workspace.mjs';
+import { readWorkspace, readDocument, discover, assertRelativeFile, ensureWorkspaceDirectory, workspacePath, workspaceResourceRevisions, workspaceRevision, semanticWorkspaceDocument } from './workspace.mjs';
 import { encode, commitFile, commitFiles, acquireWorkspaceLock } from './files.mjs';
 import { planV7ToV8Migration, planV8ToV9Migration, planV9ToV10Migration, planV10ToV11Migration, planV11ToV12Migration, planV12ToV13Migration, planV9DanglingNodeRepair } from './migration.mjs';
 import { assertDocument, validateWorkspace, ContractError } from '../domain/validate.mjs';
@@ -208,10 +208,15 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
             const context = await projectContext(target.workspace.projectRoot, { manifest: target.workspace.manifest, createExportRoot: true });
             const candidate = { ...target.workspace, agentExportRoot: context.exportRoot, agentExportStatus: 'available' };
             await publishCatalog(context.exportRoot, candidate);
-            // 发布后的确认属于后台检查；它可以完整读取，但不阻塞项目打开。
-            const latest = await refreshSnapshot();
-            if (publicationKey(latest) === target.key) publication = { key: target.key, state: 'current' };
-            else pendingPublication ??= { key: publicationKey(latest), workspace: latest };
+            // 发布后的确认属于后台检查：会话快照已经由每次写入刷新，键一致就直接确认。
+            // 旧实现在这里无条件重读整个工作区，于是每次保存后都有一段后台全量读取，
+            // 在 199 张机制图的项目上会让紧接着的交互明显变卡。
+            if (workspaceSnapshot && publicationKey(workspaceSnapshot) === target.key) publication = { key: target.key, state: 'current' };
+            else {
+              const latest = await refreshSnapshot();
+              if (publicationKey(latest) === target.key) publication = { key: target.key, state: 'current' };
+              else pendingPublication ??= { key: publicationKey(latest), workspace: latest };
+            }
           } catch (error) {
             publication = { key: target.key, state: 'failed', error };
           }
@@ -805,8 +810,26 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
       ...views.map(view => ({ path: workspace.files.find(file => file.kind === 'view' && file.id === view.id)?.path, document: view })),
     ];
     if (changes.some(change => !change.path)) fail('CONCEPT_TAXONOMY_INVALID', 'is-a 提交无法定位全部目标文件');
-    await commitFiles(root, changes, { verify: () => readWorkspace(root) });
-    return refreshCatalog();
+    // commitFiles 已经逐文件回读并逐字节比对；这里只把候选整体再校验一次。
+    // 旧实现用 verify: () => readWorkspace(root) 重读整个工作区——is-a 只改 rules 与少数
+    // 固定引用它的机制图，在 199 张机制图的项目上这一次重读要多花约 0.5 秒。
+    // 事务全程持有工作区锁，其他写入者无法在提交窗口内改动未涉及的文件。
+    await commitFiles(root, changes, { verify: async () => {
+      for (const change of changes) {
+        const { document } = await readDocument(root, change.path);
+        if (JSON.stringify(document) !== JSON.stringify(change.document)) throw new Error('回读内容与提交不一致：' + change.path);
+      }
+      validateWorkspace(workspace);
+    } });
+    // 提交后不再重读整个工作区：用提交前的文件快照 + 本次改动的文件重算工作区版本，
+    // 再用已校验的内存候选重建会话投影与 Agent 文档快照。
+    // 已用测试锁定「这里算出的 revision 与下一次真实读取一致」。
+    const snapshots = new Map(workspace.fileSnapshots ?? []);
+    for (const change of changes) snapshots.set(change.path, JSON.stringify(semanticWorkspaceDocument(change.document)));
+    workspace.revision = workspaceRevision({ snapshots, directories: workspace.directories });
+    workspace.resourceRevisions = workspaceResourceRevisions(workspace);
+    rememberCatalog(workspace);
+    return withExportPublication(workspace, schedulePublication(workspace));
   });
   const removeMechanicNodes = body => write(async () => {
     const { mechanicId, nodeIds } = body ?? {};

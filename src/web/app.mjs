@@ -581,6 +581,9 @@ async function setConceptParent(conceptId, parentId) {
   const nextRules = setSpecializesParent(workspace.rules.rules, conceptId, parentId);
   if (nextRules === workspace.rules.rules) return false;
   await write(revision => api('/api/concept-taxonomy', { revision, rules: { ...clone(workspace.rules), rules: nextRules } }));
+  // write() 只刷新侧栏；is-a 会改变画布投影、节点标签与详情栏，必须重画才能立即看到结果，
+  // 不能等用户刷新页面。
+  render();
   return true;
 }
 async function setEdgeQualifiers(id, side, qualifiers) {
@@ -1247,7 +1250,7 @@ function inspect() {
   });
   const isARule = workspace.rules.rules.find(item => item.relation === 'specializes' && item.source === node.id);
   // is-a 只有一个写入口：这里的父概念选择器（可检索组合框）。
-  // 候选排除自身与更具体的后代；当前父概念留在候选里并显示为已选中，清除是独立动作。
+  // 候选排除自身与更具体的后代；当前父概念留在候选里并显示为已选中，有当前值时列表首项即「清除 is-a 父概念」。
   if (!legacy) {
     const section = el('div', undefined, 'detail node-taxonomy');
     section.append(el('strong', 'is-a 父概念'));
@@ -1326,6 +1329,8 @@ async function editConcept(id) {
   if (!node) throw new Error('概念已不存在，请重新读取。');
   let fields, editor, blocked = false;
   try {
+    // 与「新建概念」同一宽度：不加这个类会回落到默认的窄对话框，把两列编辑器挤在一起。
+    $('dialog').classList.add('concept-dialog');
     await dialog('修改概念', container => {
       fields = el('div'); container.append(fields);
       editor = new ConceptEditor(fields, { mode: 'edit', node, nodes: () => workspace.definitions.nodes, tagDefinitions: workspace.definitions.tagDefinitions ?? [],
@@ -1352,7 +1357,7 @@ async function editConcept(id) {
       } finally { fields.disabled = false; }
       conceptEditDirty = false; render();
     }, '保存概念', { settled: () => { $('confirm-dialog').disabled = blocked; } });
-  } finally { conceptEditDirty = false; $('dialog-content').onkeydown = null; }
+  } finally { conceptEditDirty = false; $('dialog-content').onkeydown = null; $('dialog').classList.remove('concept-dialog'); }
 }
 async function removeSelection() {
   if (!selection || busy() || legacy || autosave.blocked) return;
