@@ -56,8 +56,8 @@ export function conceptReferencePickerCandidates(nodes, { query = '', kind = 'qu
 
 let conceptReferencePickerIndex = 0;
 export class ConceptReferencePicker {
-  constructor({ nodes, currentId, kind, value = '', excluded = null, placeholder = '', ariaLabel, onSelect, clearLabel = '清除', keepLabel = '保留', confirmText = '要清除这个 is-a 父概念吗？' }) {
-    Object.assign(this, { nodes, currentId, kind, value, excluded, onSelect, clearLabel, keepLabel, confirmText, activeIndex: -1, query: '' });
+  constructor({ nodes, currentId, kind, value = '', excluded = null, placeholder = '', ariaLabel, onSelect, clearOption = null }) {
+    Object.assign(this, { nodes, currentId, kind, value, excluded, onSelect, clearOption, activeIndex: -1, query: '' });
     this.id = 'concept-reference-options-' + ++conceptReferencePickerIndex;
     this.root = element('div', undefined, 'concept-reference-picker');
     this.input = element('input'); this.input.type = 'text'; this.input.setAttribute('role', 'combobox');
@@ -65,52 +65,44 @@ export class ConceptReferencePicker {
     this.input.setAttribute('aria-controls', this.id); this.input.setAttribute('aria-expanded', 'false');
     if (placeholder) this.input.placeholder = placeholder;
     this.list = element('div', undefined, 'concept-reference-list'); this.list.id = this.id; this.list.setAttribute('role', 'listbox'); this.list.hidden = true;
-    // 输入被清空不能静默改关系：先就地问用户「清除」还是「保留」。
-    this.confirm = element('div', undefined, 'concept-reference-confirm'); this.confirm.hidden = true;
-    this.root.append(this.input, this.list, this.confirm); this.syncValue();
+    this.root.append(this.input, this.list); this.syncValue();
     this.input.onfocus = () => this.open();
     // 过滤词与输入框文字分开：打开时输入框保留当前选中概念的展示文字（它唯一标识当前值），
     // 列表仍展示全部候选，用户一打字就换成新的过滤词。
-    this.input.oninput = () => { this.query = this.input.value; this.activeIndex = -1; this.confirm.hidden = true; this.draw(); };
+    this.input.oninput = () => { this.query = this.input.value; this.activeIndex = -1; this.draw(); };
     this.input.onkeydown = event => this.keydown(event);
-    this.input.onblur = () => this.requestClear();
   }
   candidates() { return conceptReferencePickerCandidates(this.nodes(), { query: this.query, kind: this.kind, currentId: this.currentId, excluded: this.excluded }); }
+  // 有当前值时，候选列表的第一项就是清除：点它即清除，不需要二次确认。
+  entries() {
+    const clear = this.clearOption && this.value ? [{ clear: true, label: this.clearOption }] : [];
+    return [...clear, ...this.candidates().map(node => ({ node }))];
+  }
   syncValue() { this.input.value = this.value ? conceptReferencePresentation(this.value, this.nodes()) : ''; }
   open() {
     if (this.list.hidden) {
       this.query = ''; this.input.select?.();
     }
-    this.confirm.hidden = true; this.list.hidden = false;
+    this.list.hidden = false;
     this.input.setAttribute('aria-expanded', 'true'); this.draw();
   }
   close() {
-    this.list.hidden = true; this.confirm.hidden = true;
+    this.list.hidden = true;
     this.input.setAttribute('aria-expanded', 'false'); this.input.removeAttribute('aria-activedescendant');
     this.query = ''; this.syncValue();
   }
-  // 已有父概念、输入被清空：就地问一次，清除必须由用户明确点按钮。
-  requestClear() {
-    if (!this.value || this.input.value.trim() !== '') return false;
-    this.list.hidden = true; this.confirm.replaceChildren();
-    this.confirm.append(element('p', this.confirmText, 'note'));
-    const actions = element('div', undefined, 'concept-reference-confirm-actions');
-    const clear = action(this.clearLabel, () => { this.value = ''; this.query = ''; this.confirm.hidden = true; this.onSelect(null); }, 'danger');
-    const keep = action(this.keepLabel, () => { this.confirm.hidden = true; this.syncValue(); });
-    actions.append(clear, keep); this.confirm.append(actions); this.confirm.hidden = false;
-    return true;
-  }
+  clear() { this.value = ''; this.query = ''; this.close(); this.onSelect(null); }
   draw() {
-    const candidates = this.candidates(); this.list.replaceChildren();
-    if (!candidates.length) { this.activeIndex = -1; this.input.removeAttribute('aria-activedescendant'); this.list.append(element('div', '无匹配概念', 'concept-reference-empty')); return; }
-    if (this.activeIndex >= candidates.length) this.activeIndex = candidates.length - 1;
-    for (const [index, node] of candidates.entries()) {
-      const option = element('div', undefined, 'concept-reference-option'); option.id = this.id + '-' + index;
+    const entries = this.entries(); this.list.replaceChildren();
+    if (!entries.length) { this.activeIndex = -1; this.input.removeAttribute('aria-activedescendant'); this.list.append(element('div', '无匹配概念', 'concept-reference-empty')); return; }
+    if (this.activeIndex >= entries.length) this.activeIndex = entries.length - 1;
+    for (const [index, entry] of entries.entries()) {
+      const option = element('div', undefined, 'concept-reference-option' + (entry.clear ? ' is-clear' : '')); option.id = this.id + '-' + index;
       option.setAttribute('role', 'option'); option.setAttribute('aria-selected', String(index === this.activeIndex));
-      option.title = node.description;
       // 列表只显示名称与稳定 ID：描述是长文本，作为预览出现时看起来不像匹配结果。
-      option.append(element('strong', node.label), element('small', node.id));
-      option.onmousedown = event => { event.preventDefault(); this.select(node); };
+      if (entry.clear) option.append(element('strong', entry.label));
+      else { option.title = entry.node.description; option.append(element('strong', entry.node.label), element('small', entry.node.id)); }
+      option.onmousedown = event => { event.preventDefault(); entry.clear ? this.clear() : this.select(entry.node); };
       this.list.append(option);
     }
     if (this.activeIndex >= 0) this.input.setAttribute('aria-activedescendant', this.id + '-' + this.activeIndex);
@@ -120,15 +112,17 @@ export class ConceptReferencePicker {
   keydown(event) {
     if (event.key === 'Escape') { event.preventDefault(); this.close(); return; }
     if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
-      event.preventDefault(); this.open(); const last = this.candidates().length - 1;
+      event.preventDefault(); this.open(); const last = this.entries().length - 1;
       if (event.key === 'ArrowDown') this.activeIndex = Math.min(last, this.activeIndex + 1);
       else if (event.key === 'ArrowUp') this.activeIndex = Math.max(0, this.activeIndex - 1);
       else this.activeIndex = event.key === 'Home' ? 0 : last;
       this.draw(); return;
     }
-    const candidates = this.candidates();
-    if (event.key === 'Enter' && this.activeIndex >= 0 && candidates[this.activeIndex]) { event.preventDefault(); this.select(candidates[this.activeIndex]); return; }
-    if (event.key === 'Enter') { event.preventDefault(); this.requestClear(); }
+    if (event.key !== 'Enter' || this.activeIndex < 0) return;
+    const entry = this.entries()[this.activeIndex];
+    if (!entry) return;
+    event.preventDefault();
+    if (entry.clear) this.clear(); else this.select(entry.node);
   }
 }
 export function validateConcept(node) {
@@ -373,7 +367,7 @@ export class ConceptEditor {
       nodes: () => this.parentOptions, currentId: this.form.id, kind: 'isa', value: this.form.parentId ?? '',
       placeholder: '输入名称、ID、别名或含义搜索父概念', ariaLabel: 'is-a 父概念',
       onSelect: id => { this.form.parentId = id ?? ''; },
-      confirmText: '要清除这个概念的 is-a 父概念吗？',
+      clearOption: '清除 is-a 父概念',
     });
     picker.input.dataset.editorField = 'parentId';
     field.append(element('span', 'is-a 父概念'), picker.root);

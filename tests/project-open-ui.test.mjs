@@ -29,8 +29,10 @@ test('概念详情的 is-a 开关是复选框，与颜色分区分离且只改�
   assert.match(app, /nodes: \(\) => isaParentCandidates\(workspace\.definitions\.nodes, workspace\.rules\.rules, node\.id\)/);
   assert.match(app, /kind: 'isa', value: isARule\?\.target \?\? ''/);
   assert.match(app, /onSelect: id => \{ void setConceptParent\(node\.id, id \?\? null\)/);
-  assert.match(app, /confirmText: '要清除这个概念的 is-a 父概念吗？'/);
-  assert.doesNotMatch(app, /清除 is-a 父概念'/);
+  // 清除是候选列表第一项，不是独立按钮，也没有二次确认。
+  assert.match(app, /clearOption: '清除 is-a 父概念'/);
+  assert.doesNotMatch(app, /button\('清除/);
+  assert.doesNotMatch(app, /requestClear|concept-reference-confirm/);
   // 更多具体的后代沿 specializes 入边算；曾顺出边遍历，把当前父概念当成后代过滤掉才会显示为空。
   assert.doesNotMatch(app, /descendantConceptIds/);
   // 选择器已经显示父概念，开关下方不再重复「当前 is-a 父概念」文字。

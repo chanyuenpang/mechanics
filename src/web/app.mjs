@@ -1257,7 +1257,7 @@ function inspect() {
       currentId: node.id, kind: 'isa', value: isARule?.target ?? '',
       placeholder: '输入名称、ID、别名或含义搜索父概念', ariaLabel: 'is-a 父概念：' + node.label,
       onSelect: id => { void setConceptParent(node.id, id ?? null).catch(failParent); },
-      confirmText: '要清除这个概念的 is-a 父概念吗？',
+      clearOption: '清除 is-a 父概念',
     });
     section.append(picker.root);
     // 展开开关只写当前文件的 taxonomyPresentation：单图写 mechanism 草稿，叠加写 view。
