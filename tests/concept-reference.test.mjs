@@ -174,6 +174,22 @@ test('新建候选可以在同一次提交里写入 is-a 父概念，定义与�
   assert.throws(() => prepareReference({ workspace, draft, selected: [other.id], candidates: [other], rules: orphan, positions, center: { x: 0, y: 0 } }), /is-a 父概念不存在/);
 });
 
+test('单字检索只在名称/ID/别名里命中，多字才进入描述与标签，并按相关度排序', () => {
+  const nodes = [
+    { id: 'damage', label: '伤害', description: '造成伤害' },
+    { id: 'health', label: '生命', description: '受到伤害后减少' },
+    { id: 'draw', label: '抽牌', aliases: ['摸牌'], description: '每回合抽牌一次' },
+  ];
+  const ids = result => result.map(node => node.id);
+  // 「伤」只在身份字段里找：生命的概念描述里同样有「伤」，但不应因为描述命中就出现。
+  assert.deepEqual(ids(matchingConcepts(nodes, '伤')), ['damage']);
+  assert.deepEqual(ids(matchingConcepts(nodes, '摸')), ['draw']);
+  // 两个字才进入描述与标签，并且名称/ID 命中排在只命中描述的概念之前。
+  assert.deepEqual(ids(matchingConcepts(nodes, '伤害')), ['damage', 'health']);
+  assert.deepEqual(ids(matchingConcepts(nodes, '抽牌')), ['draw']);
+  assert.deepEqual(ids(matchingConcepts(nodes, '')), ['damage', 'health', 'draw']);
+});
+
 test('is-a 父概念候选排除自身与更具体的后代，但必须保留当前父概念，并可检索', () => {
   const nodes = [
     { id: 'top', label: '顶层' },

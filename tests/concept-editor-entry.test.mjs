@@ -34,12 +34,27 @@ test('共享编辑器用可搜索选择器指定 is-a 父概念，候选由调�
   assert.match(field, /nodes: \(\) => this\.parentOptions, currentId: this\.form\.id, kind: 'isa', value: this\.form\.parentId \?\? ''/);
   assert.match(field, /placeholder: '输入名称、ID、别名或含义搜索父概念'/);
   assert.match(field, /picker\.input\.dataset\.editorField = 'parentId'/);
-  assert.match(field, /onSelect: id => \{ this\.form\.parentId = id; \}/);
-  assert.match(field, /if \(this\.form\.parentId\) field\.append\(action\('清除'/);
+  assert.match(field, /onSelect: id => \{ this\.form\.parentId = id \?\? ''; \}/);
+  assert.match(field, /confirmText: '要清除这个概念的 is-a 父概念吗？'/);
+  assert.doesNotMatch(field, /action\('清除'/);
   assert.doesNotMatch(field, /el\(|element\('select'\)/);
   // 没有候选来源时不渲染该字段，避免出现无法落盘的死控件。
   assert.match(glossary, /\.\.\.\(this\.parentOptions \? \[this\.parentField\(\)\] : \[\]\)/);
   assert.match(glossary, /this\.form\.parentId = parentId \?\? '';/);
+});
+test('is-a 选择器打开时保留当前值的文字，清空输入必须就地确认清除或保留', () => {
+  const picker = glossary.slice(glossary.indexOf('export class ConceptReferencePicker'), glossary.indexOf('export function validateConcept'));
+  // 打开时不再清空输入框：展示文字（名称（ID））就是当前值的唯一确认，列表另用空过滤词展开。
+  assert.match(picker, /this\.query = ''; this\.input\.select\?\.\(\);/);
+  assert.match(picker, /this\.input\.oninput = \(\) => \{ this\.query = this\.input\.value;/);
+  assert.match(picker, /candidates\(\) \{ return conceptReferencePickerCandidates\(this\.nodes\(\), \{ query: this\.query,/);
+  // 清空输入不能静默改关系：失焦或回车时就地问「清除 / 保留」。
+  assert.match(picker, /this\.input\.onblur = \(\) => this\.requestClear\(\);/);
+  assert.match(picker, /if \(!this\.value \|\| this\.input\.value\.trim\(\) !== ''\) return false;/);
+  assert.match(picker, /const clear = action\(this\.clearLabel, \(\) => \{ this\.value = '';/);
+  assert.match(picker, /const keep = action\(this\.keepLabel, \(\) => \{ this\.confirm\.hidden = true; this\.syncValue\(\); \}\);/);
+  // 列表项只显示名称与稳定 ID，不把描述当预览混进结果。
+  assert.match(picker, /option\.append\(element\('strong', node\.label\), element\('small', node\.id\)\)/);
 });
 test('引用窗口把同名复用回调交给共享编辑器，且不创建候选', () => {
   const constructor = glossary.slice(glossary.indexOf('export class ConceptEditor'), glossary.indexOf('  field(', glossary.indexOf('export class ConceptEditor')));

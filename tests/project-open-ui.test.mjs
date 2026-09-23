@@ -24,21 +24,26 @@ test('概念详情的 is-a 开关是复选框，与颜色分区分离且只改�
   assert.match(app, /if \(isARule && \(draft \|\| viewMode\(\)\)\) \{/);
   // 复选框而不是按钮，并带上位概念提示。
   assert.match(app, /input\.type = 'checkbox'; input\.checked = expanded\.includes\(node\.id\);/);
-  // 面板提供可搜索的 is-a 父概念选择器与显式清除，展开开关仍只写 taxonomyPresentation。
+  // 面板提供可搜索的 is-a 父概念选择器；清除不再有独立按钮，改由清空输入后就地确认。
   assert.match(app, /section\.append\(el\('strong', 'is-a 父概念'\)\)/);
   assert.match(app, /nodes: \(\) => isaParentCandidates\(workspace\.definitions\.nodes, workspace\.rules\.rules, node\.id\)/);
   assert.match(app, /kind: 'isa', value: isARule\?\.target \?\? ''/);
-  assert.match(app, /onSelect: id => \{ void setConceptParent\(node\.id, id\)/);
-  assert.match(app, /button\('清除 is-a 父概念', \(\) => \{ void setConceptParent\(node\.id, null\)/);
+  assert.match(app, /onSelect: id => \{ void setConceptParent\(node\.id, id \?\? null\)/);
+  assert.match(app, /confirmText: '要清除这个概念的 is-a 父概念吗？'/);
+  assert.doesNotMatch(app, /清除 is-a 父概念'/);
   // 更多具体的后代沿 specializes 入边算；曾顺出边遍历，把当前父概念当成后代过滤掉才会显示为空。
   assert.doesNotMatch(app, /descendantConceptIds/);
-  assert.match(app, /el\('small', '当前 is-a 父概念：' \+ name\(isARule\.target\)\)/);
+  // 选择器已经显示父概念，开关下方不再重复「当前 is-a 父概念」文字。
+  assert.doesNotMatch(app, /当前 is-a 父概念：/);
+  assert.match(app, /choice\.append\(input, el\('span', '显示连线'\)\)/);
   assert.match(app, /viewMode\(\) \? editView\(toggle, \{ keepSelection: true \}\) : edit\(toggle, \{ topology: false \}\)/);
   assert.doesNotMatch(app, /panel\.append\(button\(expanded\.includes\(node\.id\)/);
   // 与「节点风格／节点颜色」一样是 detail 分区：块间自带分隔线，不贴着颜色网格。
   assert.match(app, /el\('div', undefined, 'detail node-taxonomy'\)/);
   // 选择器列表在侧栏里改为文档流内展开，避免被 #inspector 的滚动容器裁掉。
-  assert.match(style, /\.detail\.node-taxonomy \.concept-reference-list\{position:static;max-height:170px;margin-top:4px\}/);
+  assert.match(style, /\.detail\.node-taxonomy \.concept-reference-list\{position:static;max-height:190px;margin-top:4px\}/);
+  // 列表项按名称 + 稳定 ID 两行排版，而不是把描述当预览混进结果。
+  assert.match(style, /\.concept-reference-option small\{color:#9aa895;font-size:10px/);
   assert.match(style, /\.detail\.node-taxonomy \.choice\{margin-top:9px;padding:0;border-bottom:0;align-items:flex-start\}/);
   assert.match(style, /\.detail\.node-taxonomy \.choice>span\{flex:1;min-width:0;line-height:1\.65;color:#526051\}/);
   // 忙碌或自动保存暂停时，面板内的复选框与侧栏保持一致地禁用。

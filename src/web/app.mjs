@@ -1256,10 +1256,10 @@ function inspect() {
       nodes: () => isaParentCandidates(workspace.definitions.nodes, workspace.rules.rules, node.id),
       currentId: node.id, kind: 'isa', value: isARule?.target ?? '',
       placeholder: '输入名称、ID、别名或含义搜索父概念', ariaLabel: 'is-a 父概念：' + node.label,
-      onSelect: id => { void setConceptParent(node.id, id).catch(failParent); },
+      onSelect: id => { void setConceptParent(node.id, id ?? null).catch(failParent); },
+      confirmText: '要清除这个概念的 is-a 父概念吗？',
     });
     section.append(picker.root);
-    if (isARule) section.append(button('清除 is-a 父概念', () => { void setConceptParent(node.id, null).catch(failParent); }, 'quiet'));
     // 展开开关只写当前文件的 taxonomyPresentation：单图写 mechanism 草稿，叠加写 view。
     if (isARule && (draft || viewMode())) {
       const expanded = currentTaxonomyPresentation()?.expandedNodeIds ?? [];
@@ -1271,9 +1271,8 @@ function inspect() {
       const choice = el('label', undefined, 'choice node-taxonomy-choice');
       const input = el('input'); input.type = 'checkbox'; input.checked = expanded.includes(node.id);
       input.onchange = () => (viewMode() ? editView(toggle, { keepSelection: true }) : edit(toggle, { topology: false }));
-      const text = el('span');
-      text.append('显示直连父概念与虚线', el('small', '当前 is-a 父概念：' + name(isARule.target)));
-      choice.append(input, text); section.append(choice);
+      // 父概念已经显示在选择器里，这里不再重复文字，只保留开关本身。
+      choice.append(input, el('span', '显示连线')); section.append(choice);
     }
     panel.append(section);
   }

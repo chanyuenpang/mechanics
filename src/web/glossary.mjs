@@ -14,12 +14,31 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const normalized = text => normalizeSearchTerm(text);
 export const parseAliases = value => normalizeAliases(Array.isArray(value) ? value : String(value ?? '').split(/[\n,，]/u));
 export const parseTags = value => normalizeAliases(Array.isArray(value) ? value : String(value ?? '').split(/[\n,，]/u));
-// 检索面覆盖名称、稳定 ID、别名、描述与标签；缺字段的概念不能因为 String(undefined)
-// 而匹配到 "undefined" 这类查询词。
+// 检索分两级：名称、稳定 ID、别名是概念的身份字段，描述与标签是长文本。
+// 单字查询（中文一个字最典型）只搜身份字段——否则「伤」会因为描述里出现过一次而
+// 把一大串无关概念刷进列表。结果按相关度排序：完全相同 > 前缀命中 > 其它命中，
+// 身份命中始终排在只命中描述/标签的概念之前。
 export function matchingConcepts(nodes, query) {
-  const words = normalized(query).split(/\s+/);
-  return nodes.filter(node => words.every(word => [node.label, node.id, ...(node.aliases ?? []), node.description, ...(node.tagIds ?? [])]
-    .some(text => text !== undefined && text !== null && normalized(text).includes(word))));
+  const text = normalized(query);
+  const words = text.split(/\s+/).filter(Boolean);
+  if (!words.length) return nodes;
+  const values = (node, keys) => keys.flatMap(key => (Array.isArray(node[key]) ? node[key] : [node[key]]));
+  const contains = (list, word) => list.some(value => value !== undefined && value !== null && normalized(value).includes(word));
+  const identity = node => values(node, ['label', 'id', 'aliases']);
+  const secondary = node => values(node, ['description', 'tagIds']);
+  const rank = node => {
+    const label = normalized(node.label ?? ''), id = normalized(node.id ?? '');
+    if (label === text || id === text) return 0;
+    if (label.startsWith(text) || id.startsWith(text)) return 1;
+    if (identity(node).some(value => value !== undefined && normalized(value) === text)) return 1;
+    return 2;
+  };
+  // 单字查询只搜身份字段：长度 1 的包含关系在长描述里几乎不构成匹配。
+  // 多字查询仍覆盖描述与标签（词可以分别落在不同字段上），但身份命中排在只命中描述的概念之前。
+  const wide = text.length > 1;
+  const matched = nodes.filter(node => words.every(word => contains(wide ? [...identity(node), ...secondary(node)] : identity(node), word)));
+  return matched.map((node, index) => ({ node, index }))
+    .sort((a, b) => rank(a.node) - rank(b.node) || a.index - b.index).map(item => item.node);
 }
 export function sameNamedConcepts(nodes, label) { return nodes.filter(node => normalized(node.label) === normalized(label)); }
 
@@ -37,8 +56,8 @@ export function conceptReferencePickerCandidates(nodes, { query = '', kind = 'qu
 
 let conceptReferencePickerIndex = 0;
 export class ConceptReferencePicker {
-  constructor({ nodes, currentId, kind, value = '', excluded = null, placeholder = '', ariaLabel, onSelect }) {
-    Object.assign(this, { nodes, currentId, kind, value, excluded, onSelect, activeIndex: -1 });
+  constructor({ nodes, currentId, kind, value = '', excluded = null, placeholder = '', ariaLabel, onSelect, clearLabel = '清除', keepLabel = '保留', confirmText = '要清除这个 is-a 父概念吗？' }) {
+    Object.assign(this, { nodes, currentId, kind, value, excluded, onSelect, clearLabel, keepLabel, confirmText, activeIndex: -1, query: '' });
     this.id = 'concept-reference-options-' + ++conceptReferencePickerIndex;
     this.root = element('div', undefined, 'concept-reference-picker');
     this.input = element('input'); this.input.type = 'text'; this.input.setAttribute('role', 'combobox');
@@ -46,29 +65,58 @@ export class ConceptReferencePicker {
     this.input.setAttribute('aria-controls', this.id); this.input.setAttribute('aria-expanded', 'false');
     if (placeholder) this.input.placeholder = placeholder;
     this.list = element('div', undefined, 'concept-reference-list'); this.list.id = this.id; this.list.setAttribute('role', 'listbox'); this.list.hidden = true;
-    this.root.append(this.input, this.list); this.syncValue();
+    // 输入被清空不能静默改关系：先就地问用户「清除」还是「保留」。
+    this.confirm = element('div', undefined, 'concept-reference-confirm'); this.confirm.hidden = true;
+    this.root.append(this.input, this.list, this.confirm); this.syncValue();
     this.input.onfocus = () => this.open();
-    this.input.oninput = () => { this.activeIndex = -1; this.draw(); };
+    // 过滤词与输入框文字分开：打开时输入框保留当前选中概念的展示文字（它唯一标识当前值），
+    // 列表仍展示全部候选，用户一打字就换成新的过滤词。
+    this.input.oninput = () => { this.query = this.input.value; this.activeIndex = -1; this.confirm.hidden = true; this.draw(); };
     this.input.onkeydown = event => this.keydown(event);
+    this.input.onblur = () => this.requestClear();
   }
-  candidates() { return conceptReferencePickerCandidates(this.nodes(), { query: this.input.value, kind: this.kind, currentId: this.currentId, excluded: this.excluded }); }
+  candidates() { return conceptReferencePickerCandidates(this.nodes(), { query: this.query, kind: this.kind, currentId: this.currentId, excluded: this.excluded }); }
   syncValue() { this.input.value = this.value ? conceptReferencePresentation(this.value, this.nodes()) : ''; }
-  open() { if (this.list.hidden) this.input.value = ''; this.list.hidden = false; this.input.setAttribute('aria-expanded', 'true'); this.draw(); }
-  close() { this.list.hidden = true; this.input.setAttribute('aria-expanded', 'false'); this.input.removeAttribute('aria-activedescendant'); this.syncValue(); }
+  open() {
+    if (this.list.hidden) {
+      this.query = ''; this.input.select?.();
+    }
+    this.confirm.hidden = true; this.list.hidden = false;
+    this.input.setAttribute('aria-expanded', 'true'); this.draw();
+  }
+  close() {
+    this.list.hidden = true; this.confirm.hidden = true;
+    this.input.setAttribute('aria-expanded', 'false'); this.input.removeAttribute('aria-activedescendant');
+    this.query = ''; this.syncValue();
+  }
+  // 已有父概念、输入被清空：就地问一次，清除必须由用户明确点按钮。
+  requestClear() {
+    if (!this.value || this.input.value.trim() !== '') return false;
+    this.list.hidden = true; this.confirm.replaceChildren();
+    this.confirm.append(element('p', this.confirmText, 'note'));
+    const actions = element('div', undefined, 'concept-reference-confirm-actions');
+    const clear = action(this.clearLabel, () => { this.value = ''; this.query = ''; this.confirm.hidden = true; this.onSelect(null); }, 'danger');
+    const keep = action(this.keepLabel, () => { this.confirm.hidden = true; this.syncValue(); });
+    actions.append(clear, keep); this.confirm.append(actions); this.confirm.hidden = false;
+    return true;
+  }
   draw() {
     const candidates = this.candidates(); this.list.replaceChildren();
     if (!candidates.length) { this.activeIndex = -1; this.input.removeAttribute('aria-activedescendant'); this.list.append(element('div', '无匹配概念', 'concept-reference-empty')); return; }
     if (this.activeIndex >= candidates.length) this.activeIndex = candidates.length - 1;
     for (const [index, node] of candidates.entries()) {
-      const option = element('div', node.label + ' · ' + node.id, 'concept-reference-option'); option.id = this.id + '-' + index;
+      const option = element('div', undefined, 'concept-reference-option'); option.id = this.id + '-' + index;
       option.setAttribute('role', 'option'); option.setAttribute('aria-selected', String(index === this.activeIndex));
-      option.title = node.description; option.onmousedown = event => { event.preventDefault(); this.select(node); };
+      option.title = node.description;
+      // 列表只显示名称与稳定 ID：描述是长文本，作为预览出现时看起来不像匹配结果。
+      option.append(element('strong', node.label), element('small', node.id));
+      option.onmousedown = event => { event.preventDefault(); this.select(node); };
       this.list.append(option);
     }
     if (this.activeIndex >= 0) this.input.setAttribute('aria-activedescendant', this.id + '-' + this.activeIndex);
     else this.input.removeAttribute('aria-activedescendant');
   }
-  select(node) { this.value = node.id; this.onSelect(node.id); this.close(); }
+  select(node) { this.value = node.id; this.query = ''; this.onSelect(node.id); this.close(); }
   keydown(event) {
     if (event.key === 'Escape') { event.preventDefault(); this.close(); return; }
     if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
@@ -79,7 +127,8 @@ export class ConceptReferencePicker {
       this.draw(); return;
     }
     const candidates = this.candidates();
-    if (event.key === 'Enter' && this.activeIndex >= 0 && candidates[this.activeIndex]) { event.preventDefault(); this.select(candidates[this.activeIndex]); }
+    if (event.key === 'Enter' && this.activeIndex >= 0 && candidates[this.activeIndex]) { event.preventDefault(); this.select(candidates[this.activeIndex]); return; }
+    if (event.key === 'Enter') { event.preventDefault(); this.requestClear(); }
   }
 }
 export function validateConcept(node) {
@@ -323,11 +372,11 @@ export class ConceptEditor {
     const picker = new ConceptReferencePicker({
       nodes: () => this.parentOptions, currentId: this.form.id, kind: 'isa', value: this.form.parentId ?? '',
       placeholder: '输入名称、ID、别名或含义搜索父概念', ariaLabel: 'is-a 父概念',
-      onSelect: id => { this.form.parentId = id; },
+      onSelect: id => { this.form.parentId = id ?? ''; },
+      confirmText: '要清除这个概念的 is-a 父概念吗？',
     });
     picker.input.dataset.editorField = 'parentId';
     field.append(element('span', 'is-a 父概念'), picker.root);
-    if (this.form.parentId) field.append(action('清除', () => { this.form.parentId = ''; this.render(); }, 'quiet'));
     wrap.append(field, element('p', '每个概念至多一个 is-a 父概念；方向是「具体概念 → 父概念」，更换时旧分类边被替换，自连与成环会被拒绝。', 'note'));
     return wrap;
   }
