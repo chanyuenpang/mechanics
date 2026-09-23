@@ -2288,7 +2288,8 @@ export class GraphCanvas {
     }
     else {
       const source = this.linkSource;
-      const relation = this.mode === 'specializes' ? 'specializes' : this.mode === 'positive' ? 1 : this.mode === 'negative' ? -1 : 'random';
+      // is-a 不再有连线模式，连线手势只产生影响符号。
+    const relation = this.mode === 'positive' ? 1 : this.mode === 'negative' ? -1 : 'random';
       if (this.callbacks.link(source, id, relation)) this.linkSource = null;
       this.draw({ reroute: false });
     }

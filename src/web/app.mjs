@@ -1153,16 +1153,20 @@ function inspect() {
     const direct = edge.steps.length === 1;
     if (direct) {
       const id = edge.steps[0].ruleId ?? edge.id, originalEdge = workspace.rules.rules.find(item => item.id === id);
-      field(panel, '关系', originalEdge.relation === 'specializes' ? 'specializes' : String(originalEdge.sign), {
-        options: [['1', '＋ 正向影响'], ['-1', '− 负向影响'], ['random', '？ 随机影响'], ['specializes', 'is-a 特化 / 是某种（具体 → 上位）']],
-        onChange: value => {
-          void updateGlobalRule(id, item => {
-            if (value === 'specializes') { item.relation = 'specializes'; delete item.sign; delete item.inheritance; delete item.sourceQualifiers; delete item.targetQualifiers; }
-            else { item.sign = value === 'random' ? 'random' : Number(value); item.relation = 'influence'; item.inheritance ??= { mode: 'none' }; }
-          // 转成 is-a 时不更新默认连线类型：is-a 只能由父概念选择器管理，不再有连线模式。
-        }).then(() => { if (value !== 'specializes') selectRelation(value === 'random' ? 'random' : Number(value), { beginLink: false }); }).catch(showError);
-        },
-      });
+      if (originalEdge.relation === 'specializes') {
+        // is-a 只有一个写入口：概念的「上位概念」字段；连线面板只做只读呈现。
+        detail(panel, '上位概念', name(originalEdge.target));
+        panel.append(el('p', 'is-a 由子概念的上位概念字段维护；请在节点属性面板中更换或清除父概念。', 'note'));
+      } else {
+        field(panel, '关系', String(originalEdge.sign), {
+          options: [['1', '＋ 正向影响'], ['-1', '− 负向影响'], ['random', '？ 随机影响']],
+          onChange: value => {
+            void updateGlobalRule(id, item => {
+              item.sign = value === 'random' ? 'random' : Number(value); item.relation = 'influence'; item.inheritance ??= { mode: 'none' };
+            }).then(() => selectRelation(value === 'random' ? 'random' : Number(value), { beginLink: false })).catch(showError);
+          },
+        });
+      }
       if (originalEdge.relation !== 'specializes') {
         const ruleText = field(panel, '规则（可选）', originalEdge.ruleText ?? '', { multiline: true, onChange: value => { void updateGlobalRule(id, item => { item.ruleText = value; }).catch(showError); } });
         ruleText.maxLength = 8000;
@@ -1596,7 +1600,8 @@ async function createRule(source, target, relation) {
   }
   const id = semanticRuleId(source, target, new Set(workspace.rules.rules.map(edge => edge.id)));
   const rules = clone(workspace.rules);
-  rules.rules.push({ id, source, target, ...(relation === 'specializes' ? { relation: 'specializes' } : { relation: 'influence', sign: relation, inheritance: { mode: 'none' }, ruleText: '' }) });
+  // 连线手势只创建影响规则；is-a 由概念的父概念字段写入，不再有连线入口。
+  rules.rules.push({ id, source, target, relation: 'influence', sign: relation, inheritance: { mode: 'none' }, ruleText: '' });
   const mechanic = clone(draft);
   for (const nodeId of [source, target]) if (!mechanic.focusNodeIds.includes(nodeId)) mechanic.focusNodeIds.push(nodeId);
   if (!mechanic.pinnedRuleIds.includes(id)) mechanic.pinnedRuleIds.push(id);
