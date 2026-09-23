@@ -20,9 +20,19 @@ test('打开项目默认先展示最近项目，不隐式唤起原生目录选�
 });
 
 
-test('概念详情的 is-a 开关同时作用于机制图与视图，并只改各自文件的展开集合', () => {
+test('概念详情的 is-a 开关是复选框，与颜色分区分离且只改各自文件的展开集合', () => {
   assert.match(app, /if \(isARule && \(draft \|\| viewMode\(\)\)\) \{/);
+  // 复选框而不是按钮，并带上位概念提示。
+  assert.match(app, /input\.type = 'checkbox'; input\.checked = expanded\.includes\(node\.id\);/);
+  assert.match(app, /el\('small', '上位概念：' \+ name\(isARule\.target\)\)/);
   assert.match(app, /viewMode\(\) \? editView\(toggle, \{ keepSelection: true \}\) : edit\(toggle, \{ topology: false \}\)/);
+  assert.doesNotMatch(app, /panel\.append\(button\(expanded\.includes\(node\.id\)/);
+  // 与「节点风格／节点颜色」一样是 detail 分区：块间自带分隔线，不贴着颜色网格。
+  assert.match(app, /el\('div', undefined, 'detail node-taxonomy'\)/);
+  assert.match(style, /\.detail\.node-taxonomy \.choice\{margin-top:9px;padding:0;border-bottom:0;align-items:flex-start\}/);
+  assert.match(style, /\.detail\.node-taxonomy \.choice>span\{flex:1;min-width:0;line-height:1\.65;color:#526051\}/);
+  // 忙碌或自动保存暂停时，面板内的复选框与侧栏保持一致地禁用。
+  assert.match(app, /\[\$\('resource-panel'\), \$\('inspector'\)\]\.flatMap\(root => \[\.\.\.root\.querySelectorAll\('input\[type=checkbox\]'\)\]\)/);
   assert.match(app, /const currentTaxonomyPresentation = \(\) => \(viewMode\(\) \? viewTaxonomyPresentation : draft\?\.taxonomyPresentation\)/);
   assert.match(app, /taxonomyPresentation: clone\(viewTaxonomyPresentation\)/);
   assert.match(app, /if \(!selectionInDisplay\(displayGraph, selection\)\) selection = null;/);

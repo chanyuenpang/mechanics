@@ -434,7 +434,7 @@ function updateStatus() {
   tooltipToggle.classList.toggle('active', hoverTooltipsEnabled);
   for (const id of ['resource-panel', 'resource-tabs', 'main-views']) $(id).inert = opening;
   for (const id of ['stage', 'glossary']) $(id).inert = busy();
-  for (const input of $('resource-panel').querySelectorAll('input[type=checkbox]')) input.disabled = busy() || !!autosave?.blocked;
+  for (const input of [$('resource-panel'), $('inspector')].flatMap(root => [...root.querySelectorAll('input[type=checkbox]')])) input.disabled = busy() || !!autosave?.blocked;
   $('opening-overlay').hidden = !opening;
   $('opening-message').textContent = workspace ? '正在打开图文件…' : '正在打开项目…';
   $('compute-status').hidden = opening || !computeState;
@@ -1238,8 +1238,15 @@ function inspect() {
       data.taxonomyPresentation = { mode: 'label', expandedNodeIds: current.includes(node.id)
         ? current.filter(id => id !== node.id) : [...current, node.id] };
     };
-    panel.append(button(expanded.includes(node.id) ? '隐藏 is-a 关系' : '显示 is-a 关系',
-      () => (viewMode() ? editView(toggle, { keepSelection: true }) : edit(toggle, { topology: false }))));
+    // 复选框与「节点风格／节点颜色」用同一套 detail 分区，块间自带分隔线，不与颜色选择器贴在一起。
+    const section = el('div', undefined, 'detail node-taxonomy');
+    section.append(el('strong', 'is-a 关系'));
+    const choice = el('label', undefined, 'choice node-taxonomy-choice');
+    const input = el('input'); input.type = 'checkbox'; input.checked = expanded.includes(node.id);
+    input.onchange = () => (viewMode() ? editView(toggle, { keepSelection: true }) : edit(toggle, { topology: false }));
+    const text = el('span');
+    text.append('显示直连父概念与虚线', el('small', '上位概念：' + name(isARule.target)));
+    choice.append(input, text); section.append(choice); panel.append(section);
   }
   if (node.customData) detail(panel, '自定义文本', node.customData);
   detail(panel, 'Agent 锁', node.agentLocked ? '已锁定；Agent 不能修改或删除此概念' : '未锁定');
