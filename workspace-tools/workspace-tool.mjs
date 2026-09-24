@@ -8424,7 +8424,7 @@ var candidateOf = (data) => ({
   views: data.views.map((item) => item.value),
   files: data.files
 });
-async function snapshot({ validate = true } = {}) {
+async function snapshot({ validate = true, includeViews = true } = {}) {
   const manifest = await parse(join(workspace, "workspace.json"));
   assertDocument(manifest.value, "workspace", "workspace.json");
   const definitions = await parse(await workspacePath(workspace, manifest.value.definitions));
@@ -8433,7 +8433,7 @@ async function snapshot({ validate = true } = {}) {
   assertDocument(rules.value, "rules", manifest.value.rules);
   const discovered = await discover(workspace);
   const mechanics = await Promise.all(discovered.mechanicPaths.map((file) => parse(join(workspace, file))));
-  const views = await Promise.all(discovered.viewPaths.map((file) => parse(join(workspace, file))));
+  const views = includeViews ? await Promise.all(discovered.viewPaths.map((file) => parse(join(workspace, file)))) : [];
   const resources = [manifest, definitions, rules, ...mechanics, ...views];
   const identities = resources.map((item) => process.platform === "win32" ? item.path.toLowerCase() : item.path);
   if (new Set(identities).size !== identities.length) fail("DUPLICATE_FILE", "manifest 入口与发现资源重复引用同一文件");
@@ -8451,7 +8451,7 @@ async function snapshot({ validate = true } = {}) {
     revision: hash(resources.map((item) => item.revision).join("\n")),
     nodeMap: new Map(nodes.map((node) => [node.id, node]))
   };
-  if (validate) validateWorkspace(candidateOf(data));
+  if (validate) validateWorkspace(candidateOf(data), { validateResourceReferences: includeViews });
   return data;
 }
 var operator = (edge) => edge.relation === "specializes" ? "is-a>" : edge.sign === 1 ? "+>" : edge.sign === -1 ? "->" : "?>";
@@ -8813,7 +8813,7 @@ async function saveDraft(id, validateOnly = false) {
 async function main() {
   const { positionals, options } = args(process.argv.slice(2)), [command, action] = positionals;
   if (!command) fail("TOOL_INVALID", "需要命令");
-  const data = ["scopes", "search", "graph", "node", "impact"].includes(command) ? await snapshot() : null;
+  const data = ["scopes", "search", "graph", "node", "impact"].includes(command) ? await snapshot({ includeViews: false }) : null;
   if (command === "guide") return guide();
   if (command === "scopes") return { workspaceId: data.manifest.value.id, revision: data.revision, definitionsRevision: data.definitions.revision, tags: data.definitions.value.tagDefinitions ?? [], folders: data.folders, mechanics: data.mechanics.map((item) => ({ id: item.value.id, name: item.value.name, file: relative2(root, item.path) })) };
   if (command === "search") {

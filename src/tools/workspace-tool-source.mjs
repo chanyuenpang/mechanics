@@ -29,7 +29,7 @@ const mechanicDirectory = value => join(workspace, 'mechanics', ...value.split('
 const mechanicFolder = file => mechanicFolderOf(relativeFile(file));
 const candidateOf = data => ({ manifest: data.manifest.value, definitions: data.definitions.value, rules: data.rules.value,
   mechanics: data.mechanics.map(item => item.value), views: data.views.map(item => item.value), files: data.files });
-async function snapshot({ validate = true } = {}) {
+async function snapshot({ validate = true, includeViews = true } = {}) {
   const manifest = await parse(join(workspace, 'workspace.json'));
   assertDocument(manifest.value, 'workspace', 'workspace.json');
   const definitions = await parse(await workspacePath(workspace, manifest.value.definitions));
@@ -38,7 +38,8 @@ async function snapshot({ validate = true } = {}) {
   assertDocument(rules.value, 'rules', manifest.value.rules);
   const discovered = await discover(workspace);
   const mechanics = await Promise.all(discovered.mechanicPaths.map(file => parse(join(workspace, file))));
-  const views = await Promise.all(discovered.viewPaths.map(file => parse(join(workspace, file))));
+  // 只读查询不消费视图；保存候选和提交确认仍读取全部消费者。
+  const views = includeViews ? await Promise.all(discovered.viewPaths.map(file => parse(join(workspace, file)))) : [];
   const resources = [manifest, definitions, rules, ...mechanics, ...views];
   const identities = resources.map(item => process.platform === 'win32' ? item.path.toLowerCase() : item.path);
   if (new Set(identities).size !== identities.length) fail('DUPLICATE_FILE', 'manifest 入口与发现资源重复引用同一文件');
@@ -47,7 +48,7 @@ async function snapshot({ validate = true } = {}) {
     files: [...mechanics, ...views].map(item => ({ kind: item.value.kind, id: item.value.id, path: relativeFile(item.path) })),
     folders: discovered.directories.filter(path => path.startsWith('mechanics/')).map(path => path.slice('mechanics/'.length)),
     nodes, edges, revision: hash(resources.map(item => item.revision).join('\n')), nodeMap: new Map(nodes.map(node => [node.id, node])) };
-  if (validate) validateWorkspace(candidateOf(data));
+  if (validate) validateWorkspace(candidateOf(data), { validateResourceReferences: includeViews });
   return data;
 }
 const operator = edge => edge.relation === 'specializes' ? 'is-a>' : edge.sign === 1 ? '+>' : edge.sign === -1 ? '->' : '?>';
@@ -310,7 +311,7 @@ async function saveDraft(id, validateOnly = false) {
       ...(warnings.length ? { warnings } : {}), note: '脚本已完成完整候选校验与实际回读确认，无需再次查询确认。文档生成与自动排版未执行。' };
   });
 }
-async function main() { const { positionals, options } = args(process.argv.slice(2)), [command, action] = positionals; if (!command) fail('TOOL_INVALID', '需要命令'); const data = ['scopes','search','graph','node','impact'].includes(command) ? await snapshot() : null;
+async function main() { const { positionals, options } = args(process.argv.slice(2)), [command, action] = positionals; if (!command) fail('TOOL_INVALID', '需要命令'); const data = ['scopes','search','graph','node','impact'].includes(command) ? await snapshot({ includeViews: false }) : null;
   if (command === 'guide') return guide();
   if (command === 'scopes') return { workspaceId: data.manifest.value.id, revision: data.revision, definitionsRevision: data.definitions.revision, tags: data.definitions.value.tagDefinitions ?? [], folders: data.folders, mechanics: data.mechanics.map(item => ({ id: item.value.id, name: item.value.name, file: relative(root, item.path) })) };
   if (command === 'search') { if (options.query) { const r = resolveNode(data.nodes, options.query); if (r.status === 'resolved') return { revision: data.revision, concept: r.node, matchedBy: r.matchedBy }; if (r.status === 'ambiguous') return { revision: data.revision, resolution: r }; return { revision: data.revision, resolution: fuzzyCandidates(data.nodes, options.query) ?? r }; } if (!options.from || !options.to) fail('TOOL_INVALID', 'search 需要 --query 或 --from --to'); const a = resolveNode(data.nodes, options.from), b = resolveNode(data.nodes, options.to); if (a.status !== 'resolved' || b.status !== 'resolved') return { revision: data.revision, from: a, to: b, rules: null }; const direct = (x,y) => data.edges.filter(edge => edge.source === x.id && edge.target === y.id).map(edge => ({ id: edge.id, operator: operator(edge), ruleText: edge.ruleText ?? '', origin: edge.origin })); return { revision: data.revision, from: a.node, to: b.node, rules: { forward: direct(a.node,b.node), reverse: direct(b.node,a.node) } }; }
