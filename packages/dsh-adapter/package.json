@@ -1,6 +1,6 @@
 {
   "name": "@veewo/dsh-mechanics",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": false,
   "type": "module",
   "description": "DSH 的 Mechanics 适配插件：把项目内 .mechanics/tools/workspace-tool.mjs 的检索与对话图投影注册为 typed 工具，并携带对话流图卡数据。",

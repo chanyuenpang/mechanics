@@ -35,7 +35,7 @@ dsh plugin --profile <profile> add <本目录路径 或 @veewo/dsh-mechanics>
 
 `lib/client.js` 是手写的 lazy-CJS 模块，交给当前 DSH 的组合客户端脚本加载；不能用旧的 `/plugins/<id>/client.js` 单文件 URL（返回 404）判断它未加载。
 
-它注册检索工具卡，并监听 `tool/ptc-dispatch` 成功结算事件，在聊天流插入独立的 `mechanics-widget` 节点；节点使用宿主传入的 `cwd` 请求插件图页面。
+它注册检索工具卡，并监听 `tool/ptc-dispatch` 成功结算事件，在聊天流插入独立的可交互 `mechanics-widget` 节点；节点使用宿主传入的 `cwd` 请求插件图页面。同一 `run_code` 内多个成功图调用各保留一个 widget；当前 DSH 原生折叠 Code Mode/工具过程时，节点通过公开的 `turnProcess.setOpen(true)` 保持所属轮次展开，不需要旧版 `dsh-fold-turns`，也不将 widget 移进模型 final 正文。
 
 - `mechanics_graph` → 只读 SVG 概念图卡：圆形布局、按影响符号着色的箭头、hover 看定义与规则文字、点击节点展开定义与集合内关系。
 - `mechanics_search` → 检索卡：概念详情、歧义/模糊候选（含 `matchedBy` 与分数）、双向直接规则、双概念未解析、未找到，各一支。

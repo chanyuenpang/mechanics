@@ -270,9 +270,9 @@ window.__ModuleLoader__.load({
     }
 
 
-    // ---- 收尾消息上的常驻 widget ----
-    // 工具卡属于"工具活动"，完成的轮次折叠后会被收进 "Worked for …" 那一行；
-    // 不用收尾席位（那条路要跨过轮次折叠与 seq 边界）：直接产出一个自己的 Chat 节点。
+    // ---- 独立的对话 widget ----
+    // 工具结果位于可折叠的过程区，宿主也会隐藏未知 kind 的过程节点。
+    // 保留 Chat 节点的工具结算锚点，并通过官方 turnProcess 控制保持有 widget 的轮次展开。
     const WIDGET_NODE_KIND = "mechanics-widget";
     const GRAPH_TOOL_NAME = "mechanics_graph";
 
@@ -322,22 +322,30 @@ window.__ModuleLoader__.load({
         callId: String(match.event.data.callId),
         // 原生调用：参数就在这次 tool/call 上，结果到达时与它配对。
         ids: idsFromCallArguments(match.event.data.arguments),
+        graphs: [],
         latest: undefined,
       }),
       update: (context, match) => {
         const state = context.state;
         const data = match.event?.data ?? {};
+        const addGraph = (key, ids) => {
+          const graph = { key, seq: match.event.seq, ids };
+          const graphs = state.graphs.some(item => item.key === key)
+            ? state.graphs.map(item => item.key === key ? graph : item)
+            : [...state.graphs, graph];
+          return { ...state, graphs, latest: graph };
+        };
         if (match.event.type === "tool/ptc-dispatch" || match.event.type === "tool/code-dispatch") {
           if (String(data.name ?? "") !== GRAPH_TOOL_NAME || data.isError === true) return state;
           const ids = idsFromCallArguments(data.arguments);
-          return ids === undefined ? state : { ...state, latest: { seq: match.event.seq, ids } };
+          return ids === undefined ? state : addGraph(String(data.subCallId ?? match.event.seq), ids);
         }
         // 原生：这次 tool/result 就是本上下文那次调用的结果，失败不产出节点。
         if (data?.message?.content?.[0]?.isError === true) return state;
-        return state.ids === undefined ? state : { ...state, latest: { seq: match.event.seq, ids: state.ids } };
+        return state.ids === undefined ? state : addGraph(state.callId, state.ids);
       },
-      // 自产一个 Chat 节点：这个 kind 不在 dsh-fold-turns 的已知表里，它遇到未知节点会整轮 fail-open，
-      // 因此 widget 不会被折进 "Worked for …"，也不必挤在工具卡/代码块的窄宽度里。
+      // 每次成功调用产出独立 Chat 节点；当前 DSH 会把过程中的未知 kind 一同折叠，
+      // renderer 通过公开的 turnProcess 控制展开其所属轮次，不依赖旧版 dsh-fold-turns。
       buildViewNode: context => {
         const state = context.state;
         if (state === undefined || state.latest === undefined) return null;
@@ -351,7 +359,7 @@ window.__ModuleLoader__.load({
           anchorSeq: state.latest.seq + 0.001,
           location,
           visibility: "visible",
-          data: { seq: state.latest.seq, ids: state.latest.ids },
+          data: { seq: state.latest.seq, ids: state.latest.ids, graphs: state.graphs },
         };
       },
     };
@@ -365,36 +373,57 @@ window.__ModuleLoader__.load({
       const matched = node === undefined || node === null ? null : node.data;
       // Chat 节点槽位只提供会话 cwd，不注入 sessionId/useWorkspaces；路由会向上定位工作区根。
       const project = typeof props.cwd === "string" && props.cwd.length > 0 ? props.cwd : undefined;
-      const [height, setHeight] = React.useState(360);
+      const graphs = Array.isArray(matched?.graphs) && matched.graphs.length > 0
+        ? matched.graphs.filter(graph => Array.isArray(graph.ids) && graph.ids.length > 0)
+        : Array.isArray(matched?.ids) && matched.ids.length > 0
+          ? [{ key: String(matched.seq ?? "legacy"), ids: matched.ids }]
+          : [];
+      const canMountWidget = graphs.length > 0 && project !== undefined;
+      const turnProcess = props.turnProcess;
+      // DSH 折叠过程节点时只隐藏容器，不卸载 widget；通过公开控制器保持成图轮次展开。
       React.useEffect(() => {
+        if (canMountWidget && turnProcess?.foldable === true && turnProcess.open === false && typeof turnProcess.setOpen === "function") {
+          turnProcess.setOpen(true);
+        }
+      }, [canMountWidget, turnProcess?.foldable, turnProcess?.open, turnProcess?.setOpen]);
+      const [heights, setHeights] = React.useState({});
+      const frames = React.useRef(new Map());
+      React.useEffect(() => {
+        if (!canMountWidget) return;
         const onMessage = event => {
           const message = event && event.data;
           if (!message || message.jsonrpc !== "2.0" || message.method !== "ui/notifications/size-changed") return;
           const reported = message.params && message.params.height;
-          if (typeof reported === "number" && reported > 0) setHeight(Math.min(720, Math.max(240, Math.round(reported))));
+          if (typeof reported !== "number" || reported <= 0) return;
+          // 同一轮可能有多个 iframe：只接受发出通知的那个 widget，不能串改其他画布的高度。
+          const graph = graphs.find(item => event.source && frames.current.get(item.key)?.contentWindow === event.source);
+          if (graph === undefined) return;
+          const height = Math.min(720, Math.max(240, Math.round(reported)));
+          setHeights(previous => previous[graph.key] === height ? previous : { ...previous, [graph.key]: height });
         };
         window.addEventListener("message", onMessage);
         return () => window.removeEventListener("message", onMessage);
-      }, []);
+      }, [canMountWidget, matched?.graphs, matched?.ids]);
       // 没有成图的轮次不会产生这个节点；这里是防御性分支，不再当作正常路径。
       if (matched === null || matched === undefined) return null;
       const note = line => h("div", { style: STYLE.card, "data-tool": "mechanics_graph", "data-state": "turn-widget-unavailable" },
         h("div", null, h("span", { style: STYLE.title }, "Mechanics 概念图")),
         h("div", { style: { color: STYLE.muted.color, fontSize: STYLE.muted.fontSize, marginTop: 4 } }, line));
-      // 每一环断裂都在收尾处写清楚，不让"没折叠到""没解析出工作区""没有成图"长得一样。
-      if (!Array.isArray(matched.ids) || matched.ids.length === 0) {
-        return note("这个节点没有拿到可渲染的稳定概念 ID，因此没有 widget。");
-      }
-      if (typeof project !== "string" || project.length === 0) {
-        return note("聊天节点没有收到会话工作目录 cwd，因此无法挂载 widget。");
-      }
-      const src = routeBase() + ROUTE_PREFIX + "/widget?project=" + encodeURIComponent(project) + "&ids=" + encodeURIComponent(matched.ids.join(","));
-      return h("div", { style: STYLE.card, "data-tool": "mechanics_graph", "data-state": "turn-widget" },
-        h("div", { style: STYLE.header },
-          h("span", { style: STYLE.title }, "Mechanics 概念图"),
-          h("span", { style: STYLE.chip, "data-source": "widget" }, "web widget"),
-          h("span", { style: STYLE.muted }, matched.ids.length + " 个概念 · 可缩放平移、悬停看定义与规则")),
-        h("iframe", { src, title: "Mechanics 概念图", style: { width: "100%", height: height + "px", border: "0", display: "block", borderRadius: 8 } }));
+      if (graphs.length === 0) return note("这个节点没有拿到可渲染的稳定概念 ID，因此没有 widget。");
+      if (project === undefined) return note("聊天节点没有收到会话工作目录 cwd，因此无法挂载 widget。");
+      return h("div", { "data-tool": "mechanics_graph", "data-state": "turn-widget" },
+        ...graphs.map((graph, index) => {
+          const src = routeBase() + ROUTE_PREFIX + "/widget?project=" + encodeURIComponent(project) + "&ids=" + encodeURIComponent(graph.ids.join(","));
+          return h("div", { key: graph.key, style: { ...STYLE.card, ...(index > 0 ? { marginTop: 12 } : {}) } },
+            h("div", { style: STYLE.header },
+              h("span", { style: STYLE.title }, "Mechanics 概念图"),
+              h("span", { style: STYLE.chip, "data-source": "widget" }, "web widget"),
+              h("span", { style: STYLE.muted }, graph.ids.length + " 个概念 · 可缩放平移、悬停看定义与规则")),
+            h("iframe", { src, title: "Mechanics 概念图 " + (index + 1), ref: element => {
+              if (element === null) frames.current.delete(graph.key);
+              else frames.current.set(graph.key, element);
+            }, style: { width: "100%", height: (heights[graph.key] ?? 360) + "px", border: "0", display: "block", borderRadius: 8 } }));
+        }));
     }
 
     // 工具行只保留检索卡：机制图由上面那个独立节点承载，否则同一张图会在工具行和节点里各出现一次。
@@ -403,16 +432,16 @@ window.__ModuleLoader__.load({
       { key: "mechanics_search", component: SearchCard },
     ];
 
-    /** 只注册工具卡视图；不订阅会话事件、不重建 transcript、不读会话服务。 */
+    /** 注册检索工具卡、图 widget 的会话事件投影与独立 Chat 节点渲染。 */
     function apply(ctx) {
       const slots = ctx.get("slots");
       if (slots === undefined) return;
       for (const view of VIEWS) {
         slots.inject("tool.call.toolview", () => slots.register({ name: "tool.call.toolview", key: view.key }, view.component));
       }
-      // 按轮次折叠图卡数据（服务缺失时自动降级：select 拿不到数据就不占用收尾席位）。
+      // 按根调用归集成功图数据，再通过公开的 Chat 节点轮次控制保持 widget 可见。
       ctx.uiConversation.events.register(mechanicsTurnDefinition);
-      // 自己的节点类型：流里独立一格，宽度不受工具卡限制，也不会被折叠插件收走。
+      // 自己的节点类型：流里独立一格，宽度不受工具卡限制。
       slots.inject("conversation.chat.node", () => slots.register({ name: "conversation.chat.node", key: WIDGET_NODE_KIND }, MechanicsWidgetNode));
     }
 

@@ -23,6 +23,11 @@ function createReact() {
       };
       return [slots[index], set];
     },
+    useRef(initial) {
+      const index = cursor++;
+      if (!(index in slots)) slots[index] = { current: initial };
+      return slots[index];
+    },
     // 只实现测试需要的部分：记录副作用，由测试显式触发，并等一轮微任务让 fetch 结算。
     useEffect(callback) {
       effects.push(callback);
@@ -261,6 +266,13 @@ test('按调用折叠图卡数据：只有成功的成图才产出节点', async
   assert.equal(view.anchorSeq, 42.001);
   assert.equal(view.location.turn.turn, 7);
   assert.deepEqual([...view.data.ids], ['turn', 'draw']);
+  const next = definition.update({ state: ok }, { event: { type: 'tool/ptc-dispatch', seq: 45, data: { rootCallId: 'run1', subCallId: 'sub2', name: 'mechanics_graph', arguments: { conceptIds: ['pet'] }, isError: false } } });
+  const multi = definition.buildViewNode(context(next));
+  assert.equal(multi.data.graphs.length, 2, '同一 run_code 的多次成功成图须保留全部交互 widget');
+  assert.deepEqual(Array.from(multi.data.graphs, graph => [...graph.ids]), [['turn', 'draw'], ['pet']]);
+  assert.equal(multi.anchorSeq, 45.001);
+  const rejected = definition.update({ state: next }, { event: { type: 'tool/ptc-dispatch', seq: 46, data: { rootCallId: 'run1', subCallId: 'sub3', name: 'mechanics_graph', arguments: { conceptIds: ['bad'] }, isError: true } } });
+  assert.equal(rejected.graphs.length, 2, '失败调用不得清除此前成功的 widget');
   // 没有成图的调用不产生节点：不占流里的位置，也不留噪声。
   assert.equal(definition.buildViewNode(context(started)), null);
 });
@@ -299,6 +311,67 @@ test('widget 节点使用聊天槽位提供的 cwd 构造图页面', async () =>
   const noProject = moduleExports.MechanicsWidgetNode({ node: { kind: 'mechanics-widget', data: { ids: ['turn'] } } });
   assert.equal(noProject.props['data-state'], 'turn-widget-unavailable');
   assert.ok(collect(noProject, hasText('没有收到会话工作目录 cwd')).length > 0);
+});
+
+test('仅有成功 widget 的折叠轮次会通过公开 turnProcess 保持展开', async () => {
+  const { react, moduleExports } = await loadBundle();
+  const calls = [];
+  const turnProcess = { foldable: true, open: false, setOpen: open => calls.push(open) };
+  const node = { kind: 'mechanics-widget', data: { ids: ['turn'] } };
+  react.beginRender();
+  moduleExports.MechanicsWidgetNode({ node, cwd: 'G:/Projects/tiny-world', turnProcess });
+  assert.equal(calls.length, 0, '组件 effect 前不应在渲染期间更新宿主状态');
+  await react.runEffects();
+  assert.deepEqual(calls, [true]);
+  react.beginRender();
+  moduleExports.MechanicsWidgetNode({ node, cwd: 'G:/Projects/tiny-world', turnProcess: { ...turnProcess, open: true } });
+  await react.runEffects();
+  assert.deepEqual(calls, [true], '已展开轮次不得反复触发更新');
+  react.beginRender();
+  moduleExports.MechanicsWidgetNode({ node, turnProcess });
+  await react.runEffects();
+  assert.deepEqual(calls, [true], '没有 cwd 的 widget 不得强制展开');
+  react.beginRender();
+  moduleExports.MechanicsWidgetNode({ node: { kind: 'mechanics-widget', data: {} }, cwd: 'G:/Projects/tiny-world', turnProcess });
+  await react.runEffects();
+  assert.deepEqual(calls, [true], '无成功成图不得强制展开');
+  react.beginRender();
+  moduleExports.MechanicsWidgetNode({ node, cwd: 'G:/Projects/tiny-world', turnProcess: { ...turnProcess, foldable: false } });
+  await react.runEffects();
+  assert.deepEqual(calls, [true], '未折叠轮次不需要写入展开状态');
+  // 历史回放或手动重新折叠后，成功 widget 仍能恢复可见。
+  react.beginRender();
+  moduleExports.MechanicsWidgetNode({ node, cwd: 'G:/Projects/tiny-world', turnProcess });
+  await react.runEffects();
+  assert.deepEqual(calls, [true, true]);
+});
+
+test('同一次 run_code 的多个 widget 独立调整各自 iframe 高度', async () => {
+  const { react, moduleExports, window } = await loadBundle();
+  const node = { kind: 'mechanics-widget', data: { ids: ['pet'], graphs: [
+    { key: 'sub1', ids: ['turn', 'draw'] },
+    { key: 'sub2', ids: ['pet'] },
+  ] } };
+  const props = { node, cwd: 'G:/Projects/tiny-world' };
+  react.beginRender();
+  const rendered = moduleExports.MechanicsWidgetNode(props);
+  const frames = collect(rendered, element => element.type === 'iframe');
+  assert.equal(frames.length, 2);
+  assert.match(frames[0].props.src, /ids=turn%2Cdraw/);
+  assert.match(frames[1].props.src, /ids=pet/);
+  const sources = [{}, {}];
+  frames.forEach((frame, index) => frame.props.ref({ contentWindow: sources[index] }));
+  await react.runEffects();
+  window.dispatch('message', { source: sources[1], data: { jsonrpc: '2.0', method: 'ui/notifications/size-changed', params: { height: 620 } } });
+  react.beginRender();
+  const resized = collect(moduleExports.MechanicsWidgetNode(props), element => element.type === 'iframe');
+  assert.equal(resized[0].props.style.height, '360px');
+  assert.equal(resized[1].props.style.height, '620px');
+  window.dispatch('message', { source: {}, data: { jsonrpc: '2.0', method: 'ui/notifications/size-changed', params: { height: 700 } } });
+  react.beginRender();
+  const ignored = collect(moduleExports.MechanicsWidgetNode(props), element => element.type === 'iframe');
+  assert.equal(ignored[0].props.style.height, '360px');
+  assert.equal(ignored[1].props.style.height, '620px');
 });
 
 test('conceptIdsFromArgs 只接受形状正确的调用参数', async () => {
