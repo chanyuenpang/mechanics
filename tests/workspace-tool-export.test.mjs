@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { selectCreatedMechanic as domainPolicy } from '../src/domain/document-export.mjs';
-import { copiedExampleProject, runWorkspaceTool, runWorkspaceToolFailure, workspaceToolSource } from './workspace-tool-harness.mjs';
+import { copiedExampleProject, runWorkspaceTool, runWorkspaceToolFailure } from './workspace-tool-harness.mjs';
 
 const manifestPath = projectRoot => join(projectRoot, '.mechanics', 'workspace.json');
 const readManifest = async projectRoot => JSON.parse(await readFile(manifestPath(projectRoot), 'utf8'));
@@ -71,7 +71,7 @@ test('草稿打开后 workspace.json 变化时显式冲突，草稿保留且清�
   assert.equal(after.exportSelections.some(item => item.mechanicId === 'conflicted-graph'), false);
 });
 
-test('内联政策与服务端 domain 政策同规则', async () => {
+test('离线生成源直接复用共享导出政策 owner', async () => {
   const cases = [
     { selections: [{ kind: 'mechanic', mechanicId: 'other' }], mechanicId: 'fresh', folder: '', expected: true },
     { selections: [{ kind: 'mechanic', mechanicId: 'fresh' }], mechanicId: 'fresh', folder: '', expected: false },
@@ -83,8 +83,8 @@ test('内联政策与服务端 domain 政策同规则', async () => {
     const manifest = item.selections === undefined ? {} : { exportSelections: structuredClone(item.selections) };
     assert.equal(domainPolicy(manifest, item.mechanicId, item.folder), item.expected, JSON.stringify(item));
   }
-  // 工具是零依赖单文件，无法 import src/：用源码里的锚点钉住"内联实现与 domain 同规则"这条约定。
-  const source = await readFile(workspaceToolSource, 'utf8');
-  assert.match(source, /与 src\/domain\/document-export\.mjs 的 selectCreatedMechanic 完全一致/u);
-  assert.match(source, /legacy-all \| already-selected \| covered-by-folder \| added/u);
+  // 分发通过构建内嵌唯一 owner；上方隔离安装用例验证实际行为，而不是复制第二份政策。
+  const source = await readFile(new URL('../src/tools/workspace-tool-source.mjs', import.meta.url), 'utf8');
+  assert.match(source, /import \{ selectCreatedMechanic, mechanicFolderOf \} from '\.\.\/domain\/document-export\.mjs'/u);
+  assert.doesNotMatch(source, /function selectCreatedMechanic/u);
 });

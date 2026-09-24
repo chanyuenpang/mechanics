@@ -29,6 +29,7 @@ assert.ok(!names.some(path => path.includes('/game-mechanics/')), '打包清单�
 for (const path of ['src/server/cli.mjs', 'src/server/mcp-render.mjs', 'src/server/mcp-render-cli.mjs', 'src/mcp/concepts-widget.html', 'src/mcp/concepts-widget.bundle.js', 'src/mcp/concepts-widget-source.mjs', 'src/domain/conversation-projection.mjs', 'src/domain/hover-details.mjs', 'src/server/native-directory-picker.mjs', 'src/server/windows-directory-dialog.cs', 'src/web/glossary.mjs', 'src/web/view-files.mjs', 'src/web/graph-compute.mjs',
   'src/web/graph-compute-kernel.mjs', 'src/web/graph-compute-worker.js', 'src/web/geometry-settle.mjs', 'src/web/hierarchical-layout.mjs', 'src/web/layout-structure.mjs', 'src/web/local-routing.mjs', 'src/web/flow-refinement.mjs', 'src/web/index.html', 'schemas/protocol.schema.json']) assert.ok(names.includes(path), path);
 for (const path of ['skills/mechanics-search/SKILL.md', 'skills/mechanics-modeling/SKILL.md', 'skills/mechanics-doc/SKILL.md', 'skills/mechanics-doc/agents/openai.yaml', 'docs/安装与Codex接入.md']) assert.ok(names.includes(path), path);
+command(process.execPath, ['scripts/build-workspace-tool.mjs', '--check'], root);
 await mkdir(join(root, 'dist'), { recursive: true });
 const [packed] = JSON.parse(command(process.execPath, [npm, ...packArgs, '--pack-destination', join(root, 'dist')]));
 assert.deepEqual(packed.files.map(file => file.path), names);

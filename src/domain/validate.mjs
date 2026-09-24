@@ -10,10 +10,11 @@ ajv.addSchema(schema);
 const kinds = { workspace: 'workspace', definitions: 'definitionGraph', rules: 'ruleRegistry', mechanic: 'mechanic', view: 'view' };
 
 export class ContractError extends Error {
-  constructor(code, message) {
+  constructor(code, message, details = {}) {
     super(message);
     this.name = 'ContractError';
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -21,7 +22,13 @@ export function assertDocument(document, kind, location = kind) {
   const validator = ajv.getSchema(`${schema.$id}#/definitions/${kinds[kind]}`);
   if (!validator) throw new ContractError('INVALID_KIND', `不支持的文档类型：${kind}`);
   if (!validator(document)) {
-    throw new ContractError('INVALID_DOCUMENT', `${location}：${ajv.errorsText(validator.errors, { separator: '；' })}`);
+    const issues = validator.errors.map(error => {
+      const property = error.params.additionalProperty ?? error.params.missingProperty;
+      const suffix = property === undefined ? '' : '/' + String(property).replace(/~/g, '~0').replace(/\//g, '~1');
+      return { field: error.instancePath + suffix, keyword: error.keyword, message: error.message, params: { ...error.params } };
+    });
+    throw new ContractError('INVALID_DOCUMENT', `${location}：${ajv.errorsText(validator.errors, { separator: '；' })}`,
+      { resource: location, issues });
   }
 }
 
@@ -34,8 +41,9 @@ function unique(items, label) {
   return seen;
 }
 
-function requireReference(ids, id, location) {
-  if (!ids.has(id)) throw new ContractError('MISSING_REFERENCE', `${location} 引用了不存在的 ID：${id}`);
+function requireReference(ids, id, location, field) {
+  if (!ids.has(id)) throw new ContractError('MISSING_REFERENCE', `${location} 引用了不存在的 ID：${id}`,
+    { resource: location, ...(field === undefined ? {} : { field }), id });
 }
 
 function validateRuleQualifiers(qualifiers, nodes, location) {
@@ -74,8 +82,8 @@ function assertResourceIdentity(core, document) {
 export function validateMechanicResource(core, document, location = document?.id) {
   assertDocument(document, 'mechanic', location);
   assertResourceIdentity(core, document);
-  document.focusNodeIds.forEach(id => requireReference(core.nodes, id, location));
-  document.pinnedRuleIds.forEach(id => requireReference(core.ruleIds, id, location));
+  document.focusNodeIds.forEach((id, index) => requireReference(core.nodes, id, location, `focusNodeIds[${index}]`));
+  document.pinnedRuleIds.forEach((id, index) => requireReference(core.ruleIds, id, location, `pinnedRuleIds[${index}]`));
   core.mechanicIds.add(document.id);
   return document;
 }
@@ -87,9 +95,9 @@ export function validateViewResource(core, document, location = document?.id) {
   if (core.viewIds.has(document.id)) throw new ContractError('DUPLICATE_ID', `视图文件 中 ID 重复：${document.id}`);
   const registered = registeredMechanicIds(document);
   if (new Set(registered).size !== registered.length) throw new ContractError('DUPLICATE_ID', `${location} 中机制注册重复`);
-  registered.forEach(id => requireReference(core.mechanicIds, id, location));
-  document.focusNodeIds.forEach(id => requireReference(core.nodes, id, location));
-  document.pinnedRuleIds.forEach(id => requireReference(core.ruleIds, id, location));
+  registered.forEach((id, index) => requireReference(core.mechanicIds, id, location, `mechanicRegistrations[${index}].mechanicId`));
+  document.focusNodeIds.forEach((id, index) => requireReference(core.nodes, id, location, `focusNodeIds[${index}]`));
+  document.pinnedRuleIds.forEach((id, index) => requireReference(core.ruleIds, id, location, `pinnedRuleIds[${index}]`));
   core.viewIds.add(document.id);
   return document;
 }
@@ -98,8 +106,10 @@ export function validateWorkspace({ manifest, definitions, rules, mechanics, vie
   assertDocument(manifest, 'workspace', 'workspace.json');
   assertDocument(definitions, 'definitions', manifest.definitions);
   assertDocument(rules, 'rules', manifest.rules);
-  mechanics.forEach(graph => assertDocument(graph, 'mechanic', graph.id));
-  views.forEach(view => assertDocument(view, 'view', view.id));
+  const resourcePaths = new Map(files.map(file => [`${file.kind}:${file.id}`, file.path]));
+  const locationOf = (kind, document) => resourcePaths.get(`${kind}:${document.id}`) ?? document.id;
+  mechanics.forEach(graph => assertDocument(graph, 'mechanic', locationOf('mechanic', graph)));
+  views.forEach(view => assertDocument(view, 'view', locationOf('view', view)));
   const documents = [definitions, rules, ...mechanics, ...views];
   for (const document of documents) {
     if (document.workspaceId !== manifest.id) throw new ContractError('WORKSPACE_MISMATCH', '文档所属工作区与清单不一致');
@@ -131,7 +141,7 @@ export function validateWorkspace({ manifest, definitions, rules, mechanics, vie
   }
   const graphIds = unique(mechanics, '机制图清单');
   const workspaceEndpointPairs = new Map();
-  for (const edge of rules.rules) {
+  for (const [ruleIndex, edge] of rules.rules.entries()) {
       if (edge.relation === 'specializes' && (edge.sourceQualifiers || edge.targetQualifiers)) {
         throw new ContractError('QUALIFIER_ON_SPECIALIZES', `is-a 只能连接概念分类，不能限定规则参与者：${edge.id}`);
       }
@@ -141,14 +151,18 @@ export function validateWorkspace({ manifest, definitions, rules, mechanics, vie
       if (workspaceEndpointPairs.has(pair)) throw new ContractError('DUPLICATE_ENDPOINT_RULE',
         `概念 ${edge.source} 到 ${edge.target} 已在规则 ${workspaceEndpointPairs.get(pair)} 中存在；全工作区同一有向端点对只允许一条规则`);
       workspaceEndpointPairs.set(pair, edge.id);
-      requireReference(nodes, edge.source, `${edge.id}.source`);
-      requireReference(nodes, edge.target, `${edge.id}.target`);
+      requireReference(nodes, edge.source, manifest.rules, `rules[${ruleIndex}].source`);
+      requireReference(nodes, edge.target, manifest.rules, `rules[${ruleIndex}].target`);
       const expectedId = semanticRuleId(edge.source, edge.target, new Set());
       if (edge.id !== expectedId) throw new ContractError('RULE_ID_MISMATCH',
         `规则 ID 必须由端点确定：${edge.id} 应为 ${expectedId}`);
   }
   unique(rules.rules, '规则库');
-  assertSpecializes(rules.rules);
+  try { assertSpecializes(rules.rules); }
+  catch (error) {
+    error.details = { resource: manifest.rules, field: 'rules', ...error.details };
+    throw error;
+  }
   // 配对绑定是一等事实：它把"哪个上限概念约束哪个资源概念"写死，
   // 因此两端各自的 is-a 特化永远不会产生交叉配对。
   const retentionBindings = rules.retentionBindings ?? [];
@@ -170,8 +184,9 @@ export function validateWorkspace({ manifest, definitions, rules, mechanics, vie
   // （199 张机制图 × 3047 条规则时约半秒），这是纯重复工作。
   const ruleIds = new Set(rules.rules.map(rule => rule.id));
   if (validateResourceReferences) for (const graph of mechanics) {
-    graph.focusNodeIds.forEach(id => requireReference(nodes, id, graph.id));
-    graph.pinnedRuleIds.forEach(id => requireReference(ruleIds, id, graph.id));
+    const location = locationOf('mechanic', graph);
+    graph.focusNodeIds.forEach((id, index) => requireReference(nodes, id, location, `focusNodeIds[${index}]`));
+    graph.pinnedRuleIds.forEach((id, index) => requireReference(ruleIds, id, location, `pinnedRuleIds[${index}]`));
   }
   unique(manifest.compositions, '叠加组合');
   const viewIds = unique(views, '视图文件');
@@ -226,9 +241,9 @@ export function validateWorkspace({ manifest, definitions, rules, mechanics, vie
     const location = viewPaths.get(view.id) ?? `视图 ${view.id}`;
     const registered = registeredMechanicIds(view);
     if (new Set(registered).size !== registered.length) throw new ContractError('DUPLICATE_ID', `${location} 中机制注册重复`);
-    registered.forEach(id => requireReference(graphIds, id, location));
-    view.focusNodeIds.forEach(id => requireReference(nodes, id, location));
-    view.pinnedRuleIds.forEach(id => requireReference(ruleIds, id, location));
+    registered.forEach((id, index) => requireReference(graphIds, id, location, `mechanicRegistrations[${index}].mechanicId`));
+    view.focusNodeIds.forEach((id, index) => requireReference(nodes, id, location, `focusNodeIds[${index}]`));
+    view.pinnedRuleIds.forEach((id, index) => requireReference(ruleIds, id, location, `pinnedRuleIds[${index}]`));
   }
   return { manifest, definitions, rules, mechanics, views };
 }

@@ -4,6 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { readWorkspace } from '../src/server/workspace.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+// 离线工具由共享合同构建，禁止检查旧产物却发布新源代码。
+const workspaceTool = spawnSync(process.execPath, ['scripts/build-workspace-tool.mjs', '--check'], { cwd: root, stdio: 'inherit' });
+if (workspaceTool.error) throw workspaceTool.error;
+if (workspaceTool.status !== 0) process.exit(workspaceTool.status ?? 1);
 // packages/ 下的独立发布包同样进入语法检查：它们不在任何 bundle 里，语法错误只能靠这里拦住。
 for (const directory of ['src', 'scripts', 'tests', 'packages']) {
   for (const file of await readdir(new URL(`../${directory}/`, import.meta.url), { recursive: true })) {
