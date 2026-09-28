@@ -7,7 +7,7 @@ import { ContractError } from '../domain/validate.mjs';
 import { composeProjection } from '../domain/graph.mjs';
 import { composeView } from '../domain/view.mjs';
 
-export const CATALOG_SCHEMA_VERSION = 7;
+export const CATALOG_SCHEMA_VERSION = 8;
 export const AGENT_DOCS_GUIDE = 'AGENTS.md';
 
 const GUIDE_HEADING = '# Mechanics Agent 文档使用规则';
@@ -37,7 +37,7 @@ export function catalogSemanticModel(workspace) {
       ...(edge.relation === 'influence' ? { sign: edge.sign, inheritance: edge.inheritance } : {}), ruleText: edge.ruleText ?? '' }))
       .sort((a, b) => a.id.localeCompare(b.id)),
     mechanics: workspace.mechanics.map(mechanic => ({
-      id: mechanic.id,
+      id: mechanic.id, implementationStatus: mechanic.implementationStatus,
       focusNodeIds: sorted(mechanic.focusNodeIds), pinnedRuleIds: sorted(mechanic.pinnedRuleIds),
       ...(mechanic.ruleSelection !== undefined ? { ruleSelection: mechanic.ruleSelection } : {}),
     })).sort((a, b) => a.id.localeCompare(b.id)),
@@ -153,6 +153,11 @@ export function buildCatalog(workspace) {
   return { ...catalog, files };
 }
 
+const implementationLabel = status => {
+  if (status === 'implemented') return '已落地（作者确认）';
+  if (status === 'design') return '设计稿（未声明已落地）';
+  throw new ContractError('IMPLEMENTATION_STATUS_INVALID', '机制图落地状态非法：' + String(status));
+};
 const quoted = value => JSON.stringify(String(value));
 // 规则文本通常带 URL、版本号与范围表达；仅转义会改变结构或注入 HTML 的字符，避免把自然文本变成满屏反斜杠。
 const markdownText = value => String(value).replace(/([\\`*\[\]{}|])/g, '\\$1').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
@@ -182,7 +187,7 @@ function conceptsMarkdown(catalog) {
 }
 
 function folderMarkdown(folder, catalog) {
-  const sections = folder.mechanics.map(mechanic => `## ${inlineText(mechanic.name)}\n\n${mechanic.scope ? `${inlineText(mechanic.scope)}\n\n` : ''}${rulesMarkdown(mechanic, catalog) || '无规则。'}`).join('\n\n');
+  const sections = folder.mechanics.map(mechanic => `## ${inlineText(mechanic.name)}\n\n落地状态：${implementationLabel(mechanic.implementationStatus)}\n\n${mechanic.scope ? `${inlineText(mechanic.scope)}\n\n` : ''}${rulesMarkdown(mechanic, catalog) || '无规则。'}`).join('\n\n');
   return `${folderMarker(catalog.workspaceId)}\n\n# ${inlineText(folder.label)}\n\n本页聚合该文件夹的直接机制图；不递归包含子文件夹。\n\n${sections || '无。'}\n`;
 }
 
@@ -210,12 +215,12 @@ function rulesMarkdown(mechanic, catalog) {
 
 function mechanicMarkdown(mechanic, catalog) {
   const rules = rulesMarkdown(mechanic, catalog);
-  return `# ${inlineText(mechanic.name)}\n\n${mechanic.scope ? `${inlineText(mechanic.scope)}\n\n` : ''}${rules || '无规则。'}\n`;
+  return `# ${inlineText(mechanic.name)}\n\n落地状态：${implementationLabel(mechanic.implementationStatus)}\n\n${mechanic.scope ? `${inlineText(mechanic.scope)}\n\n` : ''}${rules || '无规则。'}\n`;
 }
 
 function viewMarkdown(view, catalog) {
   const sections = view.mechanics.map(mechanic => {
-    return `## ${inlineText(mechanic.name)}\n\n${mechanic.scope ? `${inlineText(mechanic.scope)}\n\n` : ''}${rulesMarkdown(mechanic, catalog) || '无规则。'}`;
+    return `## ${inlineText(mechanic.name)}\n\n落地状态：${implementationLabel(mechanic.implementationStatus)}\n\n${mechanic.scope ? `${inlineText(mechanic.scope)}\n\n` : ''}${rulesMarkdown(mechanic, catalog) || '无规则。'}`;
   }).join('\n\n');
   const direct = view.directEdges?.length ? `## 直接引用概念\n\n${rulesMarkdown({ edges: view.directEdges }, catalog)}` : '';
   return `# ${inlineText(view.name)}\n\n本页按该视图当前可见机制图与直接引用概念聚合规则。\n\n${[sections, direct].filter(Boolean).join('\n\n') || '无。'}\n`;
@@ -223,7 +228,7 @@ function viewMarkdown(view, catalog) {
 
 export function catalogReadme(catalog) {
   const documents = [...catalog.folders, ...catalog.mechanics, ...catalog.views]
-    .map(item => `- [${inlineText(item.label ?? item.name)}](${relativeLink('README.md', item.file)})`).join('\n');
+    .map(item => `- [${inlineText(item.label ?? item.name)}](${relativeLink('README.md', item.file)})${item.implementationStatus ? `：${implementationLabel(item.implementationStatus)}` : item.mechanics ? `（${item.mechanics.map(mechanic => `${inlineText(mechanic.name)}：${implementationLabel(mechanic.implementationStatus)}`).join('；')}）` : ''}`).join('\n');
   return `# 游戏机制文档索引\n\n${documents || '尚未选择导出文档。'}\n\n- [全局概念词典](${relativeLink('README.md', 'concepts.md')})：仅在需要定义或别名时查阅。\n\n导出范围由项目的文档导出清单决定；未选中的机制图不会生成文档。\n`;
 }
 
@@ -233,6 +238,7 @@ export function agentGuide(workspaceId, documentRevision = null) {
     + `- 从 [README.md](./README.md) 进入一份已选规则文档；文件夹文档只聚合直接子机制图，不递归进入子文件夹。\n`
     + `- [concepts.md](./concepts.md) 是唯一概念词典，只用于查定义和别名；不要把它当作规则正文或默认上下文。\n`
     + `- 文档导出范围由 canonical workspace.json 的清单决定；导出文档不合并或改写 canonical 图。\n`
+    + `- 机制图落地状态为作者声明：design 是设计稿（未声明已落地），implemented 是作者确认本图已落地；不证明每条共享规则或推导路径通过运行时验证。聚合页逐图标注，不推断整页已落地。\n`
     + `- 正向影响表示源概念增加会使目标概念增加；负向影响表示源概念增加会使目标概念减少；随机影响表示目标可能增加也可能减少，不表示概率。\n`
     + `- “specializes”表示具体概念指向上位概念的 is-a 分类；分类本身不传播影响，文档也不生成派生规则。\n`
     + `- 子概念可以通过 node 查询的分类透传上下文看到上位概念自身的声明与 is-a 路径，但这只是阅读线索：子概念并不因此取得那些影响。\n`

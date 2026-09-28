@@ -7184,7 +7184,7 @@ var protocol_schema_default = {
       properties: {
         schemaVersion: {
           enum: [
-            13
+            14
           ]
         },
         kind: {
@@ -7799,6 +7799,7 @@ var protocol_schema_default = {
         "id",
         "name",
         "scope",
+        "implementationStatus",
         "focusNodeIds",
         "pinnedRuleIds",
         "positions",
@@ -7807,7 +7808,7 @@ var protocol_schema_default = {
       properties: {
         schemaVersion: {
           enum: [
-            8
+            9
           ]
         },
         kind: {
@@ -7824,6 +7825,9 @@ var protocol_schema_default = {
         },
         scope: {
           $ref: "#/definitions/text"
+        },
+        implementationStatus: {
+          enum: ["design", "implemented"]
         },
         ruleSelection: {
           const: "explicit"
@@ -8464,6 +8468,7 @@ var guide = () => ({
   influenceRuleTemplate: { id: "source-concept-2-target-concept", source: "source-concept", target: "target-concept", relation: "influence", sign: 1, inheritance: { mode: "none" }, ruleText: "源概念如何影响目标概念。" },
   specializesRuleTemplate: { id: "subtype-concept-2-supertype-concept", source: "subtype-concept", target: "supertype-concept", relation: "specializes" },
   exportMaintenance: { createdMechanic: "新建机制图默认进入单独导出：curated 模式补一条独立选择，机制图所在的直接文件夹已选中则不补，视图永不自动进入导出清单", documents: "工具只维护导出清单；文档本身仍需显式生成（网页或 CLI）", failure: "workspace.json 基线不符报 RESOURCE_REVISION_CONFLICT；写入或回读失败报 MIGRATION_WRITE_FAILED，并以 commitState/rollbackComplete/recovery 区分已回滚与结果待确认；已提交后的清理问题返回 saved:true 与 warnings，不能重提" },
+  implementationStatus: { field: "implementationStatus", allowedValues: ["design", "implemented"], newMechanic: "design", rule: "只有作者确认已在实际游戏中实现时才手动标 implemented；旧机制迁移一律 design" },
   mechanicSelection: { optionalField: "ruleSelection", allowedValue: "explicit", whenOmitted: "按 focusNodeIds 展开一跳规则并合入 pinnedRuleIds", whenExplicit: "节点保留 focusNodeIds 与固定规则端点；只投影 pinnedRuleIds 的规则，不展开相邻规则" },
   constraints: ["is-a 每个概念至多一个父概念，用 isa set 更换或清除；不要手写第二条 specializes 出边", "概念标签只引用 definitions.tagDefinitions 中已存在的 tagIds；显示名和颜色只在标签表维护", "所有持久化 ID 使用英文小写 kebab-case", "规则只存于 rules.json，ID 固定为 source-2-target", "同一有向端点对在全工作区只能有一条规则", "mechanic 用 focusNodeIds 与 pinnedRuleIds 选择投影；省略 ruleSelection 时展开焦点邻接规则，explicit 时只投影固定规则与焦点节点", "限定词只属于 influence 规则端点", "node 的 upstream 只表示发现上游的遍历方向；paths 中的 nodes、steps、chain 与 effect 始终按规则声明的 source → target 方向返回", "草稿不允许 positions、projectionPositions 或 routeCache", "save 自动检查完整候选并回读确认；validate 仅可选 dry-run；不执行自动排版或文档导出", "search --query 先精确解析，只有精确未命中才返回 resolution.status 为 fuzzy 的模糊候选（label、alias、id、description），候选只是线索，必须用其中的稳定 ID 再查一次，工具不会自动消歧", "graph --ids 只投影请求集合内部已声明的规则；集合外端点、路径推导、视图、坐标与配色都不进入结果"]
 });
@@ -8602,12 +8607,13 @@ async function openDraft(mechanicId, options) {
   if (!mechanic && (!semanticId(mechanicId) || options.name === void 0 || options.scope === void 0)) fail("DRAFT_CREATE_METADATA_REQUIRED", "新机制 draft open 必须同时提供 --mechanic、--name 与 --scope");
   if (!mechanic && targetFolder && !data.folders.includes(targetFolder)) fail("FOLDER_NOT_FOUND", `机制目录不存在：${targetFolder}`);
   const document = mechanic?.value ?? {
-    schemaVersion: 8,
+    schemaVersion: 9,
     kind: "mechanic",
     workspaceId: data.manifest.value.id,
     id: mechanicId,
     name: text(options.name, "机制名称"),
     scope: text(options.scope, "机制范围"),
+    implementationStatus: "design",
     focusNodeIds: [],
     pinnedRuleIds: [],
     positions: {},

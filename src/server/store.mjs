@@ -3,7 +3,7 @@ import { resolve, relative, posix, dirname } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { readWorkspace, readDocument, discover, assertRelativeFile, ensureWorkspaceDirectory, workspacePath, workspaceResourceRevisions, workspaceRevision, semanticWorkspaceDocument } from './workspace.mjs';
 import { encode, commitFile, commitFiles, acquireWorkspaceLock } from './files.mjs';
-import { planV7ToV8Migration, planV8ToV9Migration, planV9ToV10Migration, planV10ToV11Migration, planV11ToV12Migration, planV12ToV13Migration, planV9DanglingNodeRepair } from './migration.mjs';
+import { planV7ToV8Migration, planV8ToV9Migration, planV9ToV10Migration, planV10ToV11Migration, planV11ToV12Migration, planV12ToV13Migration, planV13ToV14Migration, WORKSPACE_MIGRATION_STEPS, planV9DanglingNodeRepair } from './migration.mjs';
 import { assertDocument, validateWorkspace, ContractError } from '../domain/validate.mjs';
 import { composeView } from '../domain/view.mjs';
 import { repairPresentationMemberReferences } from '../domain/presentation.mjs';
@@ -404,8 +404,8 @@ export async function createWorkspaceStore(workspaceRoot, { isolateResources = f
     }
     const folder = body.folder === undefined ? '' : mechanicFolder(body.folder);
     const before = await readWorkspace(root);
-    const document = { schemaVersion: 8, kind: 'mechanic', workspaceId: before.manifest.id, id: body.id,
-      name: body.name.trim(), scope: body.scope.trim(), focusNodeIds: [], pinnedRuleIds: [], positions: {},
+    const document = { schemaVersion: 9, kind: 'mechanic', workspaceId: before.manifest.id, id: body.id,
+      name: body.name.trim(), scope: body.scope.trim(), implementationStatus: 'design', focusNodeIds: [], pinnedRuleIds: [], positions: {},
       taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } };
     const file = `${mechanicDirectory(folder)}/${body.id}.mechanic.json`;
     const committed = await create('mechanic', { revision: body.revision, document, file, requireExistingFolder: true });
@@ -1067,7 +1067,7 @@ export async function migrateWorkspace(workspaceRoot, options = {}) {
   if (from === undefined) {
     const { document } = await readDocument(root, 'workspace.json');
     from = document?.schemaVersion;
-    if (to === undefined) to = from === 7 ? 8 : from === 8 ? 9 : from === 9 ? 10 : from === 10 ? 12 : from === 11 ? 12 : from === 12 ? 13 : undefined;
+    if (to === undefined) to = WORKSPACE_MIGRATION_STEPS[from];
   }
   const planMigration = () => from === 7 && to === 8 ? planV7ToV8Migration(root)
     : from === 8 && to === 9 ? planV8ToV9Migration(root)
@@ -1075,6 +1075,7 @@ export async function migrateWorkspace(workspaceRoot, options = {}) {
     : from === 10 && to === 12 ? planV10ToV11Migration(root)
     : from === 11 && to === 12 ? planV11ToV12Migration(root)
     : from === 12 && to === 13 ? planV12ToV13Migration(root)
+    : from === 13 && to === 14 ? planV13ToV14Migration(root)
     : from === 9 && to === 9 ? planV9DanglingNodeRepair(root)
       : Promise.reject(new ContractError('MIGRATION_VERSION_UNSUPPORTED', `不支持 v${from} → v${to} 迁移`));
   if (!execute) {
@@ -1087,9 +1088,9 @@ export async function migrateWorkspace(workspaceRoot, options = {}) {
     if (typeof revision !== 'string' || !revision) fail('MIGRATION_REVISION_CONFLICT', '实际迁移必须提供 dry-run 返回的 revision');
     if (revision !== plan.revision) fail('MIGRATION_REVISION_CONFLICT', '工作区自预览后已改变；未写入任何文件。');
     // 只有迁移到完整、可由当前读取器理解的协议后才做 canonical 回读。
-    await commitFiles(root, plan.documents, { verify: to === 13 ? () => readWorkspace(root) : null });
+    await commitFiles(root, plan.documents, { verify: to === 14 ? () => readWorkspace(root) : null });
     let migrated;
-    try { migrated = to === 13 ? await readWorkspace(root) : { revision: plan.revision }; }
+    try { migrated = to === 14 ? await readWorkspace(root) : { revision: plan.revision }; }
     catch (error) { fail('MIGRATION_READBACK_FAILED', `迁移提交后 v${to} 工作区回读失败：` + error.message); }
     return { ...plan.summary, from: plan.from, to: plan.to, revision: migrated.revision, preview: false, migrated: true };
   } finally { await release(); }

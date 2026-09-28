@@ -96,7 +96,7 @@ test('删除被其他图层引用的定义、非法文件登记和非法边失�
 
 test('新建嵌套机制文件自然发现，不改配置；同名文件绝不覆盖', async t => {
   const { directory, store, workspace } = await fixture(t);
-  const document = { schemaVersion: 8, kind: 'mechanic', workspaceId: workspace.manifest.id, id: 'new-layer', name: '新图层', scope: '抽象规则', focusNodeIds: ['enemy', 'damage'], pinnedRuleIds: [], positions: {}, taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } };
+  const document = { schemaVersion: 9, kind: 'mechanic', workspaceId: workspace.manifest.id, id: 'new-layer', name: '新图层', scope: '抽象规则', implementationStatus: 'design', focusNodeIds: ['enemy', 'damage'], pinnedRuleIds: [], positions: {}, taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } };
   const before = await readFile(join(directory, 'workspace.json'), 'utf8');
   const occupied = workspace.files.find(item => item.kind === 'mechanic').path;
   const occupiedBefore = await readFile(join(directory, occupied), 'utf8');

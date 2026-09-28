@@ -30,8 +30,8 @@ test('全局规则按机制或视图显式引用做一跳投影，不复制规�
 test('仅固定规则的机制图会投影规则及其端点，不需要虚构焦点节点', async () => {
   const workspace = await readWorkspace(sampleRoot);
   const ruleId = workspace.rules.rules[0].id;
-  workspace.mechanics.push({ schemaVersion: 8, kind: 'mechanic', workspaceId: workspace.manifest.id, id: 'pinned-only', name: '固定规则总览',
-    scope: '测试', focusNodeIds: [], pinnedRuleIds: [ruleId], positions: {}, taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } });
+  workspace.mechanics.push({ schemaVersion: 9, kind: 'mechanic', workspaceId: workspace.manifest.id, id: 'pinned-only', name: '固定规则总览',
+    scope: '测试', implementationStatus: 'design', focusNodeIds: [], pinnedRuleIds: [ruleId], positions: {}, taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } });
   const graph = composeProjection(workspace, { graphIds: ['pinned-only'] });
   const rule = workspace.rules.rules.find(item => item.id === ruleId);
   assert.deepEqual(graph.edges.map(edge => edge.id), [ruleId]);
@@ -93,13 +93,15 @@ test('v10 迁移直接进入当前规则库与标签表，失败预览不会写�
   assert.equal(compatible.rules.rules.length, rules.rules.length);
   const executed = await migrateWorkspace(workspaceRoot, { from: 10, to: 12, revision: preview.revision, execute: true });
   assert.equal(executed.migrated, true);
-  // v12 只是过渡版本：只有再走 12 → 13 才能回到当前严格读取的协议。
+  // v12 与 v13 都只是过渡版本：还需 13 → 14 才能严格读取。
   const v12ToV13 = await migrateWorkspace(workspaceRoot, { from: 12, to: 13 });
   await migrateWorkspace(workspaceRoot, { from: 12, to: 13, revision: v12ToV13.revision, execute: true });
+  const v13ToV14 = await migrateWorkspace(workspaceRoot, { from: 13, to: 14 });
+  await migrateWorkspace(workspaceRoot, { from: 13, to: 14, revision: v13ToV14.revision, execute: true });
   const migrated = await readWorkspace(workspaceRoot);
-  assert.equal(migrated.manifest.schemaVersion, 13);
+  assert.equal(migrated.manifest.schemaVersion, 14);
   assert.equal(migrated.compatibilityMode, false);
-  assert.ok(migrated.mechanics.every(item => item.schemaVersion === 8 && item.taxonomyPresentation.mode === 'label'));
+  assert.ok(migrated.mechanics.every(item => item.schemaVersion === 9 && item.implementationStatus === 'design' && item.taxonomyPresentation.mode === 'label'));
   assert.equal(migrated.rules.rules.length, rules.rules.length);
   assert.deepEqual(migrated.definitions.tagDefinitions, [
     { id: '战斗', displayName: '战斗', color: '#6B7280' },

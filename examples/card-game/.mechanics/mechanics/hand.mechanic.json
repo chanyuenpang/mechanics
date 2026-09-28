@@ -1,9 +1,10 @@
 {
-  "schemaVersion": 8,
+  "schemaVersion": 9,
   "kind": "mechanic",
   "workspaceId": "sample-card-game",
   "id": "hand",
   "name": "防御手牌",
+  "implementationStatus": "design",
   "scope": "防御牌的抽象机制图，用于分析近战抑制与体力代价，不分析具体战局可用性。",
   "focusNodeIds": [
     "evade",

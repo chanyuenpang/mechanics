@@ -51,6 +51,34 @@ test('机制文档共享单一词典，且词典只保留已导出规则涉及�
   assert.doesNotMatch([...catalog.files.values()].join('\n'), /<a id=/);
 });
 
+test('机制状态在独立、文件夹、视图与索引逐图导出，变更使文档过期', async () => {
+  const workspace = await readWorkspace(exampleWorkspace);
+  const [first, second, third] = workspace.mechanics;
+  const byId = new Map(workspace.files.filter(file => file.kind === 'mechanic').map(file => [file.id, file]));
+  byId.get(first.id).path = 'mechanics/cards/first.mechanic.json';
+  byId.get(second.id).path = 'mechanics/cards/second.mechanic.json';
+  third.implementationStatus = 'implemented';
+  workspace.manifest.exportSelections = [{ kind: 'folder', folder: 'cards' }, { kind: 'mechanic', mechanicId: third.id }];
+  const before = buildCatalog(workspace);
+  assert.match(before.files.get(`mechanics/${third.id}.md`), /落地状态：已落地/);
+  assert.match(before.files.get('folders/cards.md'), /落地状态：设计稿/g);
+  assert.match(before.files.get('README.md'), /已落地/);
+  const previous = before.documentRevision;
+  first.implementationStatus = 'implemented';
+  const after = buildCatalog(workspace);
+  assert.notEqual(after.documentRevision, previous);
+  assert.match(after.files.get('folders/cards.md'), /落地状态：已落地/);
+  assert.match(after.files.get('AGENTS.md'), /不证明每条共享规则/);
+  workspace.views.push({ schemaVersion: 5, kind: 'view', workspaceId: workspace.manifest.id, id: 'status-view', name: '状态视图',
+    mechanicRegistrations: [{ mechanicId: first.id, visible: true }, { mechanicId: third.id, visible: true }, { mechanicId: second.id, visible: false }],
+    focusNodeIds: [], pinnedRuleIds: [], collapsedNodeIds: [], positions: {}, structuralPresentation: 'line', taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } });
+  workspace.manifest.exportSelections = [{ kind: 'view', viewId: 'status-view' }];
+  const viewCatalog = buildCatalog(workspace), view = viewCatalog.views[0], text = viewCatalog.files.get(view.file);
+  assert.equal(view.mechanics.length, 2);
+  assert.equal((text.match(/落地状态：已落地/g) ?? []).length, 2);
+  assert.doesNotMatch(text, new RegExp(second.name));
+});
+
 test('规则只在所属机制文档声明一次，并只导出可读的端点、范围与规则文本', async () => {
   const workspace = await readWorkspace(exampleWorkspace);
   const mechanic = workspace.mechanics[0], edge = workspace.rules.rules.find(rule => mechanic.pinnedRuleIds.includes(rule.id));
@@ -98,8 +126,8 @@ test('导出清单将文件夹聚合为一篇，单机制图保持独立且不�
 test('新建机制图默认进入单独导出；文件夹已覆盖时不重复，视图不进清单', async t => {
   const { root, workspace } = await fixture(t);
   const store = await createWorkspaceStore(root);
-  const document = id => ({ schemaVersion: 8, kind: 'mechanic', workspaceId: workspace.manifest.id, id, name: '新建机制',
-    scope: '验收新建默认导出。', focusNodeIds: [], pinnedRuleIds: [], positions: {},
+  const document = id => ({ schemaVersion: 9, kind: 'mechanic', workspaceId: workspace.manifest.id, id, name: '新建机制',
+    scope: '验收新建默认导出。', implementationStatus: 'design', focusNodeIds: [], pinnedRuleIds: [], positions: {},
     taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } });
   try {
     const existing = workspace.mechanics[0];

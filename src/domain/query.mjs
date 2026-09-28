@@ -158,7 +158,7 @@ function retentionBindingEdges(workspace, nodeMap, saved) {
   return edges;
 }
 
-function meta(workspace, command) { return { queryApiVersion: QUERY_API_VERSION, semanticsVersion: SEMANTICS_VERSION, readingContract: { version: readingContract().version }, workspaceId: workspace.manifest.id, revision: workspace.revision, ...(Number.isInteger(workspace.projectGeneration) ? { projectGeneration: workspace.projectGeneration } : {}), savedOnly: true, command }; }
+function meta(workspace, command) { return { queryApiVersion: QUERY_API_VERSION, semanticsVersion: SEMANTICS_VERSION, readingContract: { version: readingContract().version }, workspaceId: workspace.manifest.id, revision: workspace.revision, ...(Number.isInteger(workspace.projectGeneration) ? { projectGeneration: workspace.projectGeneration } : {}), savedOnly: true, command, mechanicStatuses: Object.fromEntries(workspace.mechanics.map(item => [item.id, item.implementationStatus])) }; }
 function compactResult(result, trace, nodeMap) { return { ...result, counts: { returned: trace.paths.length, found: trace.found, total: trace.totalExact ? trace.found : null, totalExact: trace.totalExact }, expandedStates: trace.expandedStates, completeWithinBounds: !trace.truncationReasons.length, truncationReasons: trace.truncationReasons, paths: trace.paths.map(path => compactPath(path, nodeMap)) }; }
 
 export function queryWorkspace(workspace, request) {
@@ -166,7 +166,7 @@ export function queryWorkspace(workspace, request) {
   if (request.command === 'guide') return queryGuide();
   if (request.revision && request.revision !== workspace.revision) fail('REVISION_CONFLICT', '查询版本已改变，请重新读取项目状态');
   const result = meta(workspace, request.command);
-  if (request.command === 'scopes') return { ...result, resourceRevisions: structuredClone(workspace.resourceRevisions), mechanics: workspace.mechanics.map(item => ({ id: item.id, name: item.name, scope: item.scope, nodeCount: item.focusNodeIds.length, edgeCount: workspace.rules.rules.filter(rule => item.pinnedRuleIds.includes(rule.id)).length })).sort(byId), views: workspace.views.map(item => ({ id: item.id, name: item.name })).sort(byId) };
+  if (request.command === 'scopes') return { ...result, resourceRevisions: structuredClone(workspace.resourceRevisions), mechanics: workspace.mechanics.map(item => ({ id: item.id, name: item.name, scope: item.scope, implementationStatus: item.implementationStatus, nodeCount: item.focusNodeIds.length, edgeCount: workspace.rules.rules.filter(rule => item.pinnedRuleIds.includes(rule.id)).length })).sort(byId), views: workspace.views.map(item => ({ id: item.id, name: item.name })).sort(byId) };
   const graph = projectGraph(workspace), nodeMap = new Map(graph.nodes.map(node => [node.id, node]));
   if (request.command === 'search') {
     if (request.query) { const resolution = resolveConcept(graph.nodes, request.query); if (resolution.status === 'resolved') return { ...result, query: request.query, resolution: { status: 'resolved', matchedBy: resolution.matchedBy }, concept: nodeDTO(resolution.concept) }; if (resolution.status === 'ambiguous') return { ...result, query: request.query, resolution }; return { ...result, query: request.query, resolution: fuzzyCandidates(graph.nodes, request.query) ?? resolution }; }

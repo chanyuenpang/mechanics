@@ -18,10 +18,22 @@ const workspace = {
     { id: 'attack-health', source: 'attack', target: 'health', relation: 'influence', sign: -1, ruleText: '攻击降低气血' },
   ] },
   mechanics: [
-    { id: 'taxonomy', name: '分类', scope: '测试', focusNodeIds: ['soldier', 'unit'], pinnedRuleIds: ['soldier-is-unit'] },
-    { id: 'combat', name: '战斗', scope: '测试', focusNodeIds: ['soldier', 'attack', 'health'], pinnedRuleIds: ['soldier-attack', 'attack-health'] },
+    { id: 'taxonomy', name: '分类', scope: '测试', implementationStatus: 'design', focusNodeIds: ['soldier', 'unit'], pinnedRuleIds: ['soldier-is-unit'] },
+    { id: 'combat', name: '战斗', scope: '测试', implementationStatus: 'implemented', focusNodeIds: ['soldier', 'attack', 'health'], pinnedRuleIds: ['soldier-attack', 'attack-health'] },
   ],
 };
+
+test('Agent 各查询显式提供图级落地状态但不筛选共享规则', () => {
+  const scopes = queryWorkspace(workspace, { command: 'scopes' });
+  assert.deepEqual(scopes.mechanicStatuses, { taxonomy: 'design', combat: 'implemented' });
+  assert.equal(scopes.mechanics.find(item => item.id === 'combat').implementationStatus, 'implemented');
+  for (const request of [{ command: 'search', query: '攻击' }, { command: 'node', id: 'attack' }, { command: 'impact', from: 'soldier', to: 'health' }]) {
+    const result = queryWorkspace(workspace, request);
+    assert.deepEqual(result.mechanicStatuses, scopes.mechanicStatuses);
+  }
+  assert.equal(queryWorkspace(workspace, { command: 'impact', from: 'soldier', to: 'health' }).paths.length > 0, true);
+  assert.match(queryWorkspace(workspace, { command: 'guide' }).readingContract.rules.implementationStatus, /不按状态过滤/);
+});
 
 test('search 精确解析 ID、名称和别名；歧义只返回候选', () => {
   const byAlias = queryWorkspace(workspace, { command: 'search', query: '战士' });

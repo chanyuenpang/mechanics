@@ -68,14 +68,14 @@ try {
   assert.equal(data.workspaceId, 'package-check');
   const scopes = JSON.parse(command(process.execPath, [cli, 'agent', 'scopes'], join(workspace, '.mechanics', 'mechanics')));
   assert.equal(scopes.workspaceId, 'package-check');
-  assert.equal(scopes.queryApiVersion, 10);
+  assert.equal(scopes.queryApiVersion, 11);
   assert.match(scopes.resourceRevisions.definitions, /^[a-f0-9]{64}$/u);
   const guide = JSON.parse(command(process.execPath, [cli, 'agent', 'guide'], temporary));
-  assert.equal(guide.queryApiVersion, 10);
-  assert.equal(guide.readingContract.version, 10);
+  assert.equal(guide.queryApiVersion, 11);
+  assert.equal(guide.readingContract.version, 11);
   const search = JSON.parse(command(process.execPath, [cli, 'agent', 'search', '--query', '未建模概念'], join(workspace, '.mechanics', 'mechanics')));
-  assert.equal(search.queryApiVersion, 10);
-  assert.equal(search.readingContract.version, 10);
+  assert.equal(search.queryApiVersion, 11);
+  assert.equal(search.readingContract.version, 11);
   assert.equal(search.resolution.status, 'not_found');
   const created = JSON.parse(command(process.execPath, [cli, 'agent', 'concept', 'create', '--project', workspace,
     '--id', 'package-focus', '--label', '打包专注', '--description', '隔离安装验收使用的概念。', '--aliases', '[]',

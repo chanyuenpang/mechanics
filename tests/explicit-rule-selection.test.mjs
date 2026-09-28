@@ -13,8 +13,8 @@ import { copyExampleFixture } from './example-fixture.mjs';
 
 const sampleRoot = fileURLToPath(new URL('../examples/card-game/.mechanics/', import.meta.url));
 const rule = (source, target) => ({ id: `${source}-2-${target}`, source, target, relation: 'influence', sign: 1, inheritance: { mode: 'none' }, ruleText: '测试规则。' });
-const mechanism = (id, focusNodeIds, pinnedRuleIds, explicit = false) => ({ schemaVersion: 8, kind: 'mechanic', workspaceId: 'sample-card-game',
-  id, name: '隔离测试', scope: '测试', focusNodeIds, pinnedRuleIds, positions: {}, taxonomyPresentation: { mode: 'label', expandedNodeIds: [] }, ...(explicit ? { ruleSelection: 'explicit' } : {}) });
+const mechanism = (id, focusNodeIds, pinnedRuleIds, explicit = false) => ({ schemaVersion: 9, kind: 'mechanic', workspaceId: 'sample-card-game',
+  id, name: '隔离测试', scope: '测试', implementationStatus: 'design', focusNodeIds, pinnedRuleIds, positions: {}, taxonomyPresentation: { mode: 'label', expandedNodeIds: [] }, ...(explicit ? { ruleSelection: 'explicit' } : {}) });
 const fixture = () => ({ definitions: { nodes: ['shared', 'benefit', 'private-card', 'other', 'outcome', 'isolated'].map(id => ({ id, label: id, description: '测试概念。', agentLocked: false })) },
   rules: { rules: [rule('shared', 'benefit'), rule('private-card', 'shared'), rule('other', 'outcome')] },
   mechanics: [mechanism('explicit-map', ['shared', 'isolated'], ['shared-2-benefit'], true), mechanism('default-map', ['other'], [])] });

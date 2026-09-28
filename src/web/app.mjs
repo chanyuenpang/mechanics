@@ -401,7 +401,7 @@ function updateStatus() {
   $('negative-tool').disabled = $('positive-tool').disabled;
   $('random-tool').disabled = $('positive-tool').disabled;
   updateRelationTools();
-  $('save-state').textContent = legacy ? '旧记录已保留' : viewMode() ? '视图自动保存' : dirty() ? '规则未保存' : '规则已保存';
+  $('save-state').textContent = legacy ? '旧记录已保留' : viewMode() ? '视图自动保存' : dirty() ? '机制未保存' : '机制已保存';
   $('save').hidden = viewMode() || legacy;
   $('delete-mechanic').hidden = definitionMode() || viewMode() || legacy || activeId === null;
   $('delete-mechanic').disabled = !workspace || busy() || !!autosave?.blocked;
@@ -1083,7 +1083,7 @@ function render(withInspector = true, { preserveRoutes = false } = {}) {
   const table = definitionMode();
   $('stage').hidden = table; $('glossary').hidden = !table;
   if (table) {
-    $('file-kind').textContent = '全局'; $('file-name').textContent = '共享概念'; $('file-name').title = filePath();
+    $('file-kind').textContent = '全局'; $('file-name').textContent = '共享概念'; $('file-name').title = filePath(); $('implementation-badge').hidden = true;
     renderCanvasFilePath();
     glossary.update(draft.nodes, workspace.mechanics, pending, workspace.definitions.tagDefinitions ?? []); renderSidebar(); updateStatus(); $('inspector').hidden = true; return Promise.resolve(true);
   }
@@ -1102,6 +1102,16 @@ function render(withInspector = true, { preserveRoutes = false } = {}) {
     $('file-kind').textContent = viewMode() ? '视图' : legacy ? '旧记录' : '机制';
     $('file-name').textContent = viewMode() ? workspace.views.find(item => item.id === viewId).name : legacy ? '待保存的叠加' : activeId === null ? '未选择机制' : draft.name;
     $('file-name').title = filePath();
+    const badge = $('implementation-badge');
+    badge.hidden = viewMode() || legacy || activeId === null;
+    if (!badge.hidden) {
+      if (!['design', 'implemented'].includes(draft.implementationStatus)) throw new Error('机制图落地状态非法：' + String(draft.implementationStatus));
+      const implemented = draft.implementationStatus === 'implemented';
+      badge.textContent = implemented ? '✓ 已落地' : '设计稿';
+      badge.classList.toggle('implemented', implemented);
+      badge.title = (implemented ? '作者确认本图已落地' : '尚未声明本图已落地') + (dirty() ? '（未保存草稿）' : '');
+      badge.setAttribute('aria-label', badge.textContent + (dirty() ? '，未保存草稿' : ''));
+    }
     renderCanvasFilePath();
     $('counts').textContent = graph.nodes.length + ' 个节点 · ' + graph.edges.length + ' 条关系';
     $('empty').hidden = graph.nodes.length > 0;
@@ -1171,6 +1181,8 @@ function inspect() {
     detail(panel, '保存文件', filePath());
     field(panel, '机制名称', draft.name, { onChange: value => edit(data => { data.name = value; }, { inspect: false }) });
     field(panel, '分析范围', draft.scope, { multiline: true, onChange: value => edit(data => { data.scope = value; }, { inspect: false }) });
+    field(panel, '落地状态', draft.implementationStatus, { options: [['design', '设计稿'], ['implemented', '已落地（作者确认）']], onChange: value => edit(data => { data.implementationStatus = value; }, { topology: false }) });
+    panel.append(el('p', '状态是对整张机制图的人工声明，不代表逐条规则已通过运行时验证。', 'note'));
     detail(panel, '稳定 ID', draft.id);
     return;
   }
@@ -1637,7 +1649,7 @@ async function newGraph(defaultDirectory = 'mechanics') {
     for (const path of ['.', ...workspace.directories]) { const option = el('option'); option.value = path; choices.append(option); }
     container.append(choices, el('p', '保存为 <相对目录>/<ID>.mechanic.json。支持中文和多层目录；填 . 表示工作区根。', 'note'));
   }, async () => {
-    const document = { schemaVersion: 8, kind: 'mechanic', workspaceId: workspace.manifest.id, id: id.value, name: label.value.trim(), scope: scope.value.trim(), focusNodeIds: [], pinnedRuleIds: [], positions: {}, taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } };
+    const document = { schemaVersion: 9, kind: 'mechanic', workspaceId: workspace.manifest.id, id: id.value, name: label.value.trim(), scope: scope.value.trim(), implementationStatus: 'design', focusNodeIds: [], pinnedRuleIds: [], positions: {}, taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } };
     const parent = directory.value.trim(), file = (parent === '.' ? '' : parent + '/') + document.id + '.mechanic.json';
     await write(revision => api('/api/mechanics', { revision, document, file }));
     // 新文件已存在后，打开失败不能自动重复创建。

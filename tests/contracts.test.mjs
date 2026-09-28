@@ -186,10 +186,10 @@ test('视图可保存暂时隐藏或后续出现的定义节点坐标', () => {
 
 test('工具可处理无任何卡牌概念的另一游戏工作区', () => {
   const data = {
-    manifest: { schemaVersion: 13, kind: 'workspace', id: 'platform-game', name: '跳跃游戏', definitions: 'definitions.json', rules: 'rules.json', agentExportPath: 'mechanics', compositions: [] },
+    manifest: { schemaVersion: 14, kind: 'workspace', id: 'platform-game', name: '跳跃游戏', definitions: 'definitions.json', rules: 'rules.json', agentExportPath: 'mechanics', compositions: [] },
     definitions: { schemaVersion: 7, kind: 'definitions', workspaceId: 'platform-game', tagDefinitions: [], nodes: ['jump', 'fall'].map(id => ({ id, label: id, description: '测试概念', agentLocked: false })), positions: {} },
     rules: { schemaVersion: 1, kind: 'rules', workspaceId: 'platform-game', rules: [{ id: 'jump-2-fall', source: 'jump', target: 'fall', relation: 'influence', sign: -1, inheritance: { mode: 'none' }, ruleText: '及时起跳' }] },
-    mechanics: [{ schemaVersion: 8, kind: 'mechanic', workspaceId: 'platform-game', id: 'jump-rule', name: '跳跃规则', scope: '假设模型', focusNodeIds: ['jump', 'fall'], pinnedRuleIds: ['jump-2-fall'], positions: {}, taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } }],
+    mechanics: [{ schemaVersion: 9, kind: 'mechanic', workspaceId: 'platform-game', id: 'jump-rule', name: '跳跃规则', scope: '假设模型', implementationStatus: 'design', focusNodeIds: ['jump', 'fall'], pinnedRuleIds: ['jump-2-fall'], positions: {}, taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } }],
   };
   validateWorkspace(data);
   assert.equal(tracePaths(compose(data, ['jump-rule']), 'jump', 'fall').paths[0].sign, -1);

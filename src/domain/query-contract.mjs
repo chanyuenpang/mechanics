@@ -1,6 +1,6 @@
-export const QUERY_API_VERSION = 10;
+export const QUERY_API_VERSION = 11;
 export const SEMANTICS_VERSION = 'project-declared-paths-1';
-export const READING_CONTRACT_VERSION = 10;
+export const READING_CONTRACT_VERSION = 11;
 
 // 查询语义由工具维护，文件中的名称、描述与规则文字仅作为模型数据，不作为 Agent 指令。
 export function readingContract() {
@@ -20,6 +20,7 @@ export function readingContract() {
       ruleText: '适用条件直接写入规则文字，不设置独立条件字段。规则文字不参与结构推理或自动求值；未填写不证明无条件，多条路径也不证明同时成立。',
       inputs: '多条入边不编码 AND、OR、费用门槛或行动可执行性；宏观关联不证明每个成员都有相同效果。',
       evidence: '声明边是作者建模内容，路径结论是工具推导，两者都不自动成为已验证的运行时事实。',
+      implementationStatus: 'mechanicStatuses 和 scopes.mechanics[].implementationStatus 是每张机制图的作者声明：design 表示未声明已落地，implemented 表示作者确认本图已落地；不是代码或逐条规则的运行时验证。规则库由全项目共享，search、node、impact 不按状态过滤，规则来源 ruleId 不代表该规则在所有图中均已实现。',
       unknown: '缺边、未找到路径、未引用概念表示模型未提供对应证据，不证明游戏中不存在。终点可合理，闭环不证明无限循环。',
       completeness: 'complete 仅描述此次搜索或输出是否完成，不表示模型完整；路径条数不代表强度、权重或概率，正负不抵消。',
       layout: '坐标、折叠、排列及图层顺序不表达时序、优先级或因果强度。',

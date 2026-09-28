@@ -170,7 +170,7 @@ try {
         console.log(JSON.stringify(await repairProjectionPositions(context.workspaceRoot, { revision: values.revision, execute: values.execute === true }), null, 2));
       } else if (command === 'migrate') {
         const from = Number(values.from), to = Number(values.to);
-        if (!((from === 7 && to === 8) || (from === 8 && to ===9) || (from === 9 && to === 10) || (from === 10 && to === 12) || (from === 11 && to === 12) || (from === 12 && to === 13) || (from === 9 && to === 9))) throw Object.assign(new Error('migrate 仅支持 --from 7 --to 8、--from 8 --to 9、--from 9 --to 10、--from 10 --to 12、--from 11 --to 12、--from 12 --to 13 或 --from 9 --to 9'), { code: 'MIGRATION_VERSION_UNSUPPORTED' });
+        if (!(WORKSPACE_MIGRATION_STEPS[from] === to || (from === 9 && to === 9))) throw Object.assign(new Error('migrate 仅支持既有逐级迁移链或 --from 9 --to 9 修复'), { code: 'MIGRATION_VERSION_UNSUPPORTED' });
         console.log(JSON.stringify(await migrateWorkspace(context.workspaceRoot, { from, to, revision: values.revision, execute: values.execute === true }), null, 2));
       } else if (command === 'catalog') {
         const release = await acquireWorkspaceLock(context.workspaceRoot);

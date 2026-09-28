@@ -6,7 +6,7 @@
 
 ## 全项目查询
 
-三种内容查询都只读取当前项目已保存的全部概念和全部机制声明。机制图、文件夹与视图是编辑和展示组织，不是查询范围。
+三种内容查询都只读取当前项目已保存的全部概念和全部机制声明。机制图、文件夹与视图是编辑和展示组织，不是查询范围。`scopes.mechanics[].implementationStatus` 逐图给出 `design` 或 `implemented`；各内容查询的顶层 `mechanicStatuses` 为图 ID 到状态的映射。`design` 表示作者尚未声明本图已落地，`implemented` 表示作者人工确认整张图已落地；状态不筛选查询，也不证明共享规则或推导路径已经运行时验证。以 `guide.readingContract.rules.implementationStatus` 为机器阅读合同。
 
 ```sh
 game-graph agent guide --format json

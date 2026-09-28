@@ -1,9 +1,10 @@
 {
-  "schemaVersion": 8,
+  "schemaVersion": 9,
   "kind": "mechanic",
   "workspaceId": "sample-card-game",
   "id": "encounter",
   "name": "近战遭遇",
+  "implementationStatus": "design",
   "scope": "假设关卡的机制组合：包含近战敌人规则，不包含远程攻击机制；不是实时战斗状态。",
   "focusNodeIds": [
     "enemy",

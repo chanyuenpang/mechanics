@@ -168,13 +168,13 @@ test('web --project 打开 v10 工作区时按迁移链自动升级到当前协�
     });
     const project = JSON.parse((await httpGet(url + 'api/project')).body);
     assert.equal(project.status, 'active');
-    // 打开项目会把可迁移的旧协议逐级升级并落盘：v10 → v12 → v13。
+    // 打开项目会把可迁移的旧协议逐级升级并落盘：v10 → v12 → v13 → v14。
     const onDisk = JSON.parse(await readFile(join(root, 'workspace.json'), 'utf8'));
-    assert.equal(onDisk.schemaVersion, 13);
+    assert.equal(onDisk.schemaVersion, 14);
     const served = JSON.parse((await httpGet(url + 'api/workspace')).body);
-    assert.equal(served.manifest.schemaVersion, 13);
+    assert.equal(served.manifest.schemaVersion, 14);
     assert.equal(served.compatibilityMode, false);
-    assert.ok(served.mechanics.every(item => item.schemaVersion === 8 && item.taxonomyPresentation.mode === 'label'));
+    assert.ok(served.mechanics.every(item => item.schemaVersion === 9 && item.implementationStatus === 'design' && item.taxonomyPresentation.mode === 'label'));
     assert.ok(served.views.every(item => item.schemaVersion === 5));
   } finally {
     if (child.exitCode === null && child.signalCode === null) {

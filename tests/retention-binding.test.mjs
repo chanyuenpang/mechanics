@@ -19,10 +19,10 @@ const BINDING = retentionBinding('defense-retention', 'shield', 'defense-stance'
 
 function workspace(edges = BASE_EDGES, bindings = [BINDING]) {
   return {
-    manifest: { schemaVersion: 13, kind: 'workspace', id: 'sample', name: '测试', definitions: 'definitions.json', rules: 'rules.json', agentExportPath: 'mechanics', compositions: [] },
+    manifest: { schemaVersion: 14, kind: 'workspace', id: 'sample', name: '测试', definitions: 'definitions.json', rules: 'rules.json', agentExportPath: 'mechanics', compositions: [] },
     definitions: { schemaVersion: 7, kind: 'definitions', workspaceId: 'sample', nodes: NODES.map(node), tagDefinitions: [], positions: {} },
     rules: { schemaVersion: 1, kind: 'rules', workspaceId: 'sample', rules: edges, ...(bindings ? { retentionBindings: bindings } : {}) },
-    mechanics: [{ schemaVersion: 8, kind: 'mechanic', workspaceId: 'sample', id: 'rules', name: '规则', scope: '测试', focusNodeIds: [...NODES], pinnedRuleIds: edges.map(edge => edge.id), positions: {}, taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } }],
+    mechanics: [{ schemaVersion: 9, kind: 'mechanic', workspaceId: 'sample', id: 'rules', name: '规则', scope: '测试', implementationStatus: 'design', focusNodeIds: [...NODES], pinnedRuleIds: edges.map(edge => edge.id), positions: {}, taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } }],
     views: [], revision: 'r1',
   };
 }

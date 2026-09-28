@@ -98,8 +98,8 @@ test('Agent 只能在既有目录中创建受约束的机制容器，并返回�
     '--workspace-revision', workspace.revision]));
   assert.equal(mechanic.canonicalCommitted, true); assert.match(mechanic.resourceRevision, /^[a-f0-9]{64}$/u);
   workspace = await readWorkspace(root);
-  assert.deepEqual(workspace.mechanics.find(item => item.id === 'core-loop'), { schemaVersion: 8, kind: 'mechanic', workspaceId: workspace.manifest.id,
-    id: 'core-loop', name: '核心循环', scope: '基础玩法', focusNodeIds: [], pinnedRuleIds: [], positions: {},
+  assert.deepEqual(workspace.mechanics.find(item => item.id === 'core-loop'), { schemaVersion: 9, kind: 'mechanic', workspaceId: workspace.manifest.id,
+    id: 'core-loop', name: '核心循环', scope: '基础玩法', implementationStatus: 'design', focusNodeIds: [], pinnedRuleIds: [], positions: {},
     taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } });
   assert.ok(workspace.files.some(item => item.id === 'core-loop' && item.path === 'mechanics/参考/core-loop.mechanic.json'));
   const missing = await failure(offline(projectRoot, ['mechanic', 'create', '--id', 'missing-folder', '--name', '错误', '--scope', '测试', '--folder', '不存在', '--workspace-revision', workspace.revision]));

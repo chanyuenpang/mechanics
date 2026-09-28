@@ -241,7 +241,7 @@
       "properties": {
         "schemaVersion": {
           "enum": [
-            13
+            14
           ]
         },
         "kind": {
@@ -855,6 +855,7 @@
         "id",
         "name",
         "scope",
+        "implementationStatus",
         "focusNodeIds",
         "pinnedRuleIds",
         "positions",
@@ -863,7 +864,7 @@
       "properties": {
         "schemaVersion": {
           "enum": [
-            8
+            9
           ]
         },
         "kind": {
@@ -880,6 +881,9 @@
         },
         "scope": {
           "$ref": "#/definitions/text"
+        },
+        "implementationStatus": {
+          "enum": ["design", "implemented"]
         },
         "ruleSelection": {
           "const": "explicit"

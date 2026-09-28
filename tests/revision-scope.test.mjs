@@ -71,6 +71,25 @@ test('布局与连线路径不移动语义版本，打开图补算不会作废�
   assert.deepEqual(JSON.parse(await readFile(join(saved.workspaceRoot, pathOf(workspace, 'mechanic', document.id)), 'utf8')).positions.draw, { x: 4096, y: 4096 });
 });
 
+test('实现状态是持久语义：改为 implemented 更改修订，缺失或非法值拒绝保存', async t => {
+  const { store, workspace } = await fixture(t);
+  const target = mechanicAt(workspace, 0);
+  for (const value of [undefined, 'unknown']) {
+    const invalid = structuredClone(target);
+    if (value === undefined) delete invalid.implementationStatus;
+    else invalid.implementationStatus = value;
+    await assert.rejects(store.save({ revision: workspace.revision, resourceRevisions: workspace.resourceRevisions,
+      kind: 'mechanic', id: target.id, document: invalid }), { code: 'INVALID_DOCUMENT' });
+    assert.equal((await store.read()).resourceRevisions.mechanics[target.id], workspace.resourceRevisions.mechanics[target.id]);
+  }
+  const changed = structuredClone(target); changed.implementationStatus = 'implemented';
+  const saved = await store.save({ revision: workspace.revision, resourceRevisions: workspace.resourceRevisions,
+    kind: 'mechanic', id: target.id, document: changed });
+  assert.equal(saved.mechanics.find(item => item.id === target.id).implementationStatus, 'implemented');
+  assert.notEqual(saved.resourceRevisions.mechanics[target.id], workspace.resourceRevisions.mechanics[target.id]);
+  assert.notEqual(saved.revision, workspace.revision);
+});
+
 test('同一资源的语义变化仍然拒绝，并指出具体文件', async t => {
   const { store, workspace } = await fixture(t);
   const target = mechanicAt(workspace, 0), baseline = workspace.resourceRevisions;
@@ -132,7 +151,7 @@ test('结构写入仍然要求整体版本：新建、移动与删除不做按�
   const baseline = workspace.resourceRevisions;
   const other = structuredClone(workspace.definitions); other.nodes[0].label = '别的页面改过';
   await store.save({ revision: workspace.revision, resourceRevisions: baseline, kind: 'definitions', document: other });
-  const document = { schemaVersion: 8, kind: 'mechanic', workspaceId: workspace.manifest.id, id: 'scope-structure', name: '结构写入', scope: '抽象规则', focusNodeIds: [], pinnedRuleIds: [], positions: {}, taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } };
+  const document = { schemaVersion: 9, kind: 'mechanic', workspaceId: workspace.manifest.id, id: 'scope-structure', name: '结构写入', scope: '抽象规则', implementationStatus: 'design', focusNodeIds: [], pinnedRuleIds: [], positions: {}, taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } };
   await assert.rejects(store.createMechanic({ revision: workspace.revision, resourceRevisions: baseline, document, file: 'mechanics/scope-structure.mechanic.json' }),
     { code: 'REVISION_CONFLICT' });
 });

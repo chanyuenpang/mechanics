@@ -1,9 +1,10 @@
 {
-  "schemaVersion": 8,
+  "schemaVersion": 9,
   "kind": "mechanic",
   "workspaceId": "sample-card-game",
   "id": "basic-rules",
   "name": "基础规则",
+  "implementationStatus": "design",
   "scope": "人工构造的机制图，非游戏运行时事实；未建模牌库耗尽、伤害量和行动时序。",
   "focusNodeIds": [
     "turn-start",

@@ -88,11 +88,11 @@ function normalizeMechanic(document, manifest, location, taxonomyOptions = {}) {
   const focusNodeIds = stableIds(document.focusNodeIds ?? document.nodeIds, `${location}.nodeIds`);
   const pinnedRuleIds = stableIds(document.pinnedRuleIds ?? edges.map(edge => edge.id), `${location}.pinnedRuleIds`);
   if (document.ruleSelection !== undefined && document.ruleSelection !== 'explicit') fail(`${location}.ruleSelection 无效`);
-  return { schemaVersion: 8, kind: 'mechanic', workspaceId: manifest.id, id: document.id,
+  return { schemaVersion: 9, kind: 'mechanic', workspaceId: manifest.id, id: document.id,
     name: typeof document.name === 'string' && document.name ? document.name : document.id,
     scope: typeof document.scope === 'string' && document.scope ? document.scope : '未指定范围',
     focusNodeIds, pinnedRuleIds, ...(document.ruleSelection !== undefined ? { ruleSelection: document.ruleSelection } : {}), positions: {},
-    taxonomyPresentation: taxonomyPresentationOf(document, taxonomyOptions), __legacyEdges: edges };
+    implementationStatus: 'design', taxonomyPresentation: taxonomyPresentationOf(document, taxonomyOptions), __legacyEdges: edges };
 }
 
 function normalizeView(document, manifest, location, taxonomyOptions = {}) {
@@ -124,14 +124,14 @@ export function compatibilityWorkspace({ manifest: rawManifest, definitions: raw
     error.schemaVersion = version; error.workspaceId = rawManifest.id;
     throw error;
   }
-  let strict = rawManifest.schemaVersion === 13 && rawRules !== null;
-  if (strict) try {
+  if (rawManifest.schemaVersion === 14) {
     assertDocument(rawManifest, 'workspace'); assertDocument(rawDefinitions, 'definitions'); assertDocument(rawRules, 'rules');
-    rawMechanics.forEach(item => assertDocument(item.document, 'mechanic', item.path)); rawViews.forEach(item => assertDocument(item.document, 'view', item.path));
-  } catch { strict = false; }
-  if (strict) return { manifest: rawManifest, definitions: rawDefinitions, rules: rawRules, mechanics: rawMechanics, views: rawViews,
-    compatibilityMode: false, compatibilityDiagnostics: [] };
-  const manifest = { schemaVersion: 13, kind: 'workspace', id: rawManifest.id, name: rawManifest.name,
+    rawMechanics.forEach(item => assertDocument(item.document, 'mechanic', item.path));
+    rawViews.forEach(item => assertDocument(item.document, 'view', item.path));
+    return { manifest: rawManifest, definitions: rawDefinitions, rules: rawRules, mechanics: rawMechanics, views: rawViews,
+      compatibilityMode: false, compatibilityDiagnostics: [] };
+  }
+  const manifest = { schemaVersion: 14, kind: 'workspace', id: rawManifest.id, name: rawManifest.name,
     definitions: rawManifest.definitions, rules: typeof rawManifest.rules === 'string' ? rawManifest.rules : 'rules.json',
     ...(typeof rawManifest.agentExportPath === 'string' ? { agentExportPath: rawManifest.agentExportPath } : {}), compositions: [] };
   if (rawManifest.lastView?.viewId && typeof rawManifest.lastView.viewId === 'string') manifest.lastView = { viewId: rawManifest.lastView.viewId };

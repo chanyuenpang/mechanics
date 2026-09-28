@@ -37,7 +37,7 @@ async function downgradeFixtureToV12(projectRoot) {
   await writeFile(manifestPath, JSON.stringify({ ...manifest, schemaVersion: 12 }, null, 2) + '\n');
   for (const mechanic of workspace.mechanics) {
     const path = join(workspaceRoot, workspace.files.find(file => file.kind === 'mechanic' && file.id === mechanic.id).path);
-    const { taxonomyPresentation, ...rest } = JSON.parse(await readFile(path, 'utf8'));
+    const { taxonomyPresentation, implementationStatus, ...rest } = JSON.parse(await readFile(path, 'utf8'));
     await writeFile(path, JSON.stringify({ ...rest, schemaVersion: 7 }, null, 2) + '\n');
   }
   for (const view of workspace.views) {
@@ -58,7 +58,7 @@ async function openProject(origin, projectRoot, metadata = {}, headers = {}) {
 }
 
 
-test('v12 项目在打开时自动原子升级到 v13，直接严格读取则明确拒绝', async t => {
+test('v12 项目在打开时自动原子升级到 v14，直接严格读取则明确拒绝', async t => {
   const temp = await mkdtemp(join(tmpdir(), 'game-graph-v12-upgrade-'));
   const projectRoot = join(temp, 'v12-project');
   await copyExampleFixture(projectRoot);
@@ -69,21 +69,21 @@ test('v12 项目在打开时自动原子升级到 v13，直接严格读取则明
   t.after(async () => { await server.close(); await rm(temp, { recursive: true, force: true }); });
   const opened = await openProject(server.origin, projectRoot);
   assert.equal(opened.response.status, 200, JSON.stringify(opened.data));
-  assert.deepEqual(opened.data.projectUpgrade, { upgraded: true, from: 12, schemaVersion: 13 });
-  assert.equal(opened.data.manifest.schemaVersion, 13);
+  assert.deepEqual(opened.data.projectUpgrade, { upgraded: true, from: 12, schemaVersion: 14 });
+  assert.equal(opened.data.manifest.schemaVersion, 14);
   assert.equal(opened.data.compatibilityMode, false);
   const explicit = JSON.stringify({ mode: 'label', expandedNodeIds: [] });
-  assert.ok(opened.data.mechanics.every(item => item.schemaVersion === 8 && JSON.stringify(item.taxonomyPresentation) === explicit));
+  assert.ok(opened.data.mechanics.every(item => item.schemaVersion === 9 && item.implementationStatus === 'design' && JSON.stringify(item.taxonomyPresentation) === explicit));
   // 升级真实落盘，重开不再需要第二次升级。
   const onDisk = JSON.parse(await readFile(join(workspaceRoot, 'workspace.json'), 'utf8'));
-  assert.equal(onDisk.schemaVersion, 13);
+  assert.equal(onDisk.schemaVersion, 14);
   for (const name of (await readdir(join(workspaceRoot, 'mechanics'))).filter(name => name.endsWith('.mechanic.json'))) {
-    assert.equal(JSON.parse(await readFile(join(workspaceRoot, 'mechanics', name), 'utf8')).schemaVersion, 8);
+    assert.equal(JSON.parse(await readFile(join(workspaceRoot, 'mechanics', name), 'utf8')).schemaVersion, 9);
   }
   // 同一会话再次打开命中已升级的工作区，不再有第二次写入。
   const reopened = await openProject(server.origin, projectRoot);
   assert.equal(reopened.response.status, 200);
-  assert.equal(reopened.data.manifest.schemaVersion, 13);
+  assert.equal(reopened.data.manifest.schemaVersion, 14);
   await waitForPublication(server.origin, opened.data.projectSessionToken);
 });
 
