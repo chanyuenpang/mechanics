@@ -12,6 +12,7 @@
 - [编辑器与图层](features/editor-navigation-and-layers.md)：概念表、机制图、草稿保存归属与最近视图。
 - [可取消后台计算与打开事务](features/async-compute-and-opening-transaction.md)：Worker 路由/排版、结果门禁与真实打开进度。
 - [端点限定词投影](features/endpoint-qualifier-projection.md)：规则的参与者范围、限定投影身份与「基础实例何时隐藏」。
+- [读取图端点完整性](features/read-graph-integrity.md)：投影边界、节点与端点不变量，以及失败布局事务。
 - [正交路由质量硬合同](features/routing-quality-hard-contract.md)：质量向量与裁决顺序、按构造拒绝硬违规、规模回归断言。
 - [独立工作流决策](adr/2026-08-31-independent-project-ownership.md)：源码、游戏资料与开发知识的归属。
 - [独立视图文件决策](adr/2026-08-31-view-file-autosave.md)：自动写回、最近引用、失败草稿保护与显式 v3 迁移。
@@ -21,8 +22,10 @@
 - [is-a 父概念选择决策](adr/2026-09-23-is-a-parent-picker-and-search.md)：可检索选择器、后代方向与清除语义。
 - [概念编辑对话框定宽与动作行决策](adr/2026-09-23-concept-dialog-width-and-action-ownership.md)：宽度上下界的依据与动作行归属。
 - [限定投影与画布孤点决策](adr/2026-09-23-qualifier-projection-replaces-nodes.md)：基础实例的隐藏条件与「无规则成员不得凭空消失」。
+- [读取图完整性归属决策](adr/2026-09-29-domain-read-graph-integrity-boundary.md)：领域统一断言与布局边界复核。
 - [受管 skill 维护源与注册副本决策](adr/2026-09-23-managed-skills-single-source-and-registration.md)：包内唯一维护源、整目录替换与冲突边界。
 - [原子影响建模边界决策](adr/2026-09-28-atomic-influence-modeling-boundary.md)：先识别影响，条件留在规则文字，保留独立机制职责。
 - [DSH 图卡工具结算锚点决策](adr/2026-09-23-dsh-widget-tool-settlement-anchor.md)：根调用关联、独立节点与 final 位置的未解决边界。
+- [发布后本机正式包决策](adr/2026-09-28-release-local-registry-package-boundary.md)：registry 版本、源码 link 禁止、重启授权与分层验收。
 
 操作说明和完整字段说明位于 `docs/`；Truth 记录当前事实，ADR 记录重要取舍。任务报告与成功提示本身不证明知识文档已经更新。

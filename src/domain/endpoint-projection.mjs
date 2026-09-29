@@ -1,3 +1,5 @@
+import { assertReadGraphIntegrity } from './read-graph-integrity.mjs';
+
 // 端点限定词是规则的参与者范围，不是新的共享概念。此模块只创建画布读取模型。
 const valueKey = value => value.kind === 'concept'
   ? `concept:${value.conceptId}`
@@ -16,12 +18,12 @@ export function endpointProjectionId(baseConceptId, qualifiers) {
 
 // 不推断跨端点绑定：每个投影只替换自己声明了限定词的那个端点。
 export function projectEndpointQualifiers(graph) {
+  assertReadGraphIntegrity(graph, '端点限定投影输入');
   const canonicalNodes = new Map(graph.nodes.map(node => [node.id, node]));
   const projections = new Map();
   const endpoint = (baseConceptId, qualifiers = []) => {
     if (!qualifiers.length) return baseConceptId;
     const base = canonicalNodes.get(baseConceptId);
-    if (!base) return baseConceptId;
     const id = endpointProjectionId(baseConceptId, qualifiers);
     if (!projections.has(id)) projections.set(id, {
       id,
@@ -42,15 +44,15 @@ export function projectEndpointQualifiers(graph) {
     canonicalSource: edge.source,
     canonicalTarget: edge.target,
   }));
-  // 只有「全部可见端点都被限定投影承接」的基础概念才是应当隐藏的画布孤点——它已经被
-  // 上面的限定投影替代，再画一遍会是同一个概念的第二个实例。
-  // 没有任何规则的概念（例如刚引用进机制图、或刚清除了 is-a 的焦点节点）必须保留：
-  // 它不在任何边上，但它是这张图明确引用的成员，丢掉它会让节点从画布上凭空消失。
+  // 仅当基础概念的全部可见端点都已被限定投影承接，才隐藏重复的基础实例。
+  // 混用未限定端点时，基础节点仍是这些边的端点，不能随限定实例一起移除。
+  // 没有规则的焦点节点也没有被替代，必须继续保留。
   const replacedBaseIds = new Set([...projections.values()].map(projection => projection.baseConceptId));
-  return { ...structuredClone(graph), nodes: [
-    ...graph.nodes.filter(node => !replacedBaseIds.has(node.id)).map(node => structuredClone(node)),
+  const plainEndpointIds = new Set(edges.flatMap(edge => [edge.source, edge.target]));
+  return assertReadGraphIntegrity({ ...structuredClone(graph), nodes: [
+    ...graph.nodes.filter(node => !replacedBaseIds.has(node.id) || plainEndpointIds.has(node.id)).map(node => structuredClone(node)),
     ...projections.values(),
-  ], edges };
+  ], edges }, '端点限定投影输出');
 }
 
 export const isEndpointProjection = node => node?.scopeProjection === true;

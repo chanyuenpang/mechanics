@@ -1,3 +1,5 @@
+import { assertReadGraphIntegrity } from '../domain/read-graph-integrity.mjs';
+
 // 布局结构完全独立于机制文件归属，不改变原图节点和边的身份。
 export const SNAP_GRID = 20;
 
@@ -23,6 +25,7 @@ export function layoutDirection(edge) {
 }
 
 export function connectedComponents(graph) {
+  assertReadGraphIntegrity(graph, '连通分量输入');
   const adjacent = new Map(graph.nodes.map(node => [node.id, []]));
   for (const edge of graph.edges) {
     adjacent.get(edge.source).push(edge.target); adjacent.get(edge.target).push(edge.source);
@@ -90,6 +93,7 @@ export function groupBoundary(graph, members) {
 // 只在当前相邻组之间尝试正模块度增益的合并。它是实验用贪心分组，
 // 不承诺找到最佳社区，也不把固定数量的大组作为正确性的条件。
 export function modularHierarchy(graph) {
+  assertReadGraphIntegrity(graph, '模块分组输入');
   const weightOf = edge => edge.bundleMembers?.length ?? 1;
   const leaves = leafHierarchy(graph), count = graph.edges.filter(edge => edge.source !== edge.target).reduce((sum, edge) => sum + weightOf(edge), 0);
   const degree = new Map(graph.nodes.map(node => [node.id, 0]));

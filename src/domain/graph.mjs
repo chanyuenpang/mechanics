@@ -1,4 +1,5 @@
 import { semanticRuleId } from './identity.mjs';
+import { assertReadGraphIntegrity } from './read-graph-integrity.mjs';
 
 // 纯领域计算：不访问文件、浏览器、游戏引擎，不修改传入的工作区。
 export function composeProjection(workspace, { graphIds: selectedIds = [], focusNodeIds = [], pinnedRuleIds = [] } = {}) {
@@ -27,6 +28,7 @@ export function composeProjection(workspace, { graphIds: selectedIds = [], focus
       ...structuredClone(rule), steps: [{ ruleId: rule.id, ...structuredClone(rule) }], hiddenNodes: [],
     })).sort((a, b) => a.id.localeCompare(b.id)),
   };
+  assertReadGraphIntegrity(result, '合成投影');
   assertSpecializes(result.edges);
   return result;
 }

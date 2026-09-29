@@ -105,7 +105,7 @@ try {
   for (const asset of ['/', '/app.mjs', '/canvas.mjs', '/glossary.mjs', '/view-files.mjs', '/graph-compute.mjs',
     '/graph-compute-kernel.mjs', '/graph-compute-worker.js', '/geometry-settle.mjs', '/hierarchical-layout.mjs', '/layout-structure.mjs', '/local-routing.mjs', '/flow-refinement.mjs', '/style.css',
     '/icons/eye.svg', '/icons/eye-off.svg',
-    '/vendor/elk.js', '/vendor/elk-worker.js', '/vendor/webcola.js', '/vendor/libavoid/index.js', '/vendor/libavoid/libavoid.wasm', '/domain/graph.mjs', '/domain/view.mjs']) {
+    '/vendor/elk.js', '/vendor/elk-worker.js', '/vendor/webcola.js', '/vendor/libavoid/index.js', '/vendor/libavoid/libavoid.wasm', '/domain/graph.mjs', '/domain/view.mjs', '/domain/read-graph-integrity.mjs']) {
     assert.equal((await fetch(origin + asset)).status, 200, asset);
   }
   const response = await fetch(origin + '/api/workspace');

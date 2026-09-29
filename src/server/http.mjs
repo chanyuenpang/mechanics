@@ -37,6 +37,7 @@ const assets = new Map([
   ['/domain/graph.mjs', [new URL('../domain/graph.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/domain/view.mjs', [new URL('../domain/view.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/domain/endpoint-projection.mjs', [new URL('../domain/endpoint-projection.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
+  ['/domain/read-graph-integrity.mjs', [new URL('../domain/read-graph-integrity.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/domain/hover-details.mjs', [new URL('../domain/hover-details.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/domain/identity.mjs', [new URL('../domain/identity.mjs', import.meta.url), 'text/javascript; charset=utf-8']],
   ['/domain/taxonomy-presentation.mjs', [new URL('../domain/taxonomy-presentation.mjs', import.meta.url), 'text/javascript; charset=utf-8']],

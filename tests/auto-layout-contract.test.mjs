@@ -50,6 +50,26 @@ test('自动排版与路由缓存只消费显示投影：隐藏的 is-a 父概�
   assert.deepEqual(expanded.nodes.map(node => node.id), ['child', 'parent', 'effect']);
 });
 
+test('自动布局计算失败时不提交几何，也不触发草稿自动保存', async () => {
+  const calls = [];
+  const error = Object.assign(new Error('读取图 自动布局输入 的边 a-b 缺少目标节点：absent'), { code: 'READ_GRAPH_MISSING_ENDPOINT' });
+  const context = vm.createContext({
+    graph, arranging: false, legacy: false, autosave: { blocked: false }, arrangeSequence: 0,
+    busy: () => false, definitionMode: () => false, viewMode: () => false, dirty: () => true,
+    projection: () => positions, graphGeometryKey: () => 'geometry', displayGraphOf: () => graph,
+    runGraphCompute: async () => { throw error; },
+    commitSettledGeometry: async () => calls.push('commit'),
+    canvas: { selectedIds: () => [], routed: new Map(), fit: () => calls.push('fit') },
+    updateStatus: () => calls.push('status'), computeCancelled: () => false,
+    saveDraft: async () => calls.push('save'),
+  });
+  vm.runInContext(autoLayout, context);
+  await assert.rejects(vm.runInContext('autoLayout({ fitView: true })', context), { code: 'READ_GRAPH_MISSING_ENDPOINT' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls, ['status', 'status']);
+  assert.equal(context.arranging, false);
+});
+
 test('机制图自动整理先释放 arranging 再以非阻塞方式自动保存', async () => {
   const calls = [];
   const context = vm.createContext({

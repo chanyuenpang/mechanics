@@ -1838,11 +1838,13 @@ async function autoLayout({ fitView = false } = {}) {
   const displayGraph = displayGraphOf(graph);
   const geometryKey = graphGeometryKey(displayGraph, positions), request = ++arrangeSequence;
   arranging = true; updateStatus();
+  let committed = false;
   try {
     const result = await runGraphCompute({ kind: 'layout', geometryKey, payload: { graph: displayGraph, positions, selectedIds, cachedRoutes: [...canvas.routed] },
       isCurrent: () => graphGeometryKey(displayGraphOf(graph), projection()) === geometryKey });
     if (request !== arrangeSequence) return;
     await commitSettledGeometry(result, { recordHistory: true });
+    committed = true;
     if (fitView && request === arrangeSequence) canvas.fit();
   } catch (error) {
     if (!computeCancelled(error)) throw error;
@@ -1851,7 +1853,7 @@ async function autoLayout({ fitView = false } = {}) {
     if (request === arrangeSequence) {
       // 先结束整理状态再排入非阻塞保存：视觉提交后画布立即可继续交互。
       arranging = false; updateStatus();
-      if (!viewMode() && dirty()) void saveDraft({ blocking: false });
+      if (committed && !viewMode() && dirty()) void saveDraft({ blocking: false });
     }
   }
 }

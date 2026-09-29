@@ -2,6 +2,7 @@ import { refineHierarchy, measureGeometry, qualityVector, AUTO_LAYOUT_OPTIONS, M
 import { routeLocalGraph, routeIntersectsBox, routePairChannels } from './local-routing.mjs';
 import { improveFlowBySubtrees, compactHorizontalRoutes, snapLayoutToGrid } from './flow-refinement.mjs';
 import { connectedComponents, SNAP_GRID, edgeBundles } from './layout-structure.mjs';
+import { assertReadGraphIntegrity } from '../domain/read-graph-integrity.mjs';
 
 const WIDTH = 166, HEIGHT = 62, MAX_GRID_REROUTE_EDGES = 128;
 const snap = value => Math.round(value / SNAP_GRID) * SNAP_GRID;
@@ -172,6 +173,7 @@ async function layoutSelection(graph, positions, movableIds, ELK, cachedRoutes =
     cachedRoutes: cached, edgeIds: changedEdges, flexibleIds: movableIds, fixedPositions: true });
 }
 export async function arrangeGraph({ graph, positions, selectedIds = [], ELK = globalThis.ELK }) {
+  assertReadGraphIntegrity(graph, '自动布局输入');
   if (!graph.nodes.length) return {};
   assertPositions(graph, positions);
   const selected = visibleSelection(graph, selectedIds);
@@ -183,6 +185,7 @@ export async function arrangeGraph({ graph, positions, selectedIds = [], ELK = g
 }
 
 export async function arrangeGraphWithRoutes(options) {
+  assertReadGraphIntegrity(options.graph, '自动布局输入');
   const selected = visibleSelection(options.graph, options.selectedIds ?? []);
   if (selected.length > 0 && selected.length < options.graph.nodes.length) {
     assertPositions(options.graph, options.positions);

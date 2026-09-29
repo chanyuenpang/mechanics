@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { endpointProjectionId, normalizedQualifierKey, projectEndpointQualifiers } from '../src/domain/endpoint-projection.mjs';
+import { projectDisplayGraph } from '../src/domain/taxonomy-presentation.mjs';
 
 const qualifier = (key, value) => ({ key, value: { kind: 'literal', value } });
 const graph = {
@@ -47,6 +48,33 @@ test('只隐藏被限定投影接管的基础概念，其余无规则节点保�
   assert.equal(mixed.nodes.some(node => node.id === 'actor'), false, '被限定投影接管的基础实例不再单独渲染');
   assert.equal(mixed.nodes.some(node => node.id === 'action'), false);
   assert.equal(mixed.nodes.some(node => node.id === 'bystander'), true, '没有规则但在图里的概念必须保留');
+});
+
+test('限定与未限定端点混用时保留基础节点，所有边都能找到两端', () => {
+  const nodes = ['player-health', 'participant-defeat', 'guard', 'choice'].map(id => ({ id, label: id, description: '' }));
+  const edges = [
+    { id: 'scoped-health', source: 'guard', target: 'player-health', targetQualifiers: [qualifier('角色', '守护者')] },
+    { id: 'plain-health', source: 'choice', target: 'player-health' },
+    { id: 'health-to-defeat', source: 'player-health', target: 'participant-defeat' },
+    { id: 'scoped-defeat', source: 'participant-defeat', target: 'guard', sourceQualifiers: [qualifier('角色', '守护者')] },
+    { id: 'plain-defeat', source: 'choice', target: 'participant-defeat' },
+  ];
+  const projection = projectEndpointQualifiers({ nodes, edges });
+  const ids = new Set(projection.nodes.map(node => node.id));
+  assert.equal(projection.nodes.length, ids.size);
+  assert.equal(ids.has('player-health'), true);
+  assert.equal(ids.has('participant-defeat'), true);
+  assert.equal(projection.nodes.filter(node => node.scopeProjection).length, 2);
+  assert.equal(projection.edges[0].target, endpointProjectionId('player-health', edges[0].targetQualifiers));
+  assert.equal(projection.edges[3].source, endpointProjectionId('participant-defeat', edges[3].sourceQualifiers));
+  for (const displayed of [projection, projectDisplayGraph(projection, { taxonomyPresentation: { mode: 'label', expandedNodeIds: [] } })]) {
+    const displayedIds = new Set(displayed.nodes.map(node => node.id));
+    assert.equal(displayed.edges.length, edges.length);
+    for (const edge of displayed.edges) {
+      assert.equal(displayedIds.has(edge.source), true, `${edge.id} 的来源节点必须存在`);
+      assert.equal(displayedIds.has(edge.target), true, `${edge.id} 的目标节点必须存在`);
+    }
+  }
 });
 
 test('不同限定集合不合并，且不创建概念或 is-a 关系', () => {
