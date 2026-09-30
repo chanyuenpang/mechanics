@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { runInNewContext } from 'node:vm';
 
 const app = await readFile(new URL('../src/web/app.mjs', import.meta.url), 'utf8');
 const html = await readFile(new URL('../src/web/index.html', import.meta.url), 'utf8');
@@ -78,12 +79,36 @@ test('概念详情的 is-a 开关是复选框，与颜色分区分离且只改�
 test('项目打开请求有超时，空项目错误可重新打开选择器', () => {
   const api = app.slice(app.indexOf('const API_REQUEST_TIMEOUT_MS'), app.indexOf('// 所有页面写入串行执行'));
   assert.ok(api.includes('const API_REQUEST_TIMEOUT_MS = 15_000;'));
-  assert.ok(api.includes('const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), API_REQUEST_TIMEOUT_MS);'));
+  assert.ok(api.includes('const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), requestTimeout);'));
   assert.ok(api.includes('signal: controller.signal,'));
   assert.ok(api.includes('finally { clearTimeout(timeout); }'));
   assert.ok(api.includes('CONNECTION_TIMEOUT'));
   assert.ok(app.includes("recovery.textContent = workspace ? '重新读取' : '重新打开项目';"));
   assert.ok(app.includes("$('reload-error').onclick = () => (workspace ? refreshProjectFromDisk() : openProject()).catch(showError);"));
+});
+
+test('原生窗口等待超过 15 秒仍能交付结果，普通读取仍会超时且失败后可重试', async () => {
+  const source = app.slice(app.indexOf('async function api('), app.indexOf('// 所有页面写入串行执行'));
+  const constants = app.match(/^const (?:API_REQUEST_TIMEOUT_MS|DIRECTORY_PICKER_REQUEST_TIMEOUT_MS) = [\d_]+;$/gm).join('\n');
+  let elapsed = 16000;
+  const timers = new Map();
+  const api = runInNewContext(constants + '\n' + source + '\napi', {
+    AbortController, workspace: null, json: JSON.stringify, observeAssetSync() {},
+    setTimeout: (callback, delay) => { const id = Symbol(); timers.set(id, { callback, delay }); return id; },
+    clearTimeout: id => timers.delete(id),
+    fetch: async (_path, { signal }) => {
+      for (const { callback, delay } of timers.values()) if (delay <= elapsed) callback();
+      signal.throwIfAborted();
+      return { ok: true, json: async () => ({ cancelled: false, path: '/中文 项目' }) };
+    },
+  });
+  assert.equal((await api('/api/directories/pick', {})).path, '/中文 项目');
+  await assert.rejects(api('/api/project'), { code: 'CONNECTION_TIMEOUT' });
+  elapsed = 611000;
+  await assert.rejects(api('/api/directories/pick', {}), /项目未切换，请重新选择/);
+  elapsed = 16000;
+  assert.equal((await api('/api/directories/pick', {})).path, '/中文 项目');
+  assert.equal(timers.size, 0);
 });
 
 test('无参数启动无论项目状态或首个读取失败均会退出打开遮罩', () => {

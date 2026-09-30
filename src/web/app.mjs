@@ -304,6 +304,8 @@ async function returnToSourceProject() {
   }
 }
 const API_REQUEST_TIMEOUT_MS = 15_000;
+// 原生窗口等待用户操作；比服务端 10 分钟进程超时多留 10 秒以接收明确的失败结果。
+const DIRECTORY_PICKER_REQUEST_TIMEOUT_MS = 610_000;
 const assetSyncFailures = new Map(), assetSyncWatchers = new Set();
 function observeAssetSync(data) {
   const token = data?.projectSessionToken, status = data?.projectAssetSync;
@@ -329,7 +331,8 @@ function observeAssetSync(data) {
 }
 async function api(path, body) {
   let response, data;
-  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), API_REQUEST_TIMEOUT_MS);
+  const requestTimeout = path === '/api/directories/pick' ? DIRECTORY_PICKER_REQUEST_TIMEOUT_MS : API_REQUEST_TIMEOUT_MS;
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), requestTimeout);
   try {
     // 写入体携带读取时的每资源版本：服务端据此只对本操作真正会写的资源判定冲突，
     // 不再因为别的页面写了别的文件（或补算了布局）而拒绝一次安全的保存。
