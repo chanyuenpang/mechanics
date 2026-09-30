@@ -23,4 +23,11 @@ jobs:
       - run: npm install --global npm@11.19.1
       - run: npm ci
       - run: npm run release:check
-      - run: npm stage publish
+      - name: 暂存尚未公开的版本
+        run: |
+          package=$(node -p "require('./package.json').name + '@' + require('./package.json').version")
+          if npm view "$package" version; then
+            echo "版本已公开，发行验收完成，无需重复暂存。"
+          else
+            npm stage publish
+          fi
