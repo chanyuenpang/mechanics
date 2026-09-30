@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync, spawn } from 'node:child_process';
 import { request as httpRequest } from 'node:http';
@@ -11,11 +11,14 @@ import { createWorkspaceStore } from '../src/server/store.mjs';
 import { initWorkspace, findProject, findWorkspace } from '../src/server/workspace-commands.mjs';
 import { publishCatalog } from '../src/server/catalog.mjs';
 import packageInfo from '../package.json' with { type: 'json' };
-import { copyExampleFixture } from './example-fixture.mjs';
+import { copyExampleFixture, isolateUserConfig } from './example-fixture.mjs';
 import { CURRENT_WORKSPACE_VERSION, WORKSPACE_MIGRATION_STEPS } from '../src/server/migration.mjs';
 
 const example = fileURLToPath(new URL('../examples/card-game/', import.meta.url));
 const cli = fileURLToPath(new URL('../src/server/cli.mjs', import.meta.url));
+let userConfig;
+before(async () => { userConfig = await isolateUserConfig(); });
+after(async () => { await userConfig?.close(); });
 async function fixture(t) {
   const temp = await mkdtemp(join(tmpdir(), 'rule-workspace-'));
   t.after(() => rm(temp, { recursive: true, force: true }));
@@ -48,7 +51,7 @@ async function downgradeFixtureToV10(projectRoot) {
   await unlink(join(root, 'rules.json'));
 }
 function call(args, cwd) {
-  const result = spawnSync(process.execPath, [cli, ...args], { cwd, encoding: 'utf8', timeout: 15000 });
+  const result = spawnSync(process.execPath, [cli, ...args], { cwd, env: userConfig.env, encoding: 'utf8', timeout: 15000 });
   if (result.error) throw result.error;
   return result;
 }
@@ -118,7 +121,7 @@ test('web 无需项目路径，从普通目录或已有项目子目录启动都�
   const { temp, root } = await fixture(t);
   assert.match(call(['--help'], temp).stdout, /mech web/);
   for (const cwd of [temp, join(root, 'mechanics')]) {
-    const child = spawn(process.execPath, [cli, 'web', '--port', '0'], { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [cli, 'web', '--port', '0'], { cwd, env: userConfig.env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     try {
       const url = await new Promise((accept, reject) => {
         let output = '', errors = '';
@@ -152,7 +155,7 @@ test('web --project 打开 v10 工作区时按迁移链自动升级到当前协�
   assert.equal(compatibility.compatibilityMode, true);
   assert.ok(compatibility.rules.rules.length > 0, '旧机制图中的内嵌边必须形成临时规则库');
   assert.equal(JSON.parse(await readFile(join(root, 'workspace.json'), 'utf8')).schemaVersion, 10);
-  const child = spawn(process.execPath, [cli, 'web', '--project', projectRoot, '--port', '0'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, [cli, 'web', '--project', projectRoot, '--port', '0'], { env: userConfig.env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   try {
     const url = await new Promise((accept, reject) => {
       let output = '', errors = '';

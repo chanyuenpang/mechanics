@@ -1,10 +1,15 @@
-import test from 'node:test';
+import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createNativeDirectoryPicker } from '../src/server/native-directory-picker.mjs';
 import { startServer } from '../src/server/http.mjs';
+import { isolateUserConfig } from './example-fixture.mjs';
+
+let userConfig;
+before(async () => { userConfig = await isolateUserConfig(); });
+after(async () => { await userConfig?.close(); });
 
 test('Windows 实际编译现代选择器，COM 路径错误直接暴露且不弹窗', { skip: process.platform !== 'win32' }, async () => {
   const picker = createNativeDirectoryPicker();
