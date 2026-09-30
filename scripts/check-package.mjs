@@ -27,7 +27,7 @@ assert.ok(!names.some(path => path.includes('/.rule-text-backup-')), '打包清�
 assert.ok(!names.some(path => path.includes('/.agents/')), '打包清单不得包含项目注册 skill 副本');
 assert.ok(!names.some(path => path.includes('/game-mechanics/')), '打包清单不得包含生成的 Agent 文档');
 for (const path of ['src/server/cli.mjs', 'src/server/mcp-render.mjs', 'src/server/mcp-render-cli.mjs', 'src/mcp/concepts-widget.html', 'src/mcp/concepts-widget.bundle.js', 'src/mcp/concepts-widget-source.mjs', 'src/domain/conversation-projection.mjs', 'src/domain/hover-details.mjs', 'src/server/native-directory-picker.mjs', 'src/server/windows-directory-dialog.cs', 'src/web/glossary.mjs', 'src/web/view-files.mjs', 'src/web/graph-compute.mjs',
-  'src/web/graph-compute-kernel.mjs', 'src/web/graph-compute-worker.js', 'src/web/geometry-settle.mjs', 'src/web/hierarchical-layout.mjs', 'src/web/layout-structure.mjs', 'src/web/local-routing.mjs', 'src/web/flow-refinement.mjs', 'src/web/index.html', 'schemas/protocol.schema.json']) assert.ok(names.includes(path), path);
+  'src/server/macos-directory-dialog.js', 'src/web/graph-compute-kernel.mjs', 'src/web/graph-compute-worker.js', 'src/web/geometry-settle.mjs', 'src/web/hierarchical-layout.mjs', 'src/web/layout-structure.mjs', 'src/web/local-routing.mjs', 'src/web/flow-refinement.mjs', 'src/web/index.html', 'schemas/protocol.schema.json']) assert.ok(names.includes(path), path);
 for (const path of ['skills/mechanics-search/SKILL.md', 'skills/mechanics-modeling/SKILL.md', 'skills/mechanics-doc/SKILL.md', 'skills/mechanics-doc/agents/openai.yaml', 'docs/安装与Codex接入.md']) assert.ok(names.includes(path), path);
 command(process.execPath, ['scripts/build-workspace-tool.mjs', '--check'], root);
 await mkdir(join(root, 'dist'), { recursive: true });
@@ -101,7 +101,7 @@ try {
   assert.deepEqual(await (await fetch(origin + '/api/project')).json(), { status: 'empty', projectGeneration: 0 });
   const post = (path, body) => fetch(origin + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   const openResponse = await post('/api/project/open', { projectRoot: workspace });
-  assert.equal(openResponse.status, 200);
+  assert.equal(openResponse.status, 200, await openResponse.clone().text());
   for (const asset of ['/', '/app.mjs', '/canvas.mjs', '/glossary.mjs', '/view-files.mjs', '/graph-compute.mjs',
     '/graph-compute-kernel.mjs', '/graph-compute-worker.js', '/geometry-settle.mjs', '/hierarchical-layout.mjs', '/layout-structure.mjs', '/local-routing.mjs', '/flow-refinement.mjs', '/style.css',
     '/icons/eye.svg', '/icons/eye-off.svg',

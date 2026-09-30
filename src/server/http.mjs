@@ -148,7 +148,13 @@ export async function startServer({ projectRoot = null, workspaceRoot = null, po
           if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('请求必须是 JSON 对象');
           if (url.pathname === '/api/directories/pick') {
             if (request.headers.origin !== origin) { send(403, { error: 'ORIGIN_REJECTED', message: '原生文件夹选择器只能由本工具页面打开' }); return; }
-            send(200, await directoryPicker.pick(body)); return;
+            // 页面关闭或请求中止只取消该请求拥有的选择器，不能中止另一个正在选择的请求。
+            const controller = new AbortController();
+            const abort = () => controller.abort();
+            response.once('close', abort);
+            try { send(200, await directoryPicker.pick(body, { signal: controller.signal })); }
+            finally { response.removeListener('close', abort); }
+            return;
           }
           if (url.pathname === '/api/preferences') { send(200, await preferences.save(body)); return; }
           if (url.pathname === '/api/local-ui-state') { send(200, await projects.saveLocalUiState(body)); return; }

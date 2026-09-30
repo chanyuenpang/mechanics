@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { access, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -6,12 +6,16 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startServer } from '../src/server/http.mjs';
 import { createWorkspaceStore } from '../src/server/store.mjs';
-import { copyExampleFixture } from './example-fixture.mjs';
+import { copyExampleFixture, isolateUserConfig } from './example-fixture.mjs';
 import { publishCatalog } from '../src/server/catalog.mjs';
 import { readWorkspace } from '../src/server/workspace.mjs';
 import { acquireWorkspaceLock } from '../src/server/files.mjs';
 
 const example = fileURLToPath(new URL('../examples/card-game/', import.meta.url));
+
+let userConfig;
+before(async () => { userConfig = await isolateUserConfig(); });
+after(async () => { await userConfig?.close(); });
 
 async function post(origin, path, body, headers = {}) {
   const response = await fetch(origin + path, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
@@ -274,6 +278,9 @@ test('概念文档接口只读取完整导出，拒绝篡改与任意路径', as
   assert.equal(mechanic.status, 200); assert.equal((await mechanic.json()).document.kind, 'mechanic');
   assert.equal((await fetch(server.origin + '/api/concept-docs?conceptId=health&file=concepts.md')).status, 422);
   assert.equal((await fetch(server.origin + '/api/concept-docs?conceptId=../workspace')).status, 422);
+  const workspace = await (await fetch(server.origin + '/api/workspace')).json();
+  const published = await waitForPublication(server.origin, workspace.projectSessionToken);
+  assert.equal(published.exportPublication.state, 'current', JSON.stringify(published.exportPublication));
   await writeFile(join(projectRoot, 'mechanics', 'README.md'), '手工篡改');
   const stale = await fetch(server.origin + '/api/concept-docs');
   assert.equal(stale.status, 422); assert.equal((await stale.json()).error, 'CATALOG_STALE');
